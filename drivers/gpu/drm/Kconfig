@@ -49,6 +49,16 @@ config DRM_KMS_HELPER
 	help
 	  CRTC helpers for KMS drivers.
 
+config RUST_DRM_KMS
+	bool "Rust DRM modesetting abstractions" if COMPILE_TEST
+	depends on RUST && DRM=y
+	select DRM_KMS_HELPER
+	help
+	  Build the Rust modesetting abstractions with their DRM helpers.
+	  The helpers must be built in because the Rust kernel crate uses them.
+	  Drivers using these abstractions may still be built as modules.
+	  COMPILE_TEST exposes this option for checking the abstractions alone.
+
 config DRM_DRAW
 	bool
 	depends on DRM

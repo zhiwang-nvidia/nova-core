@@ -5,10 +5,13 @@
 pub mod device;
 pub mod driver;
 pub mod file;
+#[cfg(CONFIG_RUST_DRM_KMS)]
 pub mod fourcc;
 pub mod gem;
 pub mod gpuvm;
 pub mod ioctl;
+#[cfg(CONFIG_RUST_DRM_KMS)]
+pub mod kms;
 
 pub use self::device::Device;
 pub use self::device::DeviceContext;

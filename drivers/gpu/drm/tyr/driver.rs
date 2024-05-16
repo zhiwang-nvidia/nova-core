@@ -211,6 +211,8 @@ impl drm::Driver for TyrDrmDriver {
     type RegistrationData<'drm> = TyrDrmRegistrationData<'drm>;
     type File = TyrDrmFileData;
     type Object = Bo;
+    #[cfg(CONFIG_RUST_DRM_KMS)]
+    type Kms = core::marker::PhantomData<Self>;
     type ParentDevice<Ctx: DeviceContext> = platform::Device<Ctx>;
 
     const INFO: drm::DriverInfo = INFO;

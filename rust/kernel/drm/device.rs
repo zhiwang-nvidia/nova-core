@@ -159,6 +159,12 @@ impl<T: drm::Driver> UnregisteredDevice<T> {
             features |= drm::driver::FEAT_RENDER;
         }
 
+        #[cfg(CONFIG_RUST_DRM_KMS)]
+        if Device::<T>::HAS_KMS {
+            features |= bindings::drm_driver_feature_DRIVER_MODESET
+                | bindings::drm_driver_feature_DRIVER_ATOMIC;
+        }
+
         features
     }
 
@@ -181,7 +187,12 @@ impl<T: drm::Driver> UnregisteredDevice<T> {
         dumb_map_offset: T::Object::ALLOC_OPS.dumb_map_offset,
 
         show_fdinfo: None,
-        fbdev_probe: None,
+        fbdev_probe: {
+            #[cfg(CONFIG_RUST_DRM_KMS)]
+            { T::Object::ALLOC_OPS.fbdev_probe }
+            #[cfg(not(CONFIG_RUST_DRM_KMS))]
+            { None }
+        },
 
         major: T::INFO.major,
         minor: T::INFO.minor,
@@ -585,4 +596,13 @@ where
     T::Data: HasDelayedWork<Self, ID>,
     C: DeviceContext,
 {
+}
+
+#[cfg(CONFIG_RUST_DRM_KMS)]
+impl<T: drm::Driver> Device<T> {
+    const HAS_KMS: bool = <T::Kms as drm::kms::private::KmsImpl>::MODE_CONFIG_OPS.is_some();
+
+    pub(crate) fn has_kms(&self) -> bool {
+        Self::HAS_KMS
+    }
 }
