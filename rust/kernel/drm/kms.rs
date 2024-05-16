@@ -2,6 +2,8 @@
 
 //! KMS driver abstractions for rust.
 
+pub mod connector;
+
 use crate::{
     device,
     drm::private::Sealed,
