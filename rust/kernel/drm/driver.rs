@@ -17,6 +17,9 @@ use core::{
     ptr::NonNull, //
 };
 
+#[cfg(CONFIG_RUST_DRM_KMS)]
+use super::kms::private::KmsImpl as _;
+
 /// Driver use the GEM memory manager. This should be set for all modern drivers.
 pub(crate) const FEAT_GEM: u32 = bindings::drm_driver_feature_DRIVER_GEM;
 /// Driver supports render nodes, i.e.: /dev/dri/renderDXX devices.
@@ -89,6 +92,13 @@ pub struct AllocOps {
             offset: *mut u64,
         ) -> core::ffi::c_int,
     >,
+    #[cfg(CONFIG_RUST_DRM_KMS)]
+    pub(crate) fbdev_probe: Option<
+        unsafe extern "C" fn(
+            fbdev_helper: *mut bindings::drm_fb_helper,
+            sizes: *mut bindings::drm_fb_helper_surface_size,
+        ) -> core::ffi::c_int,
+    >,
 }
 
 /// Trait for memory manager implementations. Implemented internally.
@@ -122,6 +132,15 @@ pub trait Driver {
 
     /// The type used to represent a DRM File (client)
     type File: drm::file::DriverFile;
+
+    /// The KMS implementation for this driver.
+    ///
+    /// Drivers that wish to support KMS should pass their implementation of `drm::kms::KmsDriver`
+    /// here. Drivers which do not have KMS support can simply pass `PhantomData<Self>` here.
+    #[cfg(CONFIG_RUST_DRM_KMS)]
+    type Kms: drm::kms::KmsImpl<Driver = Self>
+    where
+        Self: Sized;
 
     /// The bus device type of the parent device that the DRM device is associated with.
     type ParentDevice<Ctx: device::DeviceContext>: device::AsBusDevice<Ctx>;
@@ -186,6 +205,14 @@ impl<'a, T: Driver> Registration<'a, T> {
             _pin: PhantomPinned,
 
             _: {
+                #[cfg(CONFIG_RUST_DRM_KMS)]
+                let _mode_config_info = if drm.has_kms() {
+                    // SAFETY: `UnregisteredDevice` guarantees the device is not registered.
+                    Some(unsafe { T::Kms::setup_kms(drm)? })
+                } else {
+                    None
+                };
+
                 // Store the registration data pointer in the device before registration, so
                 // that it is visible once ioctls can be called.
                 let ptr: NonNull<T::RegistrationData<'static>> =
@@ -201,6 +228,18 @@ impl<'a, T: Driver> Registration<'a, T> {
                     // concurrent access to `registration_data` is possible at this point.
                     unsafe { *drm.registration_data.get() = NonNull::dangling() };
                 })?;
+
+                #[cfg(all(CONFIG_RUST_DRM_KMS, CONFIG_DRM_CLIENT_SETUP))]
+                if let Some(info) = _mode_config_info {
+                    // SAFETY: The KMS device was successfully registered above.
+                    unsafe {
+                        if let Some(fourcc) = info.preferred_fourcc {
+                            bindings::drm_client_setup_with_fourcc(drm.as_raw(), fourcc);
+                        } else {
+                            bindings::drm_client_setup(drm.as_raw(), core::ptr::null());
+                        }
+                    }
+                }
             },
         })
     }
@@ -230,6 +269,11 @@ impl<T: Driver> PinnedDrop for Registration<'_, T> {
         // SAFETY: Safe by the invariant of `ARef<drm::Device<T>>`. The existence of this
         // `Registration` also guarantees that this `drm::Device` is actually registered.
         unsafe { bindings::drm_dev_unplug(self.drm.as_raw()) };
+        #[cfg(CONFIG_RUST_DRM_KMS)]
+        if self.drm.has_kms() {
+            // SAFETY: Mode configuration was initialized before registration.
+            unsafe { bindings::drm_atomic_helper_shutdown(self.drm.as_raw()) };
+        }
         // After drm_dev_unplug(), the SRCU barrier guarantees that all RegistrationGuard critical
         // sections have completed, so no one holds a reference to reg_data anymore.
         // reg_data is dropped here automatically.

@@ -92,6 +92,8 @@ impl drm::Driver for NovaDriver {
     type RegistrationData<'a> = DrmRegData<'a>;
     type File = File;
     type Object = gem::Object<NovaObject>;
+    #[cfg(CONFIG_RUST_DRM_KMS)]
+    type Kms = core::marker::PhantomData<Self>;
     type ParentDevice<Ctx: DeviceContext> = auxiliary::Device<Ctx>;
 
     const INFO: drm::DriverInfo = INFO;

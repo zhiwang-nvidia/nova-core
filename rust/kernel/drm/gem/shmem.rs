@@ -393,6 +393,17 @@ impl<T: DriverObject> driver::AllocImpl for Object<T> {
         gem_prime_import_sg_table: Some(bindings::drm_gem_shmem_prime_import_sg_table),
         dumb_create: Some(bindings::drm_gem_shmem_dumb_create),
         dumb_map_offset: None,
+        #[cfg(CONFIG_RUST_DRM_KMS)]
+        fbdev_probe: {
+            #[cfg(CONFIG_DRM_FBDEV_EMULATION)]
+            {
+                Some(bindings::drm_fbdev_shmem_driver_fbdev_probe)
+            }
+            #[cfg(not(CONFIG_DRM_FBDEV_EMULATION))]
+            {
+                None
+            }
+        },
     };
 }
 
@@ -628,6 +639,8 @@ mod tests {
         type RegistrationData<'a> = ();
         type File = KunitFile;
         type Object = Object<KunitObject>;
+        #[cfg(CONFIG_RUST_DRM_KMS)]
+        type Kms = core::marker::PhantomData<Self>;
         type ParentDevice<Ctx: device::DeviceContext> = faux::Device<Ctx>;
 
         const INFO: drm::DriverInfo = INFO;
