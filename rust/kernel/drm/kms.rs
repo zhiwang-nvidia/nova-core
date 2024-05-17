@@ -4,6 +4,7 @@
 
 pub mod connector;
 pub mod crtc;
+pub mod encoder;
 pub mod plane;
 
 use crate::{
