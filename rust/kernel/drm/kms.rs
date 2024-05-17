@@ -3,6 +3,7 @@
 //! KMS driver abstractions for rust.
 
 pub mod connector;
+pub mod crtc;
 pub mod plane;
 
 use crate::{
@@ -93,7 +94,7 @@ pub trait KmsDriver: Driver {
     /// Return a [`ModeConfigInfo`] structure for this [`device::Device`].
     fn mode_config_info(dev: &device::Device, drm_data: &Self::Data) -> Result<ModeConfigInfo>;
 
-    /// Create mode objects like `crtc::Crtc`, [`plane::Plane`], etc. for this device
+    /// Create mode objects like [`crtc::Crtc`], [`plane::Plane`], etc. for this device
     fn create_objects(drm: &UnregisteredKmsDevice<'_, Self>) -> Result
     where
         Self: Sized;
