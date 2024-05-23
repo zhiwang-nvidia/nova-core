@@ -1,0 +1,5 @@
+config DRM_RVKMS
+	tristate "Rust VKMS PoC driver (EXPERIMENTAL)"
+	depends on RUST && DRM=y && MMU
+	select RUST_DRM_KMS
+	select RUST_DRM_GEM_SHMEM_HELPER
