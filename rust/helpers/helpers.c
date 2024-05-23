@@ -62,6 +62,7 @@
 #include "dma-resv.c"
 #endif
 #include "drm.c"
+#include "drm_atomic.c"
 #include "drm_gpuvm.c"
 #include "err.c"
 #include "fs.c"
