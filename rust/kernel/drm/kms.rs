@@ -61,6 +61,107 @@ pub(crate) mod private {
     }
 }
 
+/// Implement the repetitive from_opaque/try_from_opaque methods for all mode object and state
+/// types.
+///
+/// Because there are so many different ways of accessing mode objects, their states, etc. we need a
+/// macro that we can use for consistently implementing try_from_opaque()/from_opaque() functions to
+/// convert from Opaque mode objects to fully typed mode objects. This macro handles that, and can
+/// generate said functions for any kind of type which the original mode object driver trait can be
+/// derived from. All conversions check the mode object's vtable. For example:
+///
+/// ```ignore,compile_fail
+/// impl<'a, T: DriverConnectorState> ConnectorState<T> {
+///     impl_from_opaque_mode_obj! {
+///         // | An optional lifetime and meta-variables to declare for each function
+///         // |          | The type of the input parameter `opaque`
+///         // |          |                               | The converted type
+///         // v          v                               v
+///         fn <'a, D, C>(&'a OpaqueConnectorState<T>) -> &'a Self
+///         where // <-- An optional set of additional trait bounds to match against
+///             T: DriverConnectorState<Connector = C>;
+///         use
+///         //  | Meta-variable that will contain ::OPS (the auto-generated vtable)
+///         //  |    | The driver trait implemented by the driver for generating the vtable
+///         //  |    | It will add the bound C: DriverConnector<Driver = D> to the function
+///         //  v    v
+///             C as DriverConnector,
+///         //  | Meta-variable to assign to KmsDriver
+///         //  |    | This must always be KmsDriver, it's just here for clarity
+///         //  v    v
+///             D as KmsDriver,
+///     }
+/// }
+/// ```
+macro_rules! impl_from_opaque_mode_obj {
+    (
+        fn <
+            $( $lifetime:lifetime, )?
+            $( $decl_bound_id:ident ),*
+        > ($opaque:ty) -> $inner_ret_ty:ty
+        $(
+            where
+                $(
+                    $extra_bound_id:ident :
+                        $extra_trait:ident<$( $extra_assoc:ident = $extra_meta_match:ident ),+>
+                ),+
+        )? ;
+        use
+            $obj_trait_meta:ident as $obj_trait:ident,
+            $drv_trait_meta:ident as KmsDriver
+    ) => {
+        #[doc = "Try to convert `opaque` into a fully qualified `Self`."]
+        #[doc = ""]
+        #[doc = concat!("This will try to convert `opaque` into `Self` if it shares the same [`",
+                        stringify!($obj_trait), "`] implementation as `Self`.")]
+        pub fn try_from_opaque<$( $lifetime, )? $( $decl_bound_id ),* >(
+            opaque: $opaque
+        ) -> Result<$inner_ret_ty, $opaque>
+        where
+            $drv_trait_meta: KmsDriver,
+            $obj_trait_meta: $obj_trait<Driver = $drv_trait_meta>
+            $( , $( $extra_bound_id: $extra_trait<$( $extra_assoc = $extra_meta_match ),+> ),+ )?
+        {
+            let funcs = opaque.vtable();
+            let obj_funcs = &$obj_trait_meta::OPS.funcs;
+
+            if core::ptr::eq(funcs, obj_funcs) {
+                // SAFETY: We only perform this transmutation if the opaque object shares our vtable
+                // pointers, so the underlying full object must share our data layout.
+                Ok(unsafe { core::mem::transmute::<$opaque, $inner_ret_ty>(opaque) })
+            } else {
+                Err(opaque)
+            }
+        }
+
+        #[doc = "Convert `opaque` into a fully qualified `Self`."]
+        #[doc = ""]
+        #[doc = concat!("This is an infallible version of [`Self::try_from_opaque`]. This ",
+                        "function is mainly useful for drivers where only a single [`",
+                        stringify!($obj_trait), "`] implementation exists.")]
+        #[doc = ""]
+        #[doc = "# Panics"]
+        #[doc = ""]
+        #[doc = concat!("This function will panic if `opaque` belongs to a different [`",
+                        stringify!($obj_trait), "`] implementation.")]
+        pub fn from_opaque<$( $lifetime, )? $( $decl_bound_id ),* >(
+            opaque: $opaque
+        ) -> $inner_ret_ty
+        where
+            $drv_trait_meta: KmsDriver,
+            $obj_trait_meta: $obj_trait<Driver = $drv_trait_meta>
+            $( , $( $extra_bound_id: $extra_trait<$( $extra_assoc = $extra_meta_match ),+> ),+ )?
+        {
+            Self::try_from_opaque(opaque)
+                .map_or(None, |o| Some(o))
+                .expect(concat!("Passed ", stringify!($opaque), " does not share this ",
+                                stringify!($obj_trait), " implementation."))
+        }
+    };
+}
+
+pub(crate) use impl_from_opaque_mode_obj;
+
 /// A [`Device`] with KMS initialized that has not been registered with userspace.
 ///
 /// This type is identical to [`Device`], except that it is able to create new static KMS resources.
@@ -334,6 +435,23 @@ unsafe impl<T: RcModeObject> AlwaysRefCounted for T {
         // always returns a pointer to an initialized `drm_mode_object`.
         unsafe { bindings::drm_mode_object_put(obj.as_ref().raw_mode_obj()) }
     }
+}
+
+/// A trait for any object related to a [`ModeObject`] that can return its vtable.
+///
+/// This reference will used for checking whether an opaque representation of a mode object uses a
+/// specific driver trait implementation.
+///
+/// # Safety
+///
+/// `ModeObjectVtable::vtable()` must always return a valid pointer to the relevant mode object's
+/// vtable.
+pub(crate) unsafe trait ModeObjectVtable {
+    /// The type for the auto-generated vtable.
+    type Vtable;
+
+    /// Return a static reference to the auto-generated vtable for the relevant mode object.
+    fn vtable(&self) -> *const Self::Vtable;
 }
 
 /// A mode config guard.
