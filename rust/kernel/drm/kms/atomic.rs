@@ -275,7 +275,6 @@ impl<T: KmsDriver> AtomicStateComposer<T> {
     /// # Safety
     ///
     /// The caller guarantees that `ptr` points to a valid instance of `drm_atomic_commit`.
-    #[allow(dead_code)]
     pub(crate) unsafe fn new(ptr: NonNull<bindings::drm_atomic_commit>) -> Self {
         // SAFETY: see `AtomicStateMutator::from_raw()`
         Self(unsafe { AtomicStateMutator::new(ptr) })
