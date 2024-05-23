@@ -12,14 +12,14 @@ use crate::{
     bindings,
     drm::private::Sealed,
     drm::{device::Device, fourcc::*},
-    error::{to_result, Error},
+    error::{from_result, to_result, Error},
     prelude::*,
     types::{NotThreadSafe, Opaque},
 };
 use core::{
     cell::Cell,
     marker::*,
-    mem,
+    mem::{self, ManuallyDrop},
     ops::*,
     pin::Pin,
     ptr::{addr_of_mut, null, null_mut, NonNull},
@@ -69,7 +69,11 @@ pub trait DriverPlane: Send + Sync + Sized {
             cleanup_fb: None,
             begin_fb_access: None,
             end_fb_access: None,
-            atomic_check: None,
+            atomic_check: if Self::HAS_ATOMIC_CHECK {
+                Some(atomic_check_callback::<Self>)
+            } else {
+                None
+            },
             atomic_update: if Self::HAS_ATOMIC_UPDATE {
                 Some(atomic_update_callback::<Self>)
             } else {
@@ -115,6 +119,21 @@ pub trait DriverPlane: Send + Sync + Sized {
         _old_state: &PlaneState<Self::State>,
         _state: &AtomicStateMutator<Self::Driver>,
     ) {
+        build_error::build_error("This should not be reachable")
+    }
+
+    /// The optional [`drm_plane_helper_funcs.atomic_check`] hook for this plane.
+    ///
+    /// Drivers may use this to customize the atomic check phase of their [`Plane`] objects. The
+    /// result of this function determines whether the atomic check passed or failed.
+    ///
+    /// [`drm_plane_helper_funcs.atomic_check`]: srctree/include/drm/drm_modeset_helper_vtables.h
+    fn atomic_check(
+        _plane: &Plane<Self>,
+        _new_state: PlaneStateMutator<'_, PlaneState<Self::State>>,
+        _old_state: &PlaneState<Self::State>,
+        _state: &AtomicStateComposer<Self::Driver>,
+    ) -> Result {
         build_error::build_error("This should not be reachable")
     }
 }
@@ -978,4 +997,36 @@ unsafe extern "C" fn atomic_update_callback<T: DriverPlane>(
     };
 
     T::atomic_update(plane, new_state, old_state, &state);
+}
+
+/// # Safety
+///
+/// DRM must pass a live `Plane<T>` and its same-device atomic commit. Both old
+/// and new object states must be present, with access serialized for this callback.
+unsafe extern "C" fn atomic_check_callback<T: DriverPlane>(
+    plane: *mut bindings::drm_plane,
+    state: *mut bindings::drm_atomic_commit,
+) -> i32 {
+    // SAFETY:
+    // - We're guaranteed `plane` is of type `Plane<T>` via type invariants.
+    // - We're guaranteed by DRM that `plane` is pointing to a valid initialized state.
+    let plane = unsafe { Plane::from_raw(plane) };
+
+    // SAFETY: DRM guarantees that `state` points to a valid `drm_atomic_commit`.
+    // We use ManuallyDrop here since AtomicStateComposer would otherwise drop a owned reference to
+    // the atomic state upon finishing this callback.
+    let state = ManuallyDrop::new(unsafe {
+        AtomicStateComposer::<T::Driver>::new(NonNull::new_unchecked(state))
+    });
+
+    // SAFETY: We're guaranteed by DRM that both the old and new atomic state are present within
+    // this `drm_atomic_commit`
+    let (old_state, new_state) = unsafe {
+        (
+            state.get_old_plane_state(plane).unwrap_unchecked(),
+            state.get_new_plane_state(plane).unwrap_unchecked(),
+        )
+    };
+
+    from_result(|| T::atomic_check(plane, new_state, old_state, &state).map(|()| 0))
 }
