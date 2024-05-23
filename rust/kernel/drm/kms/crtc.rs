@@ -13,14 +13,14 @@ use crate::{
     bindings,
     drm::device::Device,
     drm::private::Sealed,
-    error::to_result,
+    error::{from_result, to_result},
     prelude::*,
     types::{NotThreadSafe, Opaque},
 };
 use core::{
     cell::{Cell, UnsafeCell},
     marker::*,
-    mem,
+    mem::{self, ManuallyDrop},
     ops::{Deref, DerefMut},
     ptr::{addr_of_mut, null, null_mut, NonNull},
 };
@@ -77,7 +77,11 @@ pub trait DriverCrtc: Send + Sync + Sized {
         helper_funcs: bindings::drm_crtc_helper_funcs {
             atomic_disable: None,
             atomic_enable: None,
-            atomic_check: None,
+            atomic_check: if Self::HAS_ATOMIC_CHECK {
+                Some(atomic_check_callback::<Self>)
+            } else {
+                None
+            },
             hw_reset: None,
             dpms: None,
             commit: None,
@@ -113,6 +117,21 @@ pub trait DriverCrtc: Send + Sync + Sized {
     ///
     /// Drivers may use this to instantiate their [`DriverCrtc`] object.
     fn new(device: &Device<Self::Driver>, args: &Self::Args) -> impl PinInit<Self, Error>;
+
+    /// The optional [`drm_crtc_helper_funcs.atomic_check`] hook for this crtc.
+    ///
+    /// Drivers may use this to customize the atomic check phase of their [`Crtc`] objects. The
+    /// result of this function determines whether the atomic check passed or failed.
+    ///
+    /// [`drm_crtc_helper_funcs.atomic_check`]: srctree/include/drm/drm_modeset_helper_vtables.h
+    fn atomic_check(
+        _crtc: &Crtc<Self>,
+        _old_state: &CrtcState<Self::State>,
+        _new_state: CrtcStateMutator<'_, CrtcState<Self::State>>,
+        _state: &AtomicStateComposer<Self::Driver>,
+    ) -> Result {
+        build_error::build_error("This should not be reachable")
+    }
 }
 
 /// The generated C vtable for a [`DriverCrtc`].
@@ -857,4 +876,38 @@ unsafe extern "C" fn crtc_create_state_callback<T: DriverCrtcState>(
     // `crtc` is live by the callback contract. DRM takes ownership of the returned state.
     unsafe { bindings::__drm_atomic_helper_crtc_state_init(state, crtc) };
     state
+}
+
+/// # Safety
+///
+/// DRM must pass a live `Crtc<T>` and its same-device atomic commit. Both old
+/// and new object states must be present, with access serialized for this callback.
+unsafe extern "C" fn atomic_check_callback<T: DriverCrtc>(
+    crtc: *mut bindings::drm_crtc,
+    state: *mut bindings::drm_atomic_commit,
+) -> i32 {
+    // SAFETY:
+    // - We're guaranteed `crtc` is of type `Crtc<T>` via type invariants.
+    // - We're guaranteed by DRM that `crtc` is pointing to a valid initialized state.
+    let crtc = unsafe { Crtc::from_raw(crtc) };
+
+    // SAFETY: DRM guarantees `state` points to a valid `drm_atomic_commit`
+    // We use a ManuallyDrop here to avoid AtomicStateComposer dropping an owned reference we never
+    // acquired.
+    let state =
+        unsafe { ManuallyDrop::new(AtomicStateComposer::new(NonNull::new_unchecked(state))) };
+
+    // SAFETY: Since we are in the atomic update callback, we're guaranteed by DRM that both the old
+    // and new atomic state are present within `state`
+    let (old_state, new_state) = unsafe {
+        (
+            state.get_old_crtc_state(crtc).unwrap_unchecked(),
+            state.get_new_crtc_state(crtc).unwrap_unchecked(),
+        )
+    };
+
+    from_result(|| {
+        T::atomic_check(crtc, old_state, new_state, &state)?;
+        Ok(0)
+    })
 }
