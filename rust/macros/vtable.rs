@@ -21,8 +21,27 @@ use syn::{
     ItemImpl,
     ItemTrait,
     Result,
-    TraitItem, //
+    TraitItem,
+    Type, //
 };
+
+fn unique_type(ty: &Type) -> Result<&Type> {
+    if let Type::Reference(reference) = ty {
+        if reference.mutability.is_none()
+            && reference
+                .lifetime
+                .as_ref()
+                .is_some_and(|lifetime| lifetime.ident == "static")
+        {
+            return Ok(&reference.elem);
+        }
+    }
+
+    Err(Error::new_spanned(
+        ty,
+        "`#[unique]` item must have a `&'static` type",
+    ))
+}
 
 fn handle_trait(mut item: ItemTrait) -> Result<ItemTrait> {
     let mut gen_items = Vec::new();
@@ -50,6 +69,49 @@ fn handle_trait(mut item: ItemTrait) -> Result<ItemTrait> {
     }
 
     for item in &mut item.items {
+        if let TraitItem::Const(const_item) = item {
+            if const_item
+                .attrs
+                .iter()
+                .any(|attr| attr.path().is_ident("unique"))
+            {
+                const_item
+                    .attrs
+                    .retain(|attr| !attr.path().is_ident("unique"));
+                let ty = unique_type(&const_item.ty)?;
+                let Some((
+                    _,
+                    syn::Expr::Reference(syn::ExprReference {
+                        mutability: None,
+                        expr: default,
+                        ..
+                    }),
+                )) = const_item.default.take()
+                else {
+                    return Err(Error::new_spanned(
+                        const_item,
+                        "`#[unique]` item must have a default value and it must be a reference",
+                    ));
+                };
+
+                let name = &const_item.ident;
+                let impl_name = Ident::new(&format!("{name}_IMPL"), name.span());
+                let marker_name = Ident::new(&format!("{name}_USE_UNIQUE_ATTR"), name.span());
+                let cfg_attrs = crate::helpers::gather_cfg_attrs(&const_item.attrs);
+                gen_items.push(parse_quote! {
+                    #(#cfg_attrs)*
+                    /// A marker requiring `#[unique]` on the implementation.
+                    const #marker_name: ();
+                });
+                let cfg_attrs = crate::helpers::gather_cfg_attrs(&const_item.attrs);
+                gen_items.push(parse_quote! {
+                    #(#cfg_attrs)*
+                    /// The value used to initialize this implementation's unique static.
+                    const #impl_name: #ty = #default;
+                });
+            }
+        }
+
         if let TraitItem::Fn(fn_item) = item {
             let name = &fn_item.sig.ident;
             let gen_const_name = Ident::new(
@@ -105,6 +167,7 @@ fn handle_trait(mut item: ItemTrait) -> Result<ItemTrait> {
 }
 
 fn handle_impl(mut item: ItemImpl) -> Result<ItemImpl> {
+    expand_unique_impl(&mut item)?;
     let mut gen_items = Vec::new();
     let mut defined_items = HashSet::new();
 
@@ -155,6 +218,68 @@ fn handle_impl(mut item: ItemImpl) -> Result<ItemImpl> {
 
     item.items.extend(gen_items);
     Ok(item)
+}
+
+fn expand_unique_impl(item: &mut ItemImpl) -> Result<()> {
+    let mut expanded = Vec::new();
+
+    for impl_item in std::mem::take(&mut item.items) {
+        let unique_const = match impl_item {
+            ImplItem::Const(ref constant)
+                if constant
+                    .attrs
+                    .iter()
+                    .any(|attr| attr.path().is_ident("unique")) =>
+            {
+                Some(constant.clone())
+            }
+            _ => None,
+        };
+        let Some(mut constant) = unique_const else {
+            expanded.push(impl_item);
+            continue;
+        };
+
+        let Some((_, trait_path, _)) = &item.trait_ else {
+            return Err(Error::new_spanned(
+                &item.self_ty,
+                "`#[unique]` requires a trait impl",
+            ));
+        };
+        if !item.generics.params.is_empty() {
+            return Err(Error::new_spanned(
+                &item.generics,
+                "`#[unique]` cannot be used when impl is generic",
+            ));
+        }
+
+        constant
+            .attrs
+            .retain(|attr| !attr.path().is_ident("unique"));
+        let ty = unique_type(&constant.ty)?;
+        let name = &constant.ident;
+        let impl_name = Ident::new(&format!("{name}_IMPL"), name.span());
+        let marker_name = Ident::new(&format!("{name}_USE_UNIQUE_ATTR"), name.span());
+        let self_ty = &item.self_ty;
+        let attrs = &constant.attrs;
+        let ref_ty = &constant.ty;
+
+        expanded.push(parse_quote! {
+            #(#attrs)*
+            const #name: #ref_ty = {
+                static IMPL: #ty = <#self_ty as #trait_path>::#impl_name;
+                &IMPL
+            };
+        });
+        let cfg_attrs = crate::helpers::gather_cfg_attrs(attrs);
+        expanded.push(parse_quote! {
+            #(#cfg_attrs)*
+            const #marker_name: () = ();
+        });
+    }
+
+    item.items = expanded;
+    Ok(())
 }
 
 pub(crate) fn vtable(input: Item) -> Result<TokenStream> {
