@@ -22,6 +22,7 @@ use syn::{
     ItemTrait,
     Result,
     TraitItem,
+    TraitItemConst,
     Type, //
 };
 
@@ -224,15 +225,30 @@ fn expand_unique_impl(item: &mut ItemImpl) -> Result<()> {
     let mut expanded = Vec::new();
 
     for impl_item in std::mem::take(&mut item.items) {
-        let unique_const = match impl_item {
-            ImplItem::Const(ref constant)
-                if constant
-                    .attrs
-                    .iter()
-                    .any(|attr| attr.path().is_ident("unique")) =>
+        if let ImplItem::Const(const_item) = &impl_item {
+            if const_item
+                .attrs
+                .iter()
+                .any(|attr| attr.path().is_ident("unique"))
             {
-                Some(constant.clone())
+                return Err(Error::new_spanned(
+                    &const_item.expr,
+                    "`#[unique]` item must not have a value",
+                ));
             }
+        }
+
+        // An associated constant without an initializer is parsed as verbatim
+        // in an impl. Parse it as a trait constant to recognize `#[unique]`.
+        let unique_const = match &impl_item {
+            ImplItem::Verbatim(tokens) => syn::parse2::<TraitItemConst>(tokens.clone())
+                .ok()
+                .filter(|constant| {
+                    constant
+                        .attrs
+                        .iter()
+                        .any(|attr| attr.path().is_ident("unique"))
+                }),
             _ => None,
         };
         let Some(mut constant) = unique_const else {
