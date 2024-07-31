@@ -605,4 +605,11 @@ impl<T: drm::Driver> Device<T> {
     pub(crate) fn has_kms(&self) -> bool {
         Self::HAS_KMS
     }
+
+    /// Returns the event spinlock initialized by DRM core.
+    #[allow(dead_code)]
+    pub(crate) fn event_lock(&self) -> &crate::sync::SpinLockIrq<()> {
+        // SAFETY: DRM initializes event_lock before exposing the device.
+        unsafe { crate::sync::SpinLockIrq::from_raw(&raw mut (*self.as_raw()).event_lock) }
+    }
 }
