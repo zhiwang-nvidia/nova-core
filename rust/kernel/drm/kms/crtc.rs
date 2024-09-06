@@ -90,8 +90,16 @@ pub trait DriverCrtc: Send + Sync + Sized {
             mode_set: None,
             mode_valid: None,
             mode_fixup: None,
-            atomic_begin: None,
-            atomic_flush: None,
+            atomic_begin: if Self::HAS_ATOMIC_BEGIN {
+                Some(atomic_begin_callback::<Self>)
+            } else {
+                None
+            },
+            atomic_flush: if Self::HAS_ATOMIC_FLUSH {
+                Some(atomic_flush_callback::<Self>)
+            } else {
+                None
+            },
             mode_set_nofb: None,
             mode_set_base: None,
             handle_vblank_timeout: None,
@@ -131,6 +139,36 @@ pub trait DriverCrtc: Send + Sync + Sized {
         _state: &AtomicStateComposer<Self::Driver>,
     ) -> Result {
         build_error::build_error("This should not be reachable")
+    }
+
+    /// The optional [`drm_crtc_helper_funcs.atomic_begin`] hook.
+    ///
+    /// This hook will be called before a set of [`Plane`] updates are performed for the given
+    /// [`Crtc`].
+    ///
+    /// [`drm_crtc_helper_funcs.atomic_begin`]: srctree/include/drm/drm_modeset_helper_vtables.h
+    fn atomic_begin(
+        _crtc: &Crtc<Self>,
+        _old_state: &CrtcState<Self::State>,
+        _new_state: CrtcStateMutator<'_, CrtcState<Self::State>>,
+        _state: &AtomicStateMutator<Self::Driver>,
+    ) {
+        build_error::build_error("This should not be reachable")
+    }
+
+    /// The optional [`drm_crtc_helper_funcs.atomic_flush`] hook.
+    ///
+    /// This hook will be called after a set of [`Plane`] updates are performed for the given
+    /// [`Crtc`].
+    ///
+    /// [`drm_crtc_helper_funcs.atomic_flush`]: srctree/include/drm/drm_modeset_helper_vtables.h
+    fn atomic_flush(
+        _crtc: &Crtc<Self>,
+        _old_state: &CrtcState<Self::State>,
+        _new_state: CrtcStateMutator<'_, CrtcState<Self::State>>,
+        _state: &AtomicStateMutator<Self::Driver>,
+    ) {
+        build_error::build_error("This should never be reachable")
     }
 }
 
@@ -920,4 +958,60 @@ unsafe extern "C" fn atomic_check_callback<T: DriverCrtc>(
         T::atomic_check(crtc, old_state, new_state, &state)?;
         Ok(0)
     })
+}
+
+/// # Safety
+///
+/// DRM must pass a live `Crtc<T>` and its same-device atomic commit. Both old
+/// and new object states must be present, with access serialized for this callback.
+unsafe extern "C" fn atomic_begin_callback<T: DriverCrtc>(
+    crtc: *mut bindings::drm_crtc,
+    state: *mut bindings::drm_atomic_commit,
+) {
+    // SAFETY:
+    // * We're guaranteed `crtc` is of type `Crtc<T>` via type invariants.
+    // * We're guaranteed by DRM that `crtc` is pointing to a valid initialized state.
+    let crtc = unsafe { Crtc::from_raw(crtc) };
+
+    // SAFETY: DRM guarantees that `state` points to a valid `drm_atomic_commit`.
+    let state = unsafe { AtomicStateMutator::new(NonNull::new_unchecked(state)) };
+
+    // SAFETY: We're guaranteed by DRM that both the old and new atomic state are present within
+    // this `drm_atomic_commit`
+    let (old_state, new_state) = unsafe {
+        (
+            state.get_old_crtc_state(crtc).unwrap_unchecked(),
+            state.get_new_crtc_state(crtc).unwrap_unchecked(),
+        )
+    };
+
+    T::atomic_begin(crtc, old_state, new_state, &state);
+}
+
+/// # Safety
+///
+/// DRM must pass a live `Crtc<T>` and its same-device atomic commit. Both old
+/// and new object states must be present, with access serialized for this callback.
+unsafe extern "C" fn atomic_flush_callback<T: DriverCrtc>(
+    crtc: *mut bindings::drm_crtc,
+    state: *mut bindings::drm_atomic_commit,
+) {
+    // SAFETY:
+    // - We're guaranteed `crtc` is of type `Crtc<T>` via type invariants.
+    // - We're guaranteed by DRM that `crtc` is pointing to a valid initialized state.
+    let crtc = unsafe { Crtc::from_raw(crtc) };
+
+    // SAFETY: DRM guarantees that `state` points to a valid `drm_atomic_commit`.
+    let state = unsafe { AtomicStateMutator::new(NonNull::new_unchecked(state)) };
+
+    // SAFETY: We're in an atomic flush callback, so we know that both the new and old state are
+    // present
+    let (old_state, new_state) = unsafe {
+        (
+            state.get_old_crtc_state(crtc).unwrap_unchecked(),
+            state.get_new_crtc_state(crtc).unwrap_unchecked(),
+        )
+    };
+
+    T::atomic_flush(crtc, old_state, new_state, &state);
 }
