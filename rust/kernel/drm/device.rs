@@ -607,7 +607,6 @@ impl<T: drm::Driver> Device<T> {
     }
 
     /// Returns the event spinlock initialized by DRM core.
-    #[allow(dead_code)]
     pub(crate) fn event_lock(&self) -> &crate::sync::SpinLockIrq<()> {
         // SAFETY: DRM initializes event_lock before exposing the device.
         unsafe { crate::sync::SpinLockIrq::from_raw(&raw mut (*self.as_raw()).event_lock) }
