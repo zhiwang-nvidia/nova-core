@@ -2,6 +2,8 @@
 
 //! Nova Core GPU Driver
 
+use kernel::prelude::*;
+
 mod dma;
 mod driver;
 mod falcon;
@@ -25,3 +27,13 @@ kernel::module_pci_driver! {
 }
 
 kernel::module_firmware!(firmware::ModInfoBuilder);
+
+#[kunit_tests(nova_core_tests)]
+mod tests {
+    use kernel::prelude::*;
+
+    #[test]
+    fn test_hello() {
+        pr_info!("hello there!\n");
+    }
+}
