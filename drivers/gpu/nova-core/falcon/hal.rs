@@ -7,6 +7,7 @@ use crate::falcon::{Falcon, FalconBromParams, FalconEngine};
 use crate::gpu::Chipset;
 
 mod ga102;
+mod tu102;
 
 /// Hardware Abstraction Layer for Falcon cores.
 ///
@@ -31,6 +32,10 @@ pub(crate) trait FalconHal<E: FalconEngine>: Sync {
 
     /// Program the boot ROM registers prior to starting a secure firmware.
     fn program_brom(&self, falcon: &Falcon<E>, bar: &Bar0, params: &FalconBromParams) -> Result;
+
+    /// Check if the RISC-V core is active.
+    /// Returns `true` if the RISC-V core is active, `false` otherwise.
+    fn is_riscv_active(&self, bar: &Bar0) -> Result<bool>;
 }
 
 /// Returns a boxed falcon HAL adequate for `chipset`.
@@ -51,8 +56,7 @@ pub(super) fn falcon_hal<E: FalconEngine + 'static>(
             KBox::new(ga102::Ga102::<E>::new(), GFP_KERNEL)? as KBox<dyn FalconHal<E>>
         }
         Architecture::Turing => {
-            // TODO: Add Turing falcon HAL support
-            return Err(ENOTSUPP);
+            KBox::new(tu102::Tu102::<E>::new(), GFP_KERNEL)? as KBox<dyn FalconHal<E>>
         }
         Architecture::Unknown => return Err(ENOTSUPP),
     };
