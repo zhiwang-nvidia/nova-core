@@ -406,7 +406,14 @@ impl Gpu {
         );
 
         sec2_falcon.reset(&bar)?;
-        sec2_falcon.dma_load(&bar, &fw.booter_load)?;
+        let booter_load = fw.booter_load().ok_or_else(|| {
+            dev_err!(
+                pdev.as_ref(),
+                "No booter_load firmware for SEC2 architecture\n"
+            );
+            EINVAL
+        })?;
+        sec2_falcon.dma_load(&bar, booter_load)?;
         let (mbox0, mbox1) = sec2_falcon.boot(
             &bar,
             Some(wpr_handle as u32),
