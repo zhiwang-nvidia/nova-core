@@ -116,9 +116,11 @@ impl Chipset {
     }
 
     /// Determine if this chipset needs larger reserved memory allocation.
-    /// TODO: This is a temporary stub - will be properly implemented in the next commit
     pub(crate) fn needs_large_reserved_mem(&self) -> bool {
-        matches!(self.arch(), Architecture::Blackwell)
+        match self.arch() {
+            Architecture::Hopper | Architecture::Blackwell => true,
+            _ => false,
+        }
     }
 }
 
