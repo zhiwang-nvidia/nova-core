@@ -4,6 +4,7 @@
 
 use crate::alloc::{flags::*, AllocError, KVec};
 use core::fmt::{self, Write};
+use core::mem::MaybeUninit;
 use core::ops::{self, Deref, DerefMut, Index};
 
 use crate::prelude::*;
@@ -935,4 +936,161 @@ impl fmt::Debug for CString {
 #[macro_export]
 macro_rules! fmt {
     ($($f:tt)*) => ( ::core::format_args!($($f)*) )
+}
+
+/// A fixed-capacity stack-allocated string for kernel use.
+///
+/// This type provides a string with compile-time defined capacity that never allocates
+/// on the heap. It's designed for storing short strings like device names in kernel
+/// drivers where heap allocation should be avoided.
+///
+/// # Example
+///
+/// ```rust
+/// use kernel::str::ArrayString;
+///
+/// let gpu_name = ArrayString::<40>::from_str_truncate("NVIDIA GeForce RTX 4090");
+/// assert_eq!(gpu_name.as_str(), "NVIDIA GeForce RTX 4090");
+/// ```
+///
+/// # Invariants
+///
+/// - The `len` field always represents the exact number of valid UTF-8 bytes in `data`
+/// - The bytes `data[0..len]` always form valid UTF-8
+/// - `len` is always <= `N`
+#[derive(Clone)]
+pub struct ArrayString<const N: usize> {
+    data: [MaybeUninit<u8>; N],
+    len: u8,
+}
+
+impl<const N: usize> ArrayString<N> {
+    /// Creates a new empty `ArrayString`.
+    ///
+    /// # Panics
+    ///
+    /// Compilation will fail if `N > 255`, since the length is tracked with a `u8`.
+    pub const fn new() -> Self {
+        const { assert!(N <= 255, "ArrayString capacity cannot exceed 255 bytes") };
+
+        Self {
+            data: [const { MaybeUninit::uninit() }; N],
+            len: 0,
+        }
+    }
+
+    /// Creates an `ArrayString` from a string slice, truncating if necessary.
+    ///
+    /// If the input string is longer than the capacity, it will be truncated at
+    /// a UTF-8 character boundary.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use kernel::str::ArrayString;
+    ///
+    /// let name = ArrayString::<10>::from_str_truncate("Very Long GPU Name");
+    /// assert_eq!(name.as_str(), "Very Long ");  // Truncated at char boundary
+    /// ```
+    pub fn from_str_truncate(s: &str) -> Self {
+        let mut result = Self::new();
+        let bytes = s.as_bytes();
+
+        if bytes.len() <= N {
+            // String fits entirely
+            for (i, &byte) in bytes.iter().enumerate() {
+                result.data[i].write(byte);
+            }
+            result.len = bytes.len() as u8;
+        } else {
+            // Find the longest valid UTF-8 prefix that fits
+            let mut end = N;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+
+            // Copy the truncated string
+            for (i, &byte) in bytes[..end].iter().enumerate() {
+                result.data[i].write(byte);
+            }
+            result.len = end as u8;
+        }
+
+        result
+    }
+
+    /// Returns the string contents as a `&str`.
+    pub fn as_str(&self) -> &str {
+        // SAFETY: The invariants guarantee that data[0..len] is valid UTF-8
+        unsafe {
+            core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                self.data.as_ptr() as *const u8,
+                self.len as usize,
+            ))
+        }
+    }
+
+    /// Returns the current length of the string in bytes.
+    pub const fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    /// Returns `true` if the string is empty.
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Returns the maximum capacity of the string in bytes.
+    pub const fn capacity(&self) -> usize {
+        N
+    }
+}
+
+impl<const N: usize> fmt::Display for ArrayString<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl<const N: usize> fmt::Debug for ArrayString<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_str_truncate() {
+        // Test normal case - string fits
+        let s = ArrayString::<20>::from_str_truncate("Hello, world!");
+        assert_eq!(s.as_str(), "Hello, world!");
+        assert_eq!(s.len(), 13);
+
+        // Test truncation at ASCII boundary
+        let s = ArrayString::<5>::from_str_truncate("Hello, world!");
+        assert_eq!(s.as_str(), "Hello");
+        assert_eq!(s.len(), 5);
+
+        // Test truncation at UTF-8 boundary
+        let s = ArrayString::<6>::from_str_truncate("Hello🦀world");
+        assert_eq!(s.as_str(), "Hello"); // 🦀 is 4 bytes, doesn't fit
+        assert_eq!(s.len(), 5);
+    }
+
+    #[test]
+    fn test_empty_string() {
+        let s = ArrayString::<10>::from_str_truncate("");
+        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
+        assert_eq!(s.as_str(), "");
+    }
+
+    #[test]
+    fn test_display() {
+        let s = ArrayString::<20>::from_str_truncate("GPU Name");
+        assert_eq!(format!("{}", s), "GPU Name");
+    }
 }
