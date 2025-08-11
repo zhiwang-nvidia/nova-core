@@ -14,6 +14,7 @@ use kernel::dma::CoherentAllocation;
 use kernel::pci;
 use kernel::pr_info;
 use kernel::prelude::*;
+use kernel::str::ArrayString;
 use kernel::time::Delta;
 use kernel::transmute::{AsBytes, FromBytes, FromBytesSized};
 use kernel::types::ARef;
@@ -100,7 +101,7 @@ pub(crate) struct FbRegion {
 }
 
 pub(crate) struct GspStaticConfigInfo {
-    pub gpu_name: [u8; 40],
+    pub gpu_name: ArrayString<40>,
     pub h_internal_client: u32,
     pub h_internal_device: u32,
     pub h_internal_subdevice: u32,
@@ -114,24 +115,18 @@ impl GspMessageElement for GspStaticConfigInfo {
     fn new_from_sbuf<'a, I: Iterator<Item = &'a [u8]>>(sbuf: &mut SBuffer<I>) -> Result<Self> {
         let static_info = fw::GspStaticConfigInfo_t::new_from_sbuf(sbuf)?;
 
-        let gpu_name_str = static_info
-            .gpuNameString
-            .get(
-                0..=static_info
-                    .gpuNameString
-                    .iter()
-                    .position(|&b| b == 0)
-                    .unwrap_or(static_info.gpuNameString.len() - 1),
-            )
-            .and_then(|bytes| CStr::from_bytes_with_nul(bytes).ok())
-            .and_then(|cstr| cstr.to_str().ok())
-            .unwrap_or("invalid utf8");
-
-        let mut gpu_name = [0u8; 40];
-        let bytes = gpu_name_str.as_bytes();
-        let copy_len = core::cmp::min(bytes.len(), gpu_name.len());
-        gpu_name[..copy_len].copy_from_slice(&bytes[..copy_len]);
-        gpu_name[copy_len] = b'\0';
+        // Extract GPU name from null-terminated string
+        let gpu_name = ArrayString::from_str_truncate(
+            static_info
+                .gpuNameString
+                .iter()
+                .position(|&b| b == 0)
+                .and_then(|null_pos| {
+                    CStr::from_bytes_with_nul(&static_info.gpuNameString[..=null_pos]).ok()
+                })
+                .and_then(|cstr| cstr.to_str().ok())
+                .unwrap_or("invalid utf8"),
+        );
 
         // Parse FB regions
         let mut fb_regions = KVec::new();

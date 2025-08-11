@@ -817,11 +817,7 @@ impl Gpu {
 
         let gsp_info = libos.cmdq.get_gsp_info(bar)?;
 
-        dev_info!(
-            pdev.as_ref(),
-            "GPU name: {}\n",
-            util::str_from_null_terminated(&gsp_info.gpu_name)
-        );
+        dev_info!(pdev.as_ref(), "GPU name: {}\n", gsp_info.gpu_name);
         dev_dbg!(
             pdev.as_ref(),
             "FB regions: {} usable regions found\n",
