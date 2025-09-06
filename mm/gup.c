@@ -2841,12 +2841,11 @@ static void __maybe_unused gup_fast_undo_dev_pagemap(int *nr, int nr_start,
  * also check pmd here to make sure pmd doesn't change (corresponds to
  * pmdp_collapse_flush() in the THP collapse code path).
  */
-static int gup_fast_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
-		unsigned long end, unsigned int flags, struct page **pages,
-		int *nr)
+static unsigned long gup_fast_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
+		unsigned long end, unsigned int flags, struct page **pages)
 {
 	struct dev_pagemap *pgmap = NULL;
-	int ret = 0;
+	unsigned long nr_pages = 0;
 	pte_t *ptep, *ptem;
 
 	ptem = ptep = pte_offset_map(&pmd, addr);
@@ -2904,24 +2903,20 @@ static int gup_fast_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
 		 * details.
 		 */
 		if (flags & FOLL_PIN) {
-			ret = arch_make_folio_accessible(folio);
-			if (ret) {
+			if (arch_make_folio_accessible(folio)) {
 				gup_put_folio(folio, 1, flags);
 				goto pte_unmap;
 			}
 		}
 		folio_set_referenced(folio);
-		pages[*nr] = page;
-		(*nr)++;
+		pages[nr_pages++] = page;
 	} while (ptep++, addr += PAGE_SIZE, addr != end);
-
-	ret = 1;
 
 pte_unmap:
 	if (pgmap)
 		put_dev_pagemap(pgmap);
 	pte_unmap(ptem);
-	return ret;
+	return nr_pages;
 }
 #else
 
@@ -2934,21 +2929,24 @@ pte_unmap:
  * get_user_pages_fast_only implementation that can pin pages. Thus it's still
  * useful to have gup_fast_pmd_leaf even if we can't operate on ptes.
  */
-static int gup_fast_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
-		unsigned long end, unsigned int flags, struct page **pages,
-		int *nr)
+static unsigned long gup_fast_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
+		unsigned long end, unsigned int flags, struct page **pages)
 {
 	return 0;
 }
 #endif /* CONFIG_ARCH_HAS_PTE_SPECIAL */
 
-static int gup_fast_pmd_leaf(pmd_t orig, pmd_t *pmdp, unsigned long addr,
-		unsigned long end, unsigned int flags, struct page **pages,
-		int *nr)
+static unsigned long gup_fast_pmd_leaf(pmd_t orig, pmd_t *pmdp, unsigned long addr,
+		unsigned long end, unsigned int flags, struct page **pages)
 {
+	const unsigned long nr_pages = (end - addr) >> PAGE_SHIFT;
 	struct page *page;
 	struct folio *folio;
-	int refs;
+	unsigned long i;
+
+	/* See gup_fast_pte_range() */
+	if (pmd_protnone(orig))
+		return 0;
 
 	if (!pmd_access_permitted(orig, flags & FOLL_WRITE))
 		return 0;
@@ -2956,32 +2954,30 @@ static int gup_fast_pmd_leaf(pmd_t orig, pmd_t *pmdp, unsigned long addr,
 	if (pmd_special(orig))
 		return 0;
 
-	refs = (end - addr) >> PAGE_SHIFT;
 	page = pmd_page(orig) + ((addr & ~PMD_MASK) >> PAGE_SHIFT);
 
-	folio = try_grab_folio_fast(page, refs, flags);
+	folio = try_grab_folio_fast(page, nr_pages, flags);
 	if (!folio)
 		return 0;
 
 	if (unlikely(pmd_val(orig) != pmd_val(*pmdp))) {
-		gup_put_folio(folio, refs, flags);
+		gup_put_folio(folio, nr_pages, flags);
 		return 0;
 	}
 
 	if (!gup_fast_folio_allowed(folio, flags)) {
-		gup_put_folio(folio, refs, flags);
+		gup_put_folio(folio, nr_pages, flags);
 		return 0;
 	}
 	if (!pmd_write(orig) && gup_must_unshare(NULL, flags, &folio->page)) {
-		gup_put_folio(folio, refs, flags);
+		gup_put_folio(folio, nr_pages, flags);
 		return 0;
 	}
 
-	*nr += refs;
-	for (; refs; refs--)
+	for (i = 0; i < nr_pages; i++)
 		*(pages++) = page++;
 	folio_set_referenced(folio);
-	return 1;
+	return nr_pages;
 }
 
 static int gup_fast_pud_leaf(pud_t orig, pud_t *pudp, unsigned long addr,
@@ -3027,11 +3023,11 @@ static int gup_fast_pud_leaf(pud_t orig, pud_t *pudp, unsigned long addr,
 	return 1;
 }
 
-static int gup_fast_pmd_range(pud_t *pudp, pud_t pud, unsigned long addr,
-		unsigned long end, unsigned int flags, struct page **pages,
-		int *nr)
+static unsigned long gup_fast_pmd_range(pud_t *pudp, pud_t pud, unsigned long addr,
+		unsigned long end, unsigned int flags, struct page **pages)
 {
-	unsigned long next;
+	unsigned long cur_nr_pages, next;
+	unsigned long nr_pages = 0;
 	pmd_t *pmdp;
 
 	pmdp = pmd_offset_lockless(pudp, pud, addr);
@@ -3040,23 +3036,21 @@ static int gup_fast_pmd_range(pud_t *pudp, pud_t pud, unsigned long addr,
 
 		next = pmd_addr_end(addr, end);
 		if (!pmd_present(pmd))
-			return 0;
+			break;
 
-		if (unlikely(pmd_leaf(pmd))) {
-			/* See gup_fast_pte_range() */
-			if (pmd_protnone(pmd))
-				return 0;
+		if (unlikely(pmd_leaf(pmd)))
+			cur_nr_pages = gup_fast_pmd_leaf(pmd, pmdp, addr, next, flags, pages);
+		else
+			cur_nr_pages = gup_fast_pte_range(pmd, pmdp, addr, next, flags, pages);
 
-			if (!gup_fast_pmd_leaf(pmd, pmdp, addr, next, flags,
-				pages, nr))
-				return 0;
+		nr_pages += cur_nr_pages;
+		pages += cur_nr_pages;
 
-		} else if (!gup_fast_pte_range(pmd, pmdp, addr, next, flags,
-					       pages, nr))
-			return 0;
+		if (nr_pages != (next - addr) >> PAGE_SIZE)
+			break;
 	} while (pmdp++, addr = next, addr != end);
 
-	return 1;
+	return nr_pages;
 }
 
 static int gup_fast_pud_range(p4d_t *p4dp, p4d_t p4d, unsigned long addr,
