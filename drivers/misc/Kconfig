@@ -661,4 +661,13 @@ source "drivers/misc/mchp_pci1xxxx/Kconfig"
 source "drivers/misc/keba/Kconfig"
 source "drivers/misc/amd-sbi/Kconfig"
 source "drivers/misc/rp1/Kconfig"
+
+config RUST_PROVIDER
+	tristate "Rust provider"
+	depends on RUST
+
+config C_CONSUMER
+	tristate "C consumer"
+	depends on RUST_PROVIDER
+
 endmenu
