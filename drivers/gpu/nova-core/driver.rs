@@ -54,6 +54,7 @@ impl pci::Driver for NovaCore {
     const ID_TABLE: pci::IdTable<Self::IdInfo> = &PCI_TABLE;
 
     fn probe(pdev: &pci::Device<Core>, _info: &Self::IdInfo) -> Result<Pin<KBox<Self>>> {
+        dev_dbg!(pdev.as_ref(), "Starting Nova Core GPU driver probe\n");
         dev_dbg!(pdev.as_ref(), "Probe Nova Core GPU driver.\n");
 
         pdev.enable_device_mem()?;
@@ -64,6 +65,8 @@ impl pci::Driver for NovaCore {
             pdev.iomap_region_sized::<BAR0_SIZE>(0, c_str!("nova-core/bar0")),
             GFP_KERNEL,
         )?;
+
+        dev_dbg!(pdev.as_ref(), "Registering auxiliary device 'nova-drm'\n");
 
         let this = KBox::pin_init(
             try_pin_init!(Self {
@@ -78,6 +81,7 @@ impl pci::Driver for NovaCore {
             GFP_KERNEL,
         )?;
 
+        dev_dbg!(pdev.as_ref(), "Successfully registered auxiliary device\n");
         Ok(this)
     }
 }

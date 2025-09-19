@@ -17,7 +17,8 @@ pub(crate) struct File;
 impl drm::file::DriverFile for File {
     type Driver = NovaDriver;
 
-    fn open(_dev: &NovaDevice) -> Result<Pin<KBox<Self>>> {
+    fn open(dev: &NovaDevice) -> Result<Pin<KBox<Self>>> {
+        dev_dbg!(dev.as_ref(), "Opening DRM device file\n");
         Ok(KBox::new(Self, GFP_KERNEL)?.into())
     }
 }
@@ -29,17 +30,23 @@ impl File {
         getparam: &Opaque<uapi::drm_nova_getparam>,
         _file: &drm::File<File>,
     ) -> Result<u32> {
+        dev_dbg!(dev.as_ref(), "get_param called\n");
+
         let adev = &dev.adev;
         let parent = adev.parent().ok_or(ENOENT)?;
         let pdev: &pci::Device = parent.try_into()?;
         let getparam: &Getparam = getparam.into();
 
-        let value = match getparam.param() as u32 {
+        let param = getparam.param() as u32;
+        dev_dbg!(dev.as_ref(), "get_param param={}\n", param);
+
+        let value = match param {
             uapi::NOVA_GETPARAM_VRAM_BAR_SIZE => pdev.resource_len(1)?,
             _ => return Err(EINVAL),
         };
 
         getparam.set_value(value);
+        dev_dbg!(dev.as_ref(), "get_param success, value={}\n", value);
 
         Ok(0)
     }
@@ -50,11 +57,17 @@ impl File {
         req: &Opaque<uapi::drm_nova_gem_create>,
         file: &drm::File<File>,
     ) -> Result<u32> {
+        dev_dbg!(dev.as_ref(), "gem_create called\n");
+
         let req: &GemCreate = req.into();
+        let size = req.size();
+        dev_dbg!(dev.as_ref(), "gem_create size={}\n", size);
+
         let obj = NovaObject::new(dev, req.size().try_into()?)?;
+        let handle = obj.create_handle(file)?;
+        req.set_handle(handle);
 
-        req.set_handle(obj.create_handle(file)?);
-
+        dev_dbg!(dev.as_ref(), "gem_create success, handle={}\n", handle);
         Ok(0)
     }
 

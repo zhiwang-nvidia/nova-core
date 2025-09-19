@@ -46,11 +46,15 @@ impl auxiliary::Driver for NovaDriver {
     const ID_TABLE: auxiliary::IdTable<Self::IdInfo> = &AUX_TABLE;
 
     fn probe(adev: &auxiliary::Device<Core>, _info: &Self::IdInfo) -> Result<Pin<KBox<Self>>> {
+        dev_dbg!(adev.as_ref(), "Probing auxiliary device 'nova-drm'\n");
+
         let data = try_pin_init!(NovaData { adev: adev.into() });
 
+        dev_dbg!(adev.as_ref(), "Creating DRM device\n");
         let drm = drm::Device::<Self>::new(adev.as_ref(), data)?;
         drm::Registration::new_foreign_owned(&drm, adev.as_ref(), 0)?;
 
+        dev_dbg!(adev.as_ref(), "Successfully registered DRM device\n");
         Ok(KBox::new(Self { drm }, GFP_KERNEL)?.into())
     }
 }
