@@ -4,7 +4,9 @@
 //!
 //! To make this driver probe, QEMU must be run with `-device pci-testdev`.
 
-use kernel::{c_str, device::Core, devres::Devres, pci, prelude::*, sync::aref::ARef};
+use kernel::{
+    bindings, c_str, device::Core, devres::Devres, pci, pci::Vendor, prelude::*, sync::aref::ARef,
+};
 
 struct Regs;
 
@@ -38,7 +40,8 @@ kernel::pci_device_table!(
     MODULE_PCI_TABLE,
     <SampleDriver as pci::Driver>::IdInfo,
     [(
-        pci::DeviceId::from_id(pci::Vendor::REDHAT, 0x5),
+        // Match any NVIDIA device to demonstrate Display implementations
+        pci::DeviceId::from_id(pci::Vendor::NVIDIA, bindings::PCI_ANY_ID as u32),
         TestIndex::NO_EVENTFD
     )]
 );
@@ -73,6 +76,15 @@ impl pci::Driver for SampleDriver {
             vendor,
             pdev.device_id()
         );
+
+        // Exercise the PCI Class and Vendor Display implementations
+        let pci_class = pdev.pci_class();
+        dev_info!(pdev.as_ref(), "Detected PCI class: {}\n", pci_class);
+
+        // Demonstrate vendor Display using known constants
+        dev_info!(pdev.as_ref(), "Known vendor: RedHat={}\n", Vendor::REDHAT);
+
+        return Err(ENODEV);
 
         pdev.enable_device_mem()?;
         pdev.set_master();
