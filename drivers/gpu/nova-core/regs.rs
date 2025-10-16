@@ -17,11 +17,11 @@ use kernel::prelude::*;
 // PMC
 
 register!(NV_PMC_BOOT_0 @ 0x00000000, "Basic revision information about the GPU" {
-    3:0     minor_revision as u8, "Minor revision of the chip";
-    7:4     major_revision as u8, "Major revision of the chip";
-    8:8     architecture_1 as u8, "MSB of the architecture";
-    23:20   implementation as u8, "Implementation version of the architecture";
     28:24   architecture_0 as u8, "Lower bits of the architecture";
+    23:20   implementation as u8, "Implementation version of the architecture";
+    8:8     architecture_1 as u8, "MSB of the architecture";
+    7:4     major_revision as u8, "Major revision of the chip";
+    3:0     minor_revision as u8, "Minor revision of the chip";
 });
 
 impl NV_PMC_BOOT_0 {
