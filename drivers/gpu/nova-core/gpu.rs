@@ -154,17 +154,46 @@ impl Gpu {
         bar: &'a Bar0,
     ) -> impl PinInit<Self, Error> + 'a {
         let boot0 = regs::NV_PMC_BOOT_0::read(bar);
+        let arch0 = boot0.architecture_0();
+        let is_nv04 = arch0 == 0 && (boot0.value() & 0xff00fff0) == 0x20004000;
+        let is_next_gen = arch0 == 0 && !is_nv04;
+
+        // Pre-read boot42 only if we have a next-gen GPU
+        let boot42 = if is_next_gen {
+            Some(regs::NV_PMC_BOOT_42::read(bar))
+        } else {
+            None
+        };
 
         try_pin_init!(Self {
             chipset: {
-                let chipset = boot0.chipset()?;
+                if is_nv04 {
+                    Err(ENODEV)?
+                }
+
+                // Determine chipset and revision info
+                let (chipset, major_rev, minor_rev) = if let Some(boot42) = boot42 {
+                    (
+                        boot42.chipset()?,
+                        boot42.major_revision(),
+                        boot42.minor_revision(),
+                    )
+                } else {
+                    // Current/older GPU: use BOOT0
+                    (
+                        boot0.chipset()?,
+                        boot0.major_revision(),
+                        boot0.minor_revision(),
+                    )
+                };
+
                 dev_info!(
                     pdev.as_ref(),
                     "NVIDIA (Chipset: {}, Architecture: {:?}, Revision: {:x}.{:x})\n",
                     chipset,
                     chipset.arch(),
-                    boot0.major_revision(),
-                    boot0.minor_revision()
+                    major_rev,
+                    minor_rev
                 );
                 chipset
             },
@@ -175,21 +204,23 @@ impl Gpu {
                     .inspect_err(|_| dev_err!(pdev.as_ref(), "GFW boot did not complete"))?;
             },
 
-            sysmem_flush: SysmemFlush::register(pdev.as_ref(), bar, boot0.chipset()?)?,
+            sysmem_flush: SysmemFlush::register(pdev.as_ref(), bar, *chipset)?,
 
             gsp_falcon: Falcon::new(
                 pdev.as_ref(),
-                boot0.chipset()?,
+                *chipset,
                 bar,
-                boot0.chipset()? > Chipset::GA100,
+                *chipset > Chipset::GA100,
             )
             .inspect(|falcon| falcon.clear_swgen0_intr(bar))?,
 
-            sec2_falcon: Falcon::new(pdev.as_ref(), boot0.chipset()?, bar, true)?,
+            sec2_falcon: Falcon::new(pdev.as_ref(), *chipset, bar, true)?,
 
             gsp <- Gsp::new(),
 
-            _: { gsp.boot(pdev, bar, boot0.chipset()?, gsp_falcon, sec2_falcon)? },
+            _: {
+                gsp.boot(pdev, bar, *chipset, gsp_falcon, sec2_falcon)?
+            },
 
             bar: devres_bar,
         })

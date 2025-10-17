@@ -25,6 +25,10 @@ register!(NV_PMC_BOOT_0 @ 0x00000000, "Basic revision information about the GPU"
 });
 
 impl NV_PMC_BOOT_0 {
+    /// Returns the raw register value.
+    pub(crate) fn value(self) -> u32 {
+        self.0
+    }
     /// Combines `architecture_0` and `architecture_1` to obtain the architecture of the chip.
     pub(crate) fn architecture(self) -> Result<Architecture> {
         Architecture::try_from(
@@ -40,6 +44,21 @@ impl NV_PMC_BOOT_0 {
                     | u32::from(self.implementation())
             })
             .and_then(Chipset::try_from)
+    }
+}
+
+register!(NV_PMC_BOOT_42 @ 0x00000108, "Extended architecture information" {
+    23:20   major_revision as u8, "Major revision of the chip";
+    19:16   minor_revision as u8, "Minor revision of the chip";
+    15:8    architecture as u8, "Architecture value";
+    7:0     implementation as u8, "Implementation version of the architecture";
+});
+
+impl NV_PMC_BOOT_42 {
+    pub(crate) fn chipset(self) -> Result<Chipset> {
+        let arch = Architecture::try_from(self.architecture())?;
+        let chipset_value = ((arch as u32) << 8) | u32::from(self.implementation());
+        Chipset::try_from(chipset_value)
     }
 }
 
