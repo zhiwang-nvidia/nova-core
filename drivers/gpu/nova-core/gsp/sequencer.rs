@@ -12,7 +12,10 @@ use core::{
 
 use kernel::{
     device,
-    io::poll::read_poll_timeout,
+    io::{
+        Io,
+        poll::read_poll_timeout, //
+    },
     prelude::*,
     time::{
         delay::fsleep,
