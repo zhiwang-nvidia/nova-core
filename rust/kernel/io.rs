@@ -64,7 +64,14 @@ impl<const SIZE: usize> IoRaw<SIZE> {
 /// # Examples
 ///
 /// ```no_run
-/// # use kernel::{bindings, ffi::c_void, io::{Io, IoRaw}};
+/// # use kernel::{
+/// #   bindings,
+/// #   ffi::c_void,
+/// #   io::{
+/// #       Io,
+/// #       IoRaw, //
+/// #   }, //
+/// # };
 /// # use core::ops::Deref;
 ///
 /// // See also [`pci::Bar`] for a real example.
