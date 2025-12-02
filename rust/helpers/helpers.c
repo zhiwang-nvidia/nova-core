@@ -32,6 +32,7 @@
 #include "err.c"
 #include "fs.c"
 #include "fwctl.c"
+#include "gpu.c"
 #include "irq.c"
 #include "io.c"
 #include "jump_label.c"
