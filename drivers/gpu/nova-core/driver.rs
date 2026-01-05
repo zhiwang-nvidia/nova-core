@@ -37,7 +37,6 @@ pub(crate) struct NovaCore {
 const BAR0_SIZE: usize = SZ_16M;
 
 pub(crate) type Bar0 = pci::Bar<BAR0_SIZE>;
-#[expect(dead_code)]
 pub(crate) type Bar1 = pci::Bar;
 
 kernel::pci_device_table!(
