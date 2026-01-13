@@ -27,6 +27,7 @@ macro_rules! impl_pfn_bounded {
 pub(super) mod pagetable;
 pub(crate) mod pramin;
 pub(super) mod tlb;
+pub(super) mod vmm;
 
 use kernel::{
     bitfield,
