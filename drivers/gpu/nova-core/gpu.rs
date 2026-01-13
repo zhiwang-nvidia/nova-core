@@ -8,8 +8,13 @@ use kernel::{
         DmaMask, //
     },
     fmt,
+    gpu::buddy::GpuBuddyParams,
     pci,
     prelude::*,
+    sizes::{
+        SZ_1M,
+        SZ_4K, //
+    },
     sync::Arc, //
 };
 
@@ -30,6 +35,7 @@ use crate::{
         MAX_PARTITIONS_WITH_GFID,
         MAX_PARTITIONS_WITH_GFID_32VM, //
     },
+    mm::GpuMm,
     regs,
     vgpu::Vgpu, //
 };
@@ -333,6 +339,9 @@ pub(crate) struct Gpu {
     gsp_falcon: Falcon<GspFalcon>,
     /// SEC2 falcon instance, used for GSP boot up and cleanup.
     sec2_falcon: Falcon<Sec2Falcon>,
+    /// GPU memory manager owning memory management resources.
+    #[pin]
+    mm: GpuMm,
     /// vGPU state (module param + SR-IOV / FSP PRC).
     vgpu: Vgpu,
     /// GSP runtime data. Temporarily an empty placeholder.
@@ -368,6 +377,12 @@ impl Gpu {
                 },
 
                 sysmem_flush: SysmemFlush::register(pdev.as_ref(), bar, chipset)?,
+
+                mm <- GpuMm::new(devres_bar.clone(), GpuBuddyParams {
+                    base_offset: 0,
+                    physical_memory_size: SZ_1M as u64,
+                    chunk_size: SZ_4K as u64,
+                })?,
 
                 gsp_falcon: Falcon::new(
                     pdev.as_ref(),
