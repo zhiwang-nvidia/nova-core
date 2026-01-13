@@ -9,10 +9,13 @@ use kernel::{
     },
     fmt,
     fwctl,
+    gpu::buddy::GpuBuddyParams,
     io::Io,
     num::Bounded,
     pci,
     prelude::*,
+    ptr::Alignment,
+    sizes::SZ_4K,
     sync::Arc, //
 };
 
@@ -31,6 +34,7 @@ use crate::{
         commands::GetGspStaticInfoReply,
         Gsp, //
     },
+    mm::GpuMm,
     regs,
 };
 
@@ -295,6 +299,9 @@ pub(crate) struct Gpu {
     gsp_falcon: Falcon<GspFalcon>,
     /// SEC2 falcon instance, used for GSP boot up and cleanup.
     sec2_falcon: Falcon<Sec2Falcon>,
+    /// GPU memory manager owning memory management resources.
+    #[pin]
+    mm: GpuMm,
     /// GSP runtime data. Temporarily an empty placeholder.
     #[pin]
     gsp: Gsp,
@@ -361,7 +368,26 @@ impl Gpu {
                     // SAFETY: We do not move the pinned `Gsp`; `addr_of!` only
                     // computes the address.
                     cmdq_cell.set(core::ptr::addr_of!(gsp.as_ref().get_ref().cmdq));
-                    gsp.boot(pdev, bar, chipset, gsp_falcon, sec2_falcon)?
+                    let info = gsp.boot(pdev, bar, chipset, gsp_falcon, sec2_falcon)?;
+
+                    dev_info!(
+                        pdev.as_ref(),
+                        "Using FB region: {:#x}..{:#x}\n",
+                        info.usable_fb_region.start,
+                        info.usable_fb_region.end
+                    );
+
+                    info
+                },
+
+                mm <- {
+                    let usable_vram = &gsp_static_info.usable_fb_region;
+                    let pramin_vram_region = 0..gsp_static_info.total_fb_end;
+                    GpuMm::new(devres_bar.clone(), GpuBuddyParams {
+                        base_offset: usable_vram.start,
+                        size: usable_vram.end - usable_vram.start,
+                        chunk_size: Alignment::new::<SZ_4K>(),
+                    }, pramin_vram_region)?
                 },
 
                 _fwctl_reg <- {
