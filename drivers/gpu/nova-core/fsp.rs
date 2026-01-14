@@ -485,7 +485,7 @@ impl Fsp {
         let nvdm = mctp::NvdmHeader::from_raw(nvdm_header);
         if nvdm.msg_type() != mctp::MSG_TYPE_VENDOR_PCI
             || nvdm.vendor_id() != mctp::VENDOR_ID_NV
-            || nvdm.nvdm_type() != mctp::nvdm_type::FSP_RESPONSE
+            || nvdm.nvdm_type() != u32::from(mctp::nvdm_type::FSP_RESPONSE)
         {
             dev_err!(
                 dev,
