@@ -24,6 +24,7 @@ use crate::{
     fsp::FspCotVersion,
     gfw,
     gsp::{
+        commands::GetGspStaticInfoReply,
         Gsp,
         GspBootContext,
         MAX_PARTITIONS_WITH_GFID,
@@ -337,6 +338,8 @@ pub(crate) struct Gpu {
     /// GSP runtime data. Temporarily an empty placeholder.
     #[pin]
     pub(crate) gsp: Gsp,
+    /// Static GPU information from GSP.
+    gsp_static_info: GetGspStaticInfoReply,
 }
 
 impl Gpu {
@@ -378,7 +381,7 @@ impl Gpu {
 
                 gsp <- Gsp::new(pdev),
 
-                _: {
+                gsp_static_info: {
                     let mut ctx = GspBootContext {
                         pdev,
                         bar,
@@ -397,8 +400,9 @@ impl Gpu {
                             0
                         },
                     };
-                    gsp.boot(&mut ctx)?;
+                    let (info, _fb_layout) = gsp.boot(&mut ctx)?;
                     vgpu.set_vgpu_enabled(ctx.vgpu_requested);
+                    info
                 },
 
                 bar: devres_bar,

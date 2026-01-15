@@ -47,7 +47,10 @@ use crate::{
     gpu::Chipset,
     gsp::{
         cmdq::Cmdq,
-        commands,
+        commands::{
+            self,
+            GetGspStaticInfoReply, //
+        },
         fw,
         fw::{
             LibosMemoryRegionInitArgument,
@@ -323,10 +326,16 @@ impl super::Gsp {
     /// structures that the GSP will use at runtime.
     ///
     /// Upon return, the GSP is up and running, and its runtime object given as return value.
+    ///
+    /// Returns a tuple containing:
+    /// - [`GetGspStaticInfoReply`]: Static GPU information from GSP, including the BAR1 page
+    ///   directory base address needed for memory management.
+    /// - [`FbLayout`]: Frame buffer layout computed during boot, containing memory regions
+    ///   required for [`GpuMm`] initialization.
     pub(crate) fn boot(
         mut self: Pin<&mut Self>,
         ctx: &mut super::GspBootContext<'_>,
-    ) -> Result {
+    ) -> Result<(GetGspStaticInfoReply, FbLayout)> {
         let bar = ctx.bar;
         let chipset = ctx.chipset;
         let arch = chipset.arch();
@@ -455,7 +464,7 @@ impl super::Gsp {
             Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
         }
 
-        Ok(())
+        Ok((info, fb_layout))
     }
 
     /// Wait for GSP boot to complete, handling load-and-execute events inline.
