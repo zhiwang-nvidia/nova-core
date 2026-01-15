@@ -156,6 +156,9 @@ const GSP_GET_STATIC_INFO_MAX_RESPONSE: u32 = 8192;
 /// The reply from the GSP to the `GSP_GET_STATIC_INFO` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
+    /// BAR1 Page Directory Entry base address.
+    #[expect(dead_code)]
+    pub(crate) bar1_pde_base: u64,
     /// Usable FB (VRAM) region for driver memory allocation.
     pub(crate) usable_fb_region: Range<u64>,
     /// End of VRAM.
@@ -213,8 +216,11 @@ pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: &Bar0) -> Result<GetGspStaticInfoRe
         .read(regs::NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE)
         .usable_fb_size();
 
+    // TODO: Extract bar1_pde_base from NVKV response once the GSP firmware
+    // exposes the appropriate key.
     Ok(GetGspStaticInfoReply {
         gpu_name,
+        bar1_pde_base: 0,
         usable_fb_region: 0..usable_fb_size,
         total_fb_end: usable_fb_size,
     })
