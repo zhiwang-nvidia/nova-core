@@ -51,7 +51,10 @@ use crate::{
     },
     gsp::{
         cmdq::Cmdq,
-        commands,
+        commands::{
+            self,
+            GetGspStaticInfoReply, //
+        },
         fw,
         fw::{
             LibosMemoryRegionInitArgument,
@@ -363,7 +366,7 @@ impl super::Gsp {
         chipset: Chipset,
         gsp_falcon: &Falcon<Gsp>,
         sec2_falcon: &Falcon<Sec2>,
-    ) -> Result {
+    ) -> Result<GetGspStaticInfoReply> {
         let dev = pdev.as_ref();
         let uses_sec2 = matches!(
             chipset.arch(),
@@ -464,7 +467,7 @@ impl super::Gsp {
             Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
         }
 
-        Ok(())
+        Ok(info)
     }
 
     /// Wait for GSP boot to complete, handling load-and-execute events inline.
