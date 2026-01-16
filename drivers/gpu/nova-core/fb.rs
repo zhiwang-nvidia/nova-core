@@ -162,6 +162,10 @@ impl fmt::Debug for FbRange {
 /// Layout of the GPU framebuffer memory.
 ///
 /// Contains ranges of GPU memory reserved for a given purpose during the GSP boot process.
+///
+/// This structure is populated in 2 steps:
+/// 1. [`FbLayout::new()`] computes firmware layout from hardware.
+/// 2. [`FbLayout::set_usable_vram()`] populates usable region from GSP response.
 #[derive(Debug)]
 pub(crate) struct FbLayout {
     /// Range of the framebuffer. Starts at `0`.
@@ -178,8 +182,14 @@ pub(crate) struct FbLayout {
     pub(crate) wpr2_heap: FbRange,
     /// WPR2 region range, starting with an instance of `GspFwWprMeta`.
     pub(crate) wpr2: FbRange,
+    /// Non-WPR heap carved before WPR2, used by GSP firmware.
     pub(crate) heap: FbRange,
     pub(crate) vf_partition_count: u8,
+    /// Usable VRAM region for driver allocations (from GSP `fbRegionInfoParams`).
+    ///
+    /// Initially [`None`], populated after GSP boot with usable region info.
+    #[allow(dead_code)]
+    pub(crate) usable_vram: Option<Range<u64>>,
 }
 
 impl FbLayout {
@@ -289,7 +299,21 @@ impl FbLayout {
             wpr2,
             heap,
             vf_partition_count,
+            usable_vram: None,
         })
+    }
+
+    /// Set the usable VRAM region from GSP response.
+    ///
+    /// Called after GSP boot with the first usable region extracted from
+    /// GSP's `fbRegionInfoParams`. Usable regions are those that:
+    /// - Are not reserved for firmware internal use.
+    /// - Are not protected (hardware-enforced access restrictions).
+    /// - Support compression (can use GPU memory compression for bandwidth).
+    /// - Support ISO (isochronous memory for display requiring guaranteed bandwidth).
+    #[allow(dead_code)]
+    pub(crate) fn set_usable_vram(&mut self, base: u64, size: u64) {
+        self.usable_vram = Some(base..base.saturating_add(size));
     }
 }
 
