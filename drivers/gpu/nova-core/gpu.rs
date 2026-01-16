@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use core::cell::Cell;
+
 use kernel::{
     device,
     devres::Devres,
@@ -11,10 +13,7 @@ use kernel::{
     gpu::buddy::GpuBuddyParams,
     pci,
     prelude::*,
-    sizes::{
-        SZ_1M,
-        SZ_4K, //
-    },
+    sizes::SZ_4K,
     sync::Arc, //
 };
 
@@ -36,9 +35,17 @@ use crate::{
         MAX_PARTITIONS_WITH_GFID_32VM, //
     },
     mm::GpuMm,
+    num::IntoSafeCast,
     regs,
     vgpu::Vgpu, //
 };
+
+/// Parameters extracted from GSP boot for initializing memory subsystems.
+#[derive(Clone, Copy)]
+struct BootParams {
+    usable_vram_start: u64,
+    usable_vram_size: u64,
+}
 
 macro_rules! define_chipset {
     ({ $($variant:ident = $value:expr),* $(,)* }) =>
@@ -357,6 +364,11 @@ impl Gpu {
         devres_bar: Arc<Devres<Bar0>>,
         bar: &'a Bar0,
     ) -> impl PinInit<Self, Error> + 'a {
+        let boot_params: Cell<BootParams> = Cell::new(BootParams {
+            usable_vram_start: 0,
+            usable_vram_size: 0,
+        });
+
         pin_init::pin_init_scope(move || {
             let spec = Spec::new(pdev.as_ref(), bar)?;
             dev_info!(pdev, "NVIDIA ({})\n", spec);
@@ -377,12 +389,6 @@ impl Gpu {
                 },
 
                 sysmem_flush: SysmemFlush::register(pdev.as_ref(), bar, chipset)?,
-
-                mm <- GpuMm::new(devres_bar.clone(), GpuBuddyParams {
-                    base_offset: 0,
-                    physical_memory_size: SZ_1M as u64,
-                    chunk_size: SZ_4K as u64,
-                })?,
 
                 gsp_falcon: Falcon::new(
                     pdev.as_ref(),
@@ -415,9 +421,36 @@ impl Gpu {
                             0
                         },
                     };
-                    let (info, _fb_layout) = gsp.boot(&mut ctx)?;
+                    let (info, fb_layout) = gsp.boot(&mut ctx)?;
                     vgpu.set_vgpu_enabled(ctx.vgpu_requested);
+
+                    let usable_vram = fb_layout.usable_vram.as_ref().ok_or_else(|| {
+                        dev_err!(pdev, "No usable FB regions found from GSP\n");
+                        ENODEV
+                    })?;
+
+                    dev_info!(
+                        pdev,
+                        "Using FB region: {:#x}..{:#x}\n",
+                        usable_vram.start,
+                        usable_vram.end
+                    );
+
+                    boot_params.set(BootParams {
+                        usable_vram_start: usable_vram.start,
+                        usable_vram_size: usable_vram.end - usable_vram.start,
+                    });
+
                     info
+                },
+
+                mm <- {
+                    let params = boot_params.get();
+                    GpuMm::new(devres_bar.clone(), GpuBuddyParams {
+                        base_offset: params.usable_vram_start,
+                        physical_memory_size: params.usable_vram_size,
+                        chunk_size: SZ_4K.into_safe_cast(),
+                    })?
                 },
 
                 bar: devres_bar,

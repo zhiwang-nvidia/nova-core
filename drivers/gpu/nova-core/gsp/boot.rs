@@ -383,7 +383,7 @@ impl super::Gsp {
                 Err(e) => return Err(e),
             };
 
-        let fb_layout = FbLayout::new(ctx.chipset, ctx.bar, &gsp_fw, ctx.vf_partition_count)?;
+        let mut fb_layout = FbLayout::new(ctx.chipset, ctx.bar, &gsp_fw, ctx.vf_partition_count)?;
         dev_dbg!(dev, "{:#x?}\n", fb_layout);
 
         let wpr_meta =
@@ -462,6 +462,11 @@ impl super::Gsp {
         match info.gpu_name() {
             Ok(name) => dev_info!(dev, "GPU name: {}\n", name),
             Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
+        }
+
+        // Populate usable VRAM from GSP response.
+        if let Some((base, size)) = info.usable_fb_region() {
+            fb_layout.set_usable_vram(base, size);
         }
 
         Ok((info, fb_layout))
