@@ -8,6 +8,18 @@ menuconfig FWCTL
 	  manipulating device FLASH, debugging, and other activities that don't
 	  fit neatly into an existing subsystem.
 
+config RUST_FWCTL_ABSTRACTIONS
+	bool "Rust fwctl abstractions"
+	depends on RUST
+	select FWCTL
+	help
+	  This enables the Rust abstractions for the fwctl device firmware
+	  access framework. It provides safe wrappers around struct fwctl_device
+	  and struct fwctl_uctx, allowing Rust drivers to register fwctl devices
+	  and implement their control and RPC logic in safe Rust.
+
+	  If unsure, say N.
+
 if FWCTL
 config FWCTL_MLX5
 	tristate "mlx5 ConnectX control fwctl driver"
