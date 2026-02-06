@@ -14,6 +14,10 @@ use kernel::{
         Owned,
         SGTable, //
     },
+    str::{
+        CStr,
+        CString, //
+    },
 };
 
 use crate::{
@@ -58,6 +62,10 @@ pub(crate) struct GspFirmware {
     level0: DmaObject,
     /// Size in bytes of the firmware contained in [`Self::fw`].
     pub(crate) size: usize,
+    /// Firmware file path as requested from userspace (e.g. `nvidia/gb202/gsp/gsp-570.144.bin`).
+    pub(crate) fw_path: CString,
+    /// Firmware version string extracted from the `.fwversion` ELF section.
+    pub(crate) fw_version: CString,
     /// Device-mapped GSP signatures matching the GPU's [`Chipset`].
     pub(crate) signatures: DmaObject,
     /// GSP bootloader, verifies the GSP firmware before loading and running it.
@@ -103,7 +111,7 @@ impl GspFirmware {
         ver: &'a str,
     ) -> impl PinInit<Self, Error> + 'a {
         pin_init::pin_init_scope(move || {
-            let firmware = super::request_firmware(dev, chipset, "gsp", ver)?;
+            let (fw_path, firmware) = super::request_firmware(dev, chipset, "gsp", ver)?;
 
             let fw_section = elf::elf_section(firmware.data(), ".fwimage").ok_or(EINVAL)?;
 
@@ -159,6 +167,14 @@ impl GspFirmware {
                     DmaObject::from_data(dev, &level0_data)?
                 },
                 size,
+                fw_path,
+                fw_version: {
+                    let version_str = elf::elf_section(firmware.data(), ".fwversion")
+                        .and_then(|data| CStr::from_bytes_until_nul(data).ok())
+                        .and_then(|cstr| cstr.to_str().ok())
+                        .unwrap_or("unknown");
+                    CString::try_from_fmt(fmt!("{version_str}"))?
+                },
                 signatures: {
                     let sigs_section = Self::find_gsp_sigs_section(chipset).ok_or(ENOTSUPP)?;
 
@@ -167,7 +183,7 @@ impl GspFirmware {
                         .and_then(|data| DmaObject::from_data(dev, data))?
                 },
                 bootloader: {
-                    let bl = super::request_firmware(dev, chipset, "bootloader", ver)?;
+                    let (_, bl) = super::request_firmware(dev, chipset, "bootloader", ver)?;
 
                     RiscvFirmware::new(dev, &bl)?
                 },

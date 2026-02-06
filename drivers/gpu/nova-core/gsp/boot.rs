@@ -334,6 +334,13 @@ impl super::Gsp {
 
         let gsp_fw = KBox::pin_init(GspFirmware::new(dev, chipset, FIRMWARE_VERSION), GFP_KERNEL)?;
 
+        dev_info!(
+            dev,
+            "GSP firmware: {} (internal version: {})\n",
+            gsp_fw.fw_path.to_str().unwrap_or("unknown"),
+            gsp_fw.fw_version.to_str().unwrap_or("unknown")
+        );
+
         let fb_layout = FbLayout::new(chipset, bar, &gsp_fw)?;
         dev_dbg!(dev, "{:#x?}\n", fb_layout);
 
