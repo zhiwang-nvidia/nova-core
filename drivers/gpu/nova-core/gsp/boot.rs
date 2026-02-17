@@ -346,7 +346,7 @@ impl super::Gsp {
         let dev = ctx.dev();
         let gsp_fw = KBox::pin_init(GspFirmware::new(dev, chipset, FIRMWARE_VERSION), GFP_KERNEL)?;
 
-        let fb_layout = FbLayout::new(chipset, bar, &gsp_fw)?;
+        let fb_layout = FbLayout::new(chipset, bar, &gsp_fw, ctx.vf_partition_count)?;
         dev_dbg!(dev, "{:#x?}\n", fb_layout);
 
         let wpr_meta = Coherent::<GspFwWprMeta>::zeroed(dev, GFP_KERNEL)?;

@@ -14,7 +14,7 @@ use crate::{
 pub(crate) struct Vgpu {
     pub(crate) vgpu_requested: bool,
     pub(crate) vgpu_enabled: bool,
-    pub total_vfs: u16,
+    pub(crate) total_vfs: u16,
 }
 
 impl Vgpu {

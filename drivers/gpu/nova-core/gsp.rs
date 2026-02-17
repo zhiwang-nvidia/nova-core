@@ -26,8 +26,12 @@ pub(crate) mod rm;
 mod sequencer;
 
 pub(crate) use fw::{
+    GSP_FW_HEAP_SIZE_VGPU_48VMS,
+    GSP_FW_HEAP_SIZE_VGPU_DEFAULT,
     GspFwWprMeta,
-    LibosParams, //
+    LibosParams,
+    MAX_PARTITIONS_WITH_GFID,
+    MAX_PARTITIONS_WITH_GFID_32VM, //
 };
 
 use crate::{
@@ -62,6 +66,7 @@ pub(crate) struct GspBootContext<'a> {
     pub(crate) sec2_falcon: &'a Falcon<Sec2Falcon>,
     pub(crate) fsp_falcon: Option<Falcon<FspFalcon>>,
     pub(crate) vgpu_requested: bool,
+    pub(crate) vf_partition_count: u8,
 }
 
 impl GspBootContext<'_> {
