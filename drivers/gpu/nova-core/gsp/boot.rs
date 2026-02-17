@@ -6,6 +6,7 @@ use kernel::{
     io::poll::read_poll_timeout,
     io_write,
     prelude::*,
+    sizes::SZ_256M_U64,
     time::Delta, //
 };
 
@@ -188,6 +189,49 @@ impl super::Gsp {
         }
     }
 
+    /// Load and execute the scrubber ucode via SEC2 to scrub FB memory.
+    ///
+    /// This is required when the WPR2 heap exceeds 256MB (which happens when
+    /// vGPU is enabled). Without scrubbing, GSP firmware will hang during boot.
+    fn run_scrubber(ctx: &super::GspBootContext<'_>) -> Result {
+        let dev = ctx.dev();
+        let bar = ctx.bar;
+
+        let scrubber = BooterFirmware::new(
+            dev,
+            BooterKind::Scrubber,
+            ctx.chipset,
+            FIRMWARE_VERSION,
+            ctx.sec2_falcon,
+            bar,
+        )?;
+
+        ctx.sec2_falcon.reset(bar)?;
+        ctx.sec2_falcon.load(dev, bar, &scrubber)?;
+
+        let (mbox0, mbox1) = ctx.sec2_falcon.boot(bar, None, None)?;
+        dev_dbg!(
+            dev,
+            "Scrubber SEC2 MBOX0: {:#x}, MBOX1: {:#x}\n",
+            mbox0,
+            mbox1
+        );
+
+        // Poll for scrubber completion via BSI_SECURE_SCRATCH_15.
+        read_poll_timeout(
+            || Ok(regs::NV_PGC6_BSI_SECURE_SCRATCH_15::read(bar)),
+            |val| val.scrubber_completed(),
+            Delta::from_millis(10),
+            Delta::from_secs(2),
+        )
+        .inspect_err(|_| {
+            dev_err!(dev, "Scrubber did not complete in time\n");
+        })?;
+
+        dev_dbg!(dev, "Scrubber completed successfully\n");
+        Ok(())
+    }
+
     fn run_booter(
         dev: &device::Device<device::Bound>,
         bar: &Bar0,
@@ -221,10 +265,18 @@ impl super::Gsp {
         fb_layout: &FbLayout,
         libos: &Coherent<[LibosMemoryRegionInitArgument]>,
         wpr_meta: &Coherent<GspFwWprMeta>,
+        ctx: &super::GspBootContext<'_>,
     ) -> Result {
         // Run FWSEC-FRTS to set up the WPR2 region
         let bios = Vbios::new(dev, bar)?;
         Self::run_fwsec_frts(dev, chipset, gsp_falcon, bar, &bios, fb_layout)?;
+
+        // When the WPR2 heap exceeds 256MB (e.g. when vGPU is enabled), the
+        // scrubber ucode must scrub FB memory before any other ucode images
+        // execute — without this, GSP firmware hangs during boot.
+        if fb_layout.wpr2_heap.len() > SZ_256M_U64 {
+            Self::run_scrubber(ctx)?;
+        }
 
         // Reset and boot GSP before SEC2
         gsp_falcon.reset(bar)?;
@@ -375,6 +427,7 @@ impl super::Gsp {
                 &fb_layout,
                 &self.libos,
                 &wpr_meta,
+                ctx,
             )?;
         } else {
             Self::boot_via_fsp(

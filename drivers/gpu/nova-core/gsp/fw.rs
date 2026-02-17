@@ -7,7 +7,7 @@ pub(crate) mod rm;
 // Alias to avoid repeating the version number with every use.
 use r570_144 as bindings;
 
-use core::ops::Range;
+use core::{fmt, ops::Range};
 
 use kernel::{
     device,
