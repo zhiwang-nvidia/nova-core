@@ -24,6 +24,7 @@ pub(crate) mod rm;
 
 pub(crate) use fw::{
     GspFwWprMeta,
+    GspVfInfo,
     LibosParams, //
 };
 

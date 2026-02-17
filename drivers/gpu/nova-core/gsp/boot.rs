@@ -53,7 +53,8 @@ use crate::{
             LibosMemoryRegionInitArgument,
             MsgFunction, //
         },
-        GspFwWprMeta, //
+        GspFwWprMeta,
+        GspVfInfo, //
     },
     regs,
     vbios::Vbios,
@@ -393,6 +394,12 @@ impl super::Gsp {
             this.rm_state_monitor
         ));
 
+        let vf_info = if ctx.vgpu_requested {
+            Some(GspVfInfo::new(ctx.pdev)?)
+        } else {
+            None
+        };
+
         // Architecture-specific boot path
         if arch.needs_gfw_boot() {
             Self::boot_via_sec2(
@@ -425,9 +432,9 @@ impl super::Gsp {
 
         // Send system info and registry RPCs now that GSP is active.
         this.cmdq
-            .send_command_no_wait(ctx.bar, commands::SetSystemInfo::new(ctx.pdev, ctx.chipset))?;
+            .send_command_no_wait(ctx.bar, commands::SetSystemInfo::new(ctx.pdev, ctx.chipset, vf_info.clone()))?;
         this.cmdq
-            .send_command_no_wait(ctx.bar, commands::SetRegistry::new())?;
+            .send_command_no_wait(ctx.bar, commands::SetRegistry::new(ctx.vgpu_requested)?)?;
 
         // Wait for GSP-RM to complete initialization, handling boot events inline.
         Self::wait_gsp_boot_events(
