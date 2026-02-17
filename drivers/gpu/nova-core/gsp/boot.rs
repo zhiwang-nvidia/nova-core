@@ -364,7 +364,7 @@ impl super::Gsp {
             self.cmdq
                 .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset, vf_info))?;
             self.cmdq
-                .send_command_no_wait(bar, commands::SetRegistry::new())?;
+                .send_command_no_wait(bar, commands::SetRegistry::new(ctx.vgpu_requested)?)?;
 
             Self::boot_via_sec2(
                 dev,
@@ -406,7 +406,7 @@ impl super::Gsp {
             self.cmdq
                 .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset, vf_info))?;
             self.cmdq
-                .send_command_no_wait(bar, commands::SetRegistry::new())?;
+                .send_command_no_wait(bar, commands::SetRegistry::new(ctx.vgpu_requested)?)?;
         }
 
         // SEC2-based architectures need to run the GSP sequencer
