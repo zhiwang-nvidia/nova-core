@@ -41,7 +41,10 @@ use crate::{
     gpu::Chipset,
     gsp::{
         commands,
-        fw::LibosMemoryRegionInitArgument,
+        fw::{
+            GspVfInfo,
+            LibosMemoryRegionInitArgument, //
+        },
         sequencer::{
             GspSequencer,
             GspSequencerParams, //
@@ -349,11 +352,17 @@ impl super::Gsp {
         let wpr_meta = Coherent::<GspFwWprMeta>::zeroed(dev, GFP_KERNEL)?;
         io_write!(wpr_meta, , GspFwWprMeta::new(&gsp_fw, &fb_layout));
 
+        let vf_info = if ctx.vgpu_requested {
+            Some(GspVfInfo::new(ctx.pdev)?)
+        } else {
+            None
+        };
+
         // Architecture-specific boot path
         if arch.uses_sec2_boot() {
             // SEC2 path: send commands before GSP reset/boot (original order).
             self.cmdq
-                .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset))?;
+                .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset, vf_info))?;
             self.cmdq
                 .send_command_no_wait(bar, commands::SetRegistry::new())?;
 
@@ -395,7 +404,7 @@ impl super::Gsp {
         // For FSP path, send commands after GSP becomes active.
         if !arch.uses_sec2_boot() {
             self.cmdq
-                .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset))?;
+                .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset, vf_info))?;
             self.cmdq
                 .send_command_no_wait(bar, commands::SetRegistry::new())?;
         }

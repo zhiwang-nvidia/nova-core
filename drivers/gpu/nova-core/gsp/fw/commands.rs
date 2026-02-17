@@ -15,7 +15,10 @@ use crate::{
         Architecture,
         Chipset, //
     },
-    gsp::GSP_PAGE_SIZE, //
+    gsp::{
+        fw::GspVfInfo,
+        GSP_PAGE_SIZE, //
+    },
 };
 
 use super::bindings;
@@ -33,6 +36,7 @@ impl GspSetSystemInfo {
     pub(crate) fn init<'a>(
         dev: &'a pci::Device<device::Bound>,
         chipset: Chipset,
+        vf_info: Option<GspVfInfo>,
     ) -> impl Init<Self, Error> + 'a {
         type InnerGspSystemInfo = bindings::GspSystemInfo;
         let init_inner = try_init!(InnerGspSystemInfo {
@@ -57,6 +61,12 @@ impl GspSetSystemInfo {
             bIsPrimary: 0,
             bPreserveVideoMemoryAllocations: 0,
             ..Zeroable::init_zeroed()
+        })
+        .chain(move |si| {
+            if let Some(vf) = vf_info {
+                si.gspVFInfo = vf.0;
+            }
+            Ok(())
         });
 
         try_init!(GspSetSystemInfo {

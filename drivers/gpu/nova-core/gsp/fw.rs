@@ -10,7 +10,9 @@ use r570_144 as bindings;
 use core::ops::Range;
 
 use kernel::{
+    device,
     dma::Coherent,
+    pci,
     prelude::*,
     ptr::{
         Alignable,
@@ -1309,3 +1311,39 @@ impl MessageQueueInitArguments {
         })
     }
 }
+
+/// VF information — `gspVFInfo` in `GspSetSystemInfo`.
+///
+/// Populated from the PCI SR-IOV extended capability when vGPU support
+/// is enabled.
+#[derive(Clone, Copy, Zeroable)]
+#[repr(transparent)]
+pub(crate) struct GspVfInfo(pub(crate) bindings::GSP_VF_INFO);
+
+impl GspVfInfo {
+    /// Reads SR-IOV capability data from the PCI extended configuration
+    /// space and builds the VF information required by GSP firmware.
+    pub(crate) fn new(pdev: &pci::Device<device::Bound>) -> Result<GspVfInfo> {
+        let total_vfs = pdev.sriov_get_totalvfs()?;
+
+        let cfg = pdev.config_space_extended()?;
+        let sriov = pci::ExtSriovCapability::find(&cfg)?;
+
+        Ok(GspVfInfo(bindings::GSP_VF_INFO {
+            totalVFs: u32::from(total_vfs),
+            firstVFOffset: u32::from(kernel::io_read!(sriov, .vf_offset)),
+            FirstVFBar0Address: u64::from(kernel::io_read!(sriov, .vf_bar[0]?)),
+            b64bitBar1: u8::from(sriov.vf_bar_is_64bit(1)?),
+            FirstVFBar1Address: sriov.read_vf_bar64_addr(1)?,
+            b64bitBar2: u8::from(sriov.vf_bar_is_64bit(3)?),
+            FirstVFBar2Address: sriov.read_vf_bar64_addr(3)?,
+            ..Zeroable::zeroed()
+        }))
+    }
+}
+
+// SAFETY: Padding is explicit and does not contain uninitialized data.
+unsafe impl AsBytes for GspVfInfo {}
+
+// SAFETY: This struct only contains integer types for which all bit patterns are valid.
+unsafe impl FromBytes for GspVfInfo {}
