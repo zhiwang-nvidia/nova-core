@@ -10,6 +10,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub(crate) enum NvdmType {
+    /// PRC (Product Reconfiguration Control) message.
+    Prc = 0x13,
     /// Chain of Trust boot message.
     Cot = 0x14,
     /// FSP command response.
