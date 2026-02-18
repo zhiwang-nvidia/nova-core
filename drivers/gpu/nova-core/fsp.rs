@@ -454,12 +454,13 @@ impl Fsp {
     }
 
     /// Send message to FSP and wait for response.
+    /// Returns the raw response buffer for protocol-specific parsing.
     fn send_sync_fsp<M>(
         dev: &device::Device<device::Bound>,
         bar: &crate::driver::Bar0,
         fsp_falcon: &crate::falcon::Falcon<crate::falcon::fsp::Fsp>,
         msg: &M,
-    ) -> Result
+    ) -> Result<KVec<u8>>
     where
         M: MessageToFsp,
     {
@@ -482,12 +483,13 @@ impl Fsp {
         response_buf.resize(packet_size, 0, GFP_KERNEL)?;
         fsp_falcon.recv_msg(bar, &mut response_buf, packet_size)?;
 
-        if response_buf.len() < core::mem::size_of::<FspResponse>() {
+        let min_size = core::mem::size_of::<FspResponse>();
+        if response_buf.len() < min_size {
             dev_err!(dev, "FSP response too small: {}\n", response_buf.len());
             return Err(EIO);
         }
 
-        let response = FspResponse::from_bytes(&response_buf[..]).ok_or(EIO)?;
+        let response = FspResponse::from_bytes(&response_buf[..min_size]).ok_or(EIO)?;
 
         let mctp_header: MctpHeader = response.header.mctp_header.into();
         let nvdm_header: NvdmHeader = response.header.nvdm_header.into();
@@ -532,6 +534,6 @@ impl Fsp {
             return Err(EIO);
         }
 
-        Ok(())
+        Ok(response_buf)
     }
 }
