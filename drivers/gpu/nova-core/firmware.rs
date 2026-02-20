@@ -26,7 +26,6 @@ use crate::{
     },
 };
 
-#[expect(unused)]
 pub(crate) use elf::elf_section;
 
 pub(crate) mod booter;
