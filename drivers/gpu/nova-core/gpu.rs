@@ -166,9 +166,18 @@ pub(crate) enum Architecture {
     Blackwell = 0x1b,
 }
 
-// TODO: Set the DMA mask per-architecture. Hopper and Blackwell support 52-bit
-// DMA addresses. For now, use 47-bit which is correct for Turing, Ampere, and Ada.
-const GPU_DMA_BITS: u32 = 47;
+impl Architecture {
+    /// Returns the DMA mask supported by this architecture.
+    ///
+    /// Hopper and Blackwell support 52-bit DMA addresses, while earlier architectures
+    /// (Turing, Ampere, Ada) support 47-bit DMA addresses.
+    pub(crate) const fn dma_mask(&self) -> DmaMask {
+        match self {
+            Self::Turing | Self::Ampere | Self::Ada => DmaMask::new::<47>(),
+            Self::Hopper | Self::Blackwell => DmaMask::new::<52>(),
+        }
+    }
+}
 
 impl TryFrom<u8> for Architecture {
     type Error = Error;
@@ -308,7 +317,7 @@ impl Gpu {
             // SAFETY: No concurrent DMA allocations or mappings can be made because
             // the device is still being probed and therefore isn't being used by
             // other threads of execution.
-            unsafe { pdev.dma_set_mask_and_coherent(DmaMask::new::<GPU_DMA_BITS>())? };
+            unsafe { pdev.dma_set_mask_and_coherent(spec.chipset().arch().dma_mask())? };
 
             let chipset = spec.chipset();
 
