@@ -201,6 +201,7 @@ pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
     h_client: u32,
     h_subdevice: u32,
+    bar1_pde_base: u64,
     /// First usable FB region `(base, size)` for memory allocation.
     usable_fb_region: Option<(u64, u64)>,
 }
@@ -218,6 +219,7 @@ impl MessageFromGsp for GetGspStaticInfoReply {
             gpu_name: msg.gpu_name_str(),
             h_client: msg.h_internal_client(),
             h_subdevice: msg.h_internal_subdevice(),
+            bar1_pde_base: msg.bar1_pde_base(),
             usable_fb_region: msg.first_usable_fb_region(),
         })
     }
@@ -254,6 +256,12 @@ impl GetGspStaticInfoReply {
     /// Returns the internal subdevice handle allocated by GSP-RM.
     pub(crate) fn h_subdevice(&self) -> u32 {
         self.h_subdevice
+    }
+
+    /// Returns the BAR1 Page Directory Entry base address.
+    #[expect(dead_code)]
+    pub(crate) fn bar1_pde_base(&self) -> u64 {
+        self.bar1_pde_base
     }
 
     /// Returns the usable FB region `(base, size)` for driver allocation which is
