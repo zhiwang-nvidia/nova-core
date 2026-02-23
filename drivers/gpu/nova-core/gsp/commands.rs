@@ -3,11 +3,13 @@
 use core::{
     convert::Infallible,
     ffi::FromBytesUntilNulError,
+    ops::Range,
     str::Utf8Error, //
 };
 
 use kernel::{
     device,
+    io::Io,
     pci,
     prelude::*,
     transmute::AsBytes, //
@@ -28,6 +30,7 @@ use crate::{
         },
         nvkv, //
     },
+    regs,
     sbuffer::SBufferIter,
 };
 
@@ -153,6 +156,9 @@ const GSP_GET_STATIC_INFO_MAX_RESPONSE: u32 = 8192;
 /// The reply from the GSP to the `GSP_GET_STATIC_INFO` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
+    /// Usable FB (VRAM) region for driver memory allocation.
+    #[expect(dead_code)]
+    pub(crate) usable_fb_region: Range<u64>,
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -200,5 +206,14 @@ pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: &Bar0) -> Result<GetGspStaticInfoRe
         gpu_name[..len].copy_from_slice(&name_bytes[..len]);
     }
 
-    Ok(GetGspStaticInfoReply { gpu_name })
+    // TODO: Extract usable FB region from NVKV response once the GSP firmware
+    // exposes the fbRegionInfoParams key. For now, derive from BAR0 registers.
+    let usable_fb_size = bar
+        .read(regs::NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE)
+        .usable_fb_size();
+
+    Ok(GetGspStaticInfoReply {
+        gpu_name,
+        usable_fb_region: 0..usable_fb_size,
+    })
 }

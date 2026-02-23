@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
+use core::ops::Range;
+
 use kernel::{
     device,
     pci,
@@ -15,7 +17,8 @@ use crate::{
         Architecture,
         Chipset, //
     },
-    gsp::GSP_PAGE_SIZE, //
+    gsp::GSP_PAGE_SIZE,
+    num::IntoSafeCast, //
 };
 
 use super::{
@@ -135,6 +138,46 @@ unsafe impl FromBytes for PackedRegistryTable {}
 #[repr(transparent)]
 #[derive(Zeroable)]
 pub(crate) struct GspStaticConfigInfo(r000::GspStaticConfigInfo_t);
+
+impl GspStaticConfigInfo {
+    pub(crate) fn gpu_name_str(&self) -> [u8; 64] {
+        self.0.gpuNameString
+    }
+
+    /// Returns an iterator over valid FB regions from GSP firmware data.
+    fn fb_regions(
+        &self,
+    ) -> impl Iterator<Item = &r000::NV2080_CTRL_CMD_FB_GET_FB_REGION_FB_REGION_INFO> {
+        let fb_info = &self.0.fbRegionInfoParams;
+        fb_info
+            .fbRegion
+            .iter()
+            .take(fb_info.numFBRegions.into_safe_cast())
+            .filter(|reg| reg.limit >= reg.base)
+    }
+
+    /// Extracts the first usable FB region from GSP firmware data.
+    ///
+    /// Returns the first region suitable for driver memory allocation as a [`Range<u64>`].
+    /// Usable regions are those that:
+    /// - Are not reserved for firmware internal use.
+    /// - Are not protected (hardware-enforced access restrictions).
+    /// - Support compression (can use GPU memory compression for bandwidth).
+    /// - Support ISO (isochronous memory for display requiring guaranteed bandwidth).
+    pub(crate) fn first_usable_fb_region(&self) -> Option<Range<u64>> {
+        self.fb_regions().find_map(|reg| {
+            if reg.reserved == 0
+                && reg.bProtected == 0
+                && reg.supportCompressed != 0
+                && reg.supportISO != 0
+            {
+                reg.limit.checked_add(1).map(|end| reg.base..end)
+            } else {
+                None
+            }
+        })
+    }
+}
 
 // SAFETY: Padding is explicit and will not contain uninitialized data.
 unsafe impl AsBytes for GspStaticConfigInfo {}
