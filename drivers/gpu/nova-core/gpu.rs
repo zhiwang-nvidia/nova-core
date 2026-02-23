@@ -23,8 +23,12 @@ use crate::{
     fb::SysmemFlush,
     fsp::FspCotVersion,
     gfw,
-    gsp::Gsp,
+    gsp::{
+        Gsp,
+        GspBootContext, //
+    },
     regs,
+    vgpu::Vgpu, //
 };
 
 macro_rules! define_chipset {
@@ -180,6 +184,16 @@ pub(crate) enum Architecture {
 }
 
 impl Architecture {
+    /// Whether this architecture uses SEC2 for GSP boot (vs FSP Chain of Trust).
+    pub(crate) const fn uses_sec2_boot(&self) -> bool {
+        matches!(self, Self::Turing | Self::Ampere | Self::Ada)
+    }
+
+    /// Whether this architecture supports vGPU.
+    pub(crate) const fn supports_vgpu(&self) -> bool {
+        matches!(self, Self::Ada | Self::Blackwell)
+    }
+
     /// Returns the DMA mask supported by this architecture.
     ///
     /// Hopper and Blackwell support 52-bit DMA addresses, while earlier architectures
@@ -313,7 +327,7 @@ impl fmt::Display for Spec {
 pub(crate) struct Gpu {
     spec: Spec,
     /// MMIO mapping of PCI BAR 0
-    bar: Arc<Devres<Bar0>>,
+    pub bar: Arc<Devres<Bar0>>,
     /// System memory page required for flushing all pending GPU-side memory writes done through
     /// PCIE into system memory, via sysmembar (A GPU-initiated HW memory-barrier operation).
     sysmem_flush: SysmemFlush,
@@ -323,7 +337,8 @@ pub(crate) struct Gpu {
     sec2_falcon: Falcon<Sec2Falcon>,
     /// GSP runtime data. Temporarily an empty placeholder.
     #[pin]
-    gsp: Gsp,
+    pub(crate) gsp: Gsp,
+    vgpu: Vgpu,
 }
 
 impl Gpu {
@@ -351,6 +366,8 @@ impl Gpu {
                     }
                 },
 
+                vgpu: Vgpu::new(pdev, chipset)?,
+
                 sysmem_flush: SysmemFlush::register(pdev.as_ref(), bar, chipset)?,
 
                 gsp_falcon: Falcon::new(
@@ -363,7 +380,19 @@ impl Gpu {
 
                 gsp <- Gsp::new(pdev),
 
-                _: { gsp.boot(pdev, bar, chipset, gsp_falcon, sec2_falcon)? },
+                _: {
+                    let mut ctx = GspBootContext {
+                        pdev,
+                        bar,
+                        chipset,
+                        gsp_falcon,
+                        sec2_falcon,
+                        fsp_falcon: None,
+                        vgpu_requested: vgpu.vgpu_requested,
+                    };
+                    gsp.boot(&mut ctx)?;
+                    vgpu.vgpu_enabled = ctx.vgpu_requested;
+                },
 
                 bar: devres_bar,
                 spec,
