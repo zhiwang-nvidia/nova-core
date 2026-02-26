@@ -1,82 +1,62 @@
-base: john/nova-core-blackwell-v6 (linux 7.0.0-rc1)
-https://github.com/johnhubbard/linux/tree/nova-core-blackwell-v6-with-v000-firmware
+[PATCH v2 0/6] rust: io: turn IoCapable into a functional trait
+https://lore.kernel.org/rust-for-linux/20260206-io-v2-0-71dea20a06e6@nvidia.com/
+5109f8722c99 rust: io: turn IoCapable into a functional trait
+1bc622cc08ae rust: io: mem: use non-relaxed I/O ops in examples
+144455da2db9 rust: io: provide Mmio relaxed ops through a wrapper type
+08c67d55cef8 rust: io: remove legacy relaxed accessors of Mmio
+6fdafdf44645 rust: pci: io: remove overloaded Io methods of ConfigSpace
+07c5b0f845f4 rust: io: remove overloaded Io methods of Mmio
 
-Gary's io_projection branch:
-https://github.com/nbdd0121/linux/tree/io_projection
+[PATCH v3 0/5] gpu: nova-core: gsp: fix command queue ring buffer bugs
+https://lore.kernel.org/nouveau/20260129-nova-core-cmdq1-v3-0-2ede85493a27@nvidia.com/
+27960f82b718 gpu: nova-core: gsp: fix incorrect advancing of write pointer
+e182b83fc473 gpu: nova-core: gsp: clarify comments about invariants and pointer roles
+a14aee65b641 gpu: nova-core: gsp: use empty slices instead of [0..0] ranges
+d782551a006a gpu: nova-core: gsp: fix improper handling of empty slot in cmdq
+2ac02d6b521f gpu: nova-core: gsp: fix improper indexing in driver_read_area
 
-2bdbbf9d4530 rust: io: generalize `MmioRaw` to pointer to arbitrary type
-9a6ab714f7a7 rust: dma: add generalize container for types other than slices
-2c038a699deb rust: dma: add zeroed constructor to `Coherent`
-8f1f28c5d0fa rust: io: macro_export io_define_read!() and io_define_write!()
-6d5b228777d3 rust: io: turn IoCapable into a functional trait
-dd4ea793cb90 rust: io: mem: use non-relaxed I/O ops in examples
-ce3dd23d9ab0 rust: io: provide Mmio relaxed ops through a wrapper type
-8f86309b31cc rust: io: remove legacy relaxed accessors of Mmio
-a0dc84211adb rust: pci: io: remove overloaded Io methods of ConfigSpace
-ee3959c85ea7 rust: io: remove overloaded Io methods of Mmio
-1ed650904760 rust: io: generalize `Mmio` to arbitrary type
-d8b05a990701 rust: io: use pointer types instead of address
-6e7cf3bb034c rust: io: add view type
-1556797a6aeb rust: dma: add methods to unsafely create reference from subview
-633601fe004d rust: dma: remove legacy API
-04fcf138c7c6 rust: dma: remove dma_{read,write} macro
+[PATCH v2 0/9] gpu: nova-core: gsp: add continuation record support
+https://lore.kernel.org/nouveau/20260219-cmdq-continuation-v2-0-2e8b7615536f@nvidia.com/
+d706ef15f43a gpu: nova-core: gsp: add tests for WrappingCommand
+cb51d8ec3ab3 gpu: nova-core: gsp: support large RPCs via continuation record
+07fb07467ae5 gpu: nova-core: gsp: unconditionally call variable payload handling
+1a06c2768063 gpu: nova-core: gsp: clarify invariant on command queue
+28d6007028f0 gpu: nova-core: gsp: add checking oversized commands
+c2a0085a97db gpu: nova-core: gsp: add mechanism to wait for space on command queue
+40f32bd31c08 gpu: nova-core: gsp: sort MsgFunction variants alphabetically
 
-d40c892a75f6 gpu: nova-core: convert to new dma Coherent and I/O projection API
+m2 branch:
 
-[PATCH v4 0/5] gpu: nova-core: gsp: add locking to Cmdq
-https://lore.kernel.org/nouveau/20260310-cmdq-locking-v4-0-4e5c4753c408@nvidia.com/
-eedbe57ce4fc gpu: nova-core: gsp: add `RECEIVE_TIMEOUT` constant for command queue
-4b0b9216179d gpu: nova-core: gsp: add reply/no-reply info to `CommandToGsp`
-a0875e154fb2 gpu: nova-core: gsp: make `Cmdq` a pinned type
-90443422fec7 gpu: nova-core: gsp: add mutex locking to Cmdq
-
-[PATCH 0/9] gpu: nova-core: gsp: add RM control command infrastructure
-https://lore.kernel.org/nouveau/20260227-rmcontrol-v1-0-86648e4869f9@nvidia.com/
-1c01de389da5 gpu: nova-core: gsp: add NV_STATUS error code bindings
-5fd81efb9feb gpu: nova-core: gsp: add NvStatus enum for RM control errors
-0bf36f766751 gpu: nova-core: gsp: expose GSP-RM internal client and subdevice handles
-0786a756c0ce gpu: nova-core: gsp: add RM control RPC structure binding
-4b33b90e3ee3 gpu: nova-core: gsp: add types for RM control RPCs
-af11473bed9c gpu: nova-core: generalize `flush_into_kvec` to `flush_into_vec`
-c77550a71b2e gpu: nova-core: gsp: add RM control command infrastructure
-fe89ec10c6b2 gpu: nova-core: gsp: add CE fault method buffer size bindings
-b86abd36a732 gpu: nova-core: gsp: add CeGetFaultMethodBufferSize RM control command
-
-[PATCH v8 0/7] gpu: nova-core: expose the logging buffers via debugfs
-https://lore.kernel.org/nouveau/20260310220000.1897166-1-ttabi@nvidia.com/
-416777682474 rust: device: add device name method
-ffc2c8995661 rust: uaccess: add write_dma() for copying from DMA buffers to userspace
-44bb778f140c rust: dma: implement BinaryWriter for CoherentAllocation<u8>
-e3ec72c9b496 gpu: nova-core: Replace module_pci_driver! with explicit module init
-(SKIPPED) gpu: nova-core: use pin projection in method boot()
-b9865a982c8a gpu: nova-core: create debugfs root in module init
-65d9a70a905d gpu: nova-core: create GSP-RM logging buffers debugfs entries
-
-d01eca11f555 rust: pci: expose sriov_get_totalvfs() helper
-
-[PATCH RFC v2 1/1] rust: pci: add extended capability and SR-IOV support
-https://lore.kernel.org/rust-for-linux/20260225180449.1813833-1-zhiw@nvidia.com/
-0e1340608b06 rust: pci: add extended capability and SR-IOV support
-
-[PATCH v2 0/5] gpu: nova-core: query vGPU mode value from FSP
-021f57aeb714 gpu: nova-core: use bitfield types for MCTP and NVDM headers
-6fb56fe59964 gpu: nova-core: factor out common FSP message header
-53586d59e11b gpu: nova-core: return FSP response buffer to caller
-91ba40e2cf46 gpu: nova-core: read vGPU mode from FSP via PRC protocol
-3a9ee1299b73 gpu: nova-core: add FSP and PRC protocol documentation
-
-vGPU staging M1:
-4b1ca4d37129 gpu: nova-core: introduce vgpu_support module param
-f2e78574cce3 gpu: nova-core: populate GSP_VF_INFO when vGPU is enabled
-f0b11fd99311 gpu: nova-core: set RMSetSriovMode when NVIDIA vGPU is enabled
-4782cb1ea63e gpu: nova-core: reserve a larger GSP WPR2 heap when vGPU is enabled
-8f775b0c4e6a gpu: nova-core: load the scrubber ucode when vGPU support is enabled
-
-[PATCH v3 0/1] rust: introduce abstractions for fwctl
-https://lore.kernel.org/rust-for-linux/20260217204909.211793-1-zhiw@nvidia.com/
-890c5b2e8202 rust: introduce abstractions for fwctl
-
-[PATCH 0/2] gpu: nova-core: add fwctl driver
-https://lore.kernel.org/rust-for-linux/20260305190936.398590-1-zhiw@nvidia.com/
-feed53fe3539 fwctl: use subsys_initcall for built-in configuration
-11ee305d645f gpu: nova-core: add fwctl driver for firmware control interface
+gpu: nova-core: mm: Memory management subsystem
+https://git.kernel.org/pub/scm/linux/kernel/git/jfern/linux.git nova/mm
+28f38e260b41 rust: ffi: Convert pub use to pub mod and create ffi module
+3413e841d124 rust: clist: Add support to interface with C linked lists
+94d854ca8d96 gpu: Move DRM buddy allocator one level up (part one)
+fe4c4b40cb28 gpu: Move DRM buddy allocator one level up (part two)
+758584d416a3 gpu: Fix uninitialized buddy for built-in drivers
+f003436f7877 rust: gpu: Add GPU buddy allocator bindings
+a70275050de4 gpu: nova-core: Select GPU_BUDDY for VRAM allocation
+a624959ab1dc gpu: nova-core: Kconfig: Sort select statements alphabetically
+3e36eec8dc01 gpu: nova-core: gsp: Return GspStaticInfo and FbLayout from boot()
+1e5f9cc9cbaf gpu: nova-core: gsp: Extract usable FB region from GSP
+863e6e676c24 gpu: nova-core: fb: Add usable_vram field to FbLayout
+5af927c656ba gpu: nova-core: mm: Add support to use PRAMIN windows to write to VRAM
+1c3c918ed57b docs: gpu: nova-core: Document the PRAMIN aperture mechanism
+0c09401d7c35 gpu: nova-core: mm: Add common memory management types
+2a3cd862fa46 gpu: nova-core: mm: Add TLB flush support
+b26d5c2c3a15 gpu: nova-core: mm: Add GpuMm centralized memory manager
+af653472f7e9 gpu: nova-core: mm: Use usable VRAM region for buddy allocator
+a5ddbc97ceb4 gpu: nova-core: mm: Add common types for all page table formats
+8d6d5031e205 gpu: nova-core: mm: Add MMU v2 page table types
+4d8fefc22e03 gpu: nova-core: mm: Add MMU v3 page table types
+4134998654f4 gpu: nova-core: mm: Add unified page table entry wrapper enums
+905616ea57c5 gpu: nova-core: mm: Add page table walker for MMU v2/v3
+5953b7032777 gpu: nova-core: mm: Add Virtual Memory Manager
+35624598f68d gpu: nova-core: mm: Add virtual address range tracking to VMM
+8c5d0295c95f gpu: nova-core: mm: Add multi-page mapping API to VMM
+a4eac954d592 gpu: nova-core: Add BAR1 aperture type and size constant
+85a6b6645fdf gpu: nova-core: gsp: Add BAR1 PDE base accessors
+4a1c09d317b2 gpu: nova-core: mm: Add BAR1 user interface
+f291086e0350 gpu: nova-core: mm: Add BarUser to struct Gpu and create at boot
+8a4ff72fc901 gpu: nova-core: mm: Add BAR1 memory management self-tests
+4c186966b549 gpu: nova-core: mm: Add PRAMIN aperture self-tests
