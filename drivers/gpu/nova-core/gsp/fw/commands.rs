@@ -136,6 +136,16 @@ impl GspStaticConfigInfo {
     pub(crate) fn gpu_name_str(&self) -> [u8; 64] {
         self.0.gpuNameString
     }
+
+    /// Returns the internal client handle allocated by GSP-RM.
+    pub(crate) fn h_internal_client(&self) -> u32 {
+        self.0.hInternalClient
+    }
+
+    /// Returns the internal subdevice handle allocated by GSP-RM.
+    pub(crate) fn h_internal_subdevice(&self) -> u32 {
+        self.0.hInternalSubdevice
+    }
 }
 
 // SAFETY: Padding is explicit and will not contain uninitialized data.
