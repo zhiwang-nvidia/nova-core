@@ -194,6 +194,8 @@ impl CommandToGsp for GetGspStaticInfo {
 /// The reply from the GSP to the [`GetGspInfo`] command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
+    h_client: u32,
+    h_subdevice: u32,
 }
 
 impl MessageFromGsp for GetGspStaticInfoReply {
@@ -207,6 +209,8 @@ impl MessageFromGsp for GetGspStaticInfoReply {
     ) -> Result<Self, Self::InitError> {
         Ok(GetGspStaticInfoReply {
             gpu_name: msg.gpu_name_str(),
+            h_client: msg.h_internal_client(),
+            h_subdevice: msg.h_internal_subdevice(),
         })
     }
 }
@@ -232,6 +236,18 @@ impl GetGspStaticInfoReply {
             .map_err(GpuNameError::NoNullTerminator)?
             .to_str()
             .map_err(GpuNameError::InvalidUtf8)
+    }
+
+    /// Returns the internal client handle allocated by GSP-RM.
+    #[expect(dead_code)]
+    pub(crate) fn h_client(&self) -> u32 {
+        self.h_client
+    }
+
+    /// Returns the internal subdevice handle allocated by GSP-RM.
+    #[expect(dead_code)]
+    pub(crate) fn h_subdevice(&self) -> u32 {
+        self.h_subdevice
     }
 }
 
