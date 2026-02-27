@@ -97,6 +97,407 @@ pub(super) mod gsp_mem {
 pub(crate) const GSP_MSG_QUEUE_ELEMENT_SIZE_MAX: usize =
     num::u32_as_usize(r570::GSP_MSG_QUEUE_ELEMENT_SIZE_MAX);
 
+/// Status code returned by GSP-RM RPCs.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NvStatus {
+    Ok,
+    AlreadySignalled,
+    BrokenFb,
+    BufferTooSmall,
+    BusyRetry,
+    CallbackNotScheduled,
+    CardNotPresent,
+    CycleDetected,
+    DmaInUse,
+    DmaMemNotLocked,
+    DmaMemNotUnlocked,
+    DualLinkInuse,
+    EccError,
+    FabricManagerNotPresent,
+    FatalError,
+    FeatureNotEnabled,
+    FifoBadAccess,
+    FlcnError,
+    FreqNotSupported,
+    Generic,
+    GpuDmaNotInitialized,
+    GpuInDebugMode,
+    GpuInFullchipReset,
+    GpuIsLost,
+    GpuMemoryOnliningFailure,
+    GpuNotFullPower,
+    GpuUuidNotFound,
+    HotSwitch,
+    I2cError,
+    I2cSpeedTooHigh,
+    IllegalAction,
+    InUse,
+    InflateCompressedDataFailed,
+    InsertDuplicateName,
+    InsufficientPermissions,
+    InsufficientPower,
+    InsufficientResources,
+    InsufficientZbcEntry,
+    InvalidAccessType,
+    InvalidAddress,
+    InvalidArgument,
+    InvalidBase,
+    InvalidChannel,
+    InvalidClass,
+    InvalidClient,
+    InvalidCommand,
+    InvalidData,
+    InvalidDevice,
+    InvalidDmaSpecifier,
+    InvalidEvent,
+    InvalidFlags,
+    InvalidFunction,
+    InvalidHeap,
+    InvalidIndex,
+    InvalidIrqLevel,
+    InvalidLicense,
+    InvalidLimit,
+    InvalidLockState,
+    InvalidMethod,
+    InvalidObject,
+    InvalidObjectBuffer,
+    InvalidObjectHandle,
+    InvalidObjectNew,
+    InvalidObjectOld,
+    InvalidObjectParent,
+    InvalidOffset,
+    InvalidOperation,
+    InvalidOwner,
+    InvalidParamStruct,
+    InvalidParameter,
+    InvalidPath,
+    InvalidPointer,
+    InvalidRead,
+    InvalidRegistryKey,
+    InvalidRequest,
+    InvalidState,
+    InvalidStringLength,
+    InvalidWrite,
+    InvalidXlate,
+    IrqEdgeTriggered,
+    IrqNotFiring,
+    KeyRotationInProgress,
+    LibRmVersionMismatch,
+    MaxSessionLimitReached,
+    MemoryError,
+    MemoryTrainingFailed,
+    MismatchedSlave,
+    MismatchedTarget,
+    MissingTableEntry,
+    ModuleLoadFailed,
+    MoreDataAvailable,
+    MoreProcessingRequired,
+    MultipleMemoryTypes,
+    NoFreeFifos,
+    NoIntrPending,
+    NoMemory,
+    NoSuchDomain,
+    NoValidPath,
+    NotCompatible,
+    NotReady,
+    NotSupported,
+    NvlinkClockError,
+    NvlinkConfigurationError,
+    NvlinkFabricFailure,
+    NvlinkFabricNotReady,
+    NvlinkInitError,
+    NvlinkMinionError,
+    NvlinkTrainingError,
+    ObjectNotFound,
+    ObjectTypeMismatch,
+    OperatingSystem,
+    OtherDeviceFound,
+    OutOfRange,
+    OverlappingUvmCommit,
+    PageTableNotAvail,
+    PidNotFound,
+    PmuNotReady,
+    PrivSecViolation,
+    ProtectionFault,
+    QueueTaskSlotNotAvailable,
+    RcError,
+    ReductionManagerNotAvailable,
+    RejectedVbios,
+    ResetRequired,
+    ResourceLost,
+    ResourceRetirementError,
+    RiscvError,
+    SecureBootFailed,
+    SignalPending,
+    StateInUse,
+    TestOnlyCodeNotEnabled,
+    Timeout,
+    TimeoutRetry,
+    TooManyPrimaries,
+    UvmAddressInUse,
+    Unknown(u32),
+}
+
+impl From<NvStatus> for Result {
+    fn from(status: NvStatus) -> Self {
+        match status {
+            NvStatus::Ok => Ok(()),
+
+            NvStatus::BufferTooSmall | NvStatus::MoreDataAvailable => Err(EMSGSIZE),
+
+            NvStatus::BusyRetry
+            | NvStatus::DmaInUse
+            | NvStatus::DualLinkInuse
+            | NvStatus::GpuInFullchipReset
+            | NvStatus::InUse
+            | NvStatus::KeyRotationInProgress
+            | NvStatus::NotReady
+            | NvStatus::NvlinkFabricNotReady
+            | NvStatus::PmuNotReady
+            | NvStatus::StateInUse
+            | NvStatus::UvmAddressInUse => Err(EBUSY),
+
+            NvStatus::CardNotPresent
+            | NvStatus::FabricManagerNotPresent
+            | NvStatus::InvalidDevice
+            | NvStatus::ReductionManagerNotAvailable => Err(ENODEV),
+
+            NvStatus::FeatureNotEnabled
+            | NvStatus::FreqNotSupported
+            | NvStatus::NotSupported
+            | NvStatus::TestOnlyCodeNotEnabled => Err(ENOTSUPP),
+
+            NvStatus::GpuUuidNotFound
+            | NvStatus::MissingTableEntry
+            | NvStatus::NoSuchDomain
+            | NvStatus::NoValidPath
+            | NvStatus::ObjectNotFound => Err(ENOENT),
+
+            NvStatus::I2cSpeedTooHigh
+            | NvStatus::InvalidAccessType
+            | NvStatus::InvalidArgument
+            | NvStatus::InvalidBase
+            | NvStatus::InvalidChannel
+            | NvStatus::InvalidClass
+            | NvStatus::InvalidClient
+            | NvStatus::InvalidCommand
+            | NvStatus::InvalidData
+            | NvStatus::InvalidDmaSpecifier
+            | NvStatus::InvalidEvent
+            | NvStatus::InvalidFlags
+            | NvStatus::InvalidFunction
+            | NvStatus::InvalidHeap
+            | NvStatus::InvalidIndex
+            | NvStatus::InvalidIrqLevel
+            | NvStatus::InvalidLimit
+            | NvStatus::InvalidLockState
+            | NvStatus::InvalidMethod
+            | NvStatus::InvalidObject
+            | NvStatus::InvalidObjectBuffer
+            | NvStatus::InvalidObjectHandle
+            | NvStatus::InvalidObjectNew
+            | NvStatus::InvalidObjectOld
+            | NvStatus::InvalidObjectParent
+            | NvStatus::InvalidOffset
+            | NvStatus::InvalidOperation
+            | NvStatus::InvalidOwner
+            | NvStatus::InvalidParamStruct
+            | NvStatus::InvalidParameter
+            | NvStatus::InvalidPath
+            | NvStatus::InvalidRegistryKey
+            | NvStatus::InvalidRequest
+            | NvStatus::InvalidState
+            | NvStatus::InvalidStringLength
+            | NvStatus::InvalidXlate
+            | NvStatus::LibRmVersionMismatch
+            | NvStatus::MismatchedSlave
+            | NvStatus::MismatchedTarget
+            | NvStatus::MultipleMemoryTypes
+            | NvStatus::NotCompatible
+            | NvStatus::ObjectTypeMismatch
+            | NvStatus::OverlappingUvmCommit
+            | NvStatus::RejectedVbios => Err(EINVAL),
+
+            NvStatus::IllegalAction => Err(EPERM),
+
+            NvStatus::InsertDuplicateName => Err(EEXIST),
+
+            NvStatus::InsufficientPermissions
+            | NvStatus::InvalidLicense
+            | NvStatus::PrivSecViolation => Err(EACCES),
+
+            NvStatus::InsufficientResources | NvStatus::NoMemory | NvStatus::PageTableNotAvail => {
+                Err(ENOMEM)
+            }
+
+            NvStatus::InsufficientZbcEntry
+            | NvStatus::MaxSessionLimitReached
+            | NvStatus::NoFreeFifos
+            | NvStatus::QueueTaskSlotNotAvailable
+            | NvStatus::TooManyPrimaries => Err(ENOSPC),
+
+            NvStatus::InvalidAddress | NvStatus::InvalidPointer | NvStatus::ProtectionFault => {
+                Err(EFAULT)
+            }
+
+            NvStatus::MoreProcessingRequired | NvStatus::TimeoutRetry => Err(EAGAIN),
+
+            NvStatus::OutOfRange => Err(ERANGE),
+
+            NvStatus::PidNotFound => Err(ESRCH),
+
+            NvStatus::SignalPending => Err(EINTR),
+
+            NvStatus::Timeout => Err(ETIMEDOUT),
+
+            _ => Err(EIO),
+        }
+    }
+}
+
+impl From<u32> for NvStatus {
+    fn from(value: u32) -> Self {
+        match value {
+            r570::NV_OK => Self::Ok,
+            r570::NV_ERR_ALREADY_SIGNALLED => Self::AlreadySignalled,
+            r570::NV_ERR_BROKEN_FB => Self::BrokenFb,
+            r570::NV_ERR_BUFFER_TOO_SMALL => Self::BufferTooSmall,
+            r570::NV_ERR_BUSY_RETRY => Self::BusyRetry,
+            r570::NV_ERR_CALLBACK_NOT_SCHEDULED => Self::CallbackNotScheduled,
+            r570::NV_ERR_CARD_NOT_PRESENT => Self::CardNotPresent,
+            r570::NV_ERR_CYCLE_DETECTED => Self::CycleDetected,
+            r570::NV_ERR_DMA_IN_USE => Self::DmaInUse,
+            r570::NV_ERR_DMA_MEM_NOT_LOCKED => Self::DmaMemNotLocked,
+            r570::NV_ERR_DMA_MEM_NOT_UNLOCKED => Self::DmaMemNotUnlocked,
+            r570::NV_ERR_DUAL_LINK_INUSE => Self::DualLinkInuse,
+            r570::NV_ERR_ECC_ERROR => Self::EccError,
+            r570::NV_ERR_FABRIC_MANAGER_NOT_PRESENT => Self::FabricManagerNotPresent,
+            r570::NV_ERR_FATAL_ERROR => Self::FatalError,
+            r570::NV_ERR_FEATURE_NOT_ENABLED => Self::FeatureNotEnabled,
+            r570::NV_ERR_FIFO_BAD_ACCESS => Self::FifoBadAccess,
+            r570::NV_ERR_FLCN_ERROR => Self::FlcnError,
+            r570::NV_ERR_FREQ_NOT_SUPPORTED => Self::FreqNotSupported,
+            r570::NV_ERR_GENERIC => Self::Generic,
+            r570::NV_ERR_GPU_DMA_NOT_INITIALIZED => Self::GpuDmaNotInitialized,
+            r570::NV_ERR_GPU_IN_DEBUG_MODE => Self::GpuInDebugMode,
+            r570::NV_ERR_GPU_IN_FULLCHIP_RESET => Self::GpuInFullchipReset,
+            r570::NV_ERR_GPU_IS_LOST => Self::GpuIsLost,
+            r570::NV_ERR_GPU_MEMORY_ONLINING_FAILURE => Self::GpuMemoryOnliningFailure,
+            r570::NV_ERR_GPU_NOT_FULL_POWER => Self::GpuNotFullPower,
+            r570::NV_ERR_GPU_UUID_NOT_FOUND => Self::GpuUuidNotFound,
+            r570::NV_ERR_HOT_SWITCH => Self::HotSwitch,
+            r570::NV_ERR_I2C_ERROR => Self::I2cError,
+            r570::NV_ERR_I2C_SPEED_TOO_HIGH => Self::I2cSpeedTooHigh,
+            r570::NV_ERR_ILLEGAL_ACTION => Self::IllegalAction,
+            r570::NV_ERR_IN_USE => Self::InUse,
+            r570::NV_ERR_INFLATE_COMPRESSED_DATA_FAILED => Self::InflateCompressedDataFailed,
+            r570::NV_ERR_INSERT_DUPLICATE_NAME => Self::InsertDuplicateName,
+            r570::NV_ERR_INSUFFICIENT_PERMISSIONS => Self::InsufficientPermissions,
+            r570::NV_ERR_INSUFFICIENT_POWER => Self::InsufficientPower,
+            r570::NV_ERR_INSUFFICIENT_RESOURCES => Self::InsufficientResources,
+            r570::NV_ERR_INSUFFICIENT_ZBC_ENTRY => Self::InsufficientZbcEntry,
+            r570::NV_ERR_INVALID_ACCESS_TYPE => Self::InvalidAccessType,
+            r570::NV_ERR_INVALID_ADDRESS => Self::InvalidAddress,
+            r570::NV_ERR_INVALID_ARGUMENT => Self::InvalidArgument,
+            r570::NV_ERR_INVALID_BASE => Self::InvalidBase,
+            r570::NV_ERR_INVALID_CHANNEL => Self::InvalidChannel,
+            r570::NV_ERR_INVALID_CLASS => Self::InvalidClass,
+            r570::NV_ERR_INVALID_CLIENT => Self::InvalidClient,
+            r570::NV_ERR_INVALID_COMMAND => Self::InvalidCommand,
+            r570::NV_ERR_INVALID_DATA => Self::InvalidData,
+            r570::NV_ERR_INVALID_DEVICE => Self::InvalidDevice,
+            r570::NV_ERR_INVALID_DMA_SPECIFIER => Self::InvalidDmaSpecifier,
+            r570::NV_ERR_INVALID_EVENT => Self::InvalidEvent,
+            r570::NV_ERR_INVALID_FLAGS => Self::InvalidFlags,
+            r570::NV_ERR_INVALID_FUNCTION => Self::InvalidFunction,
+            r570::NV_ERR_INVALID_HEAP => Self::InvalidHeap,
+            r570::NV_ERR_INVALID_INDEX => Self::InvalidIndex,
+            r570::NV_ERR_INVALID_IRQ_LEVEL => Self::InvalidIrqLevel,
+            r570::NV_ERR_INVALID_LICENSE => Self::InvalidLicense,
+            r570::NV_ERR_INVALID_LIMIT => Self::InvalidLimit,
+            r570::NV_ERR_INVALID_LOCK_STATE => Self::InvalidLockState,
+            r570::NV_ERR_INVALID_METHOD => Self::InvalidMethod,
+            r570::NV_ERR_INVALID_OBJECT => Self::InvalidObject,
+            r570::NV_ERR_INVALID_OBJECT_BUFFER => Self::InvalidObjectBuffer,
+            r570::NV_ERR_INVALID_OBJECT_HANDLE => Self::InvalidObjectHandle,
+            r570::NV_ERR_INVALID_OBJECT_NEW => Self::InvalidObjectNew,
+            r570::NV_ERR_INVALID_OBJECT_OLD => Self::InvalidObjectOld,
+            r570::NV_ERR_INVALID_OBJECT_PARENT => Self::InvalidObjectParent,
+            r570::NV_ERR_INVALID_OFFSET => Self::InvalidOffset,
+            r570::NV_ERR_INVALID_OPERATION => Self::InvalidOperation,
+            r570::NV_ERR_INVALID_OWNER => Self::InvalidOwner,
+            r570::NV_ERR_INVALID_PARAM_STRUCT => Self::InvalidParamStruct,
+            r570::NV_ERR_INVALID_PARAMETER => Self::InvalidParameter,
+            r570::NV_ERR_INVALID_PATH => Self::InvalidPath,
+            r570::NV_ERR_INVALID_POINTER => Self::InvalidPointer,
+            r570::NV_ERR_INVALID_READ => Self::InvalidRead,
+            r570::NV_ERR_INVALID_REGISTRY_KEY => Self::InvalidRegistryKey,
+            r570::NV_ERR_INVALID_REQUEST => Self::InvalidRequest,
+            r570::NV_ERR_INVALID_STATE => Self::InvalidState,
+            r570::NV_ERR_INVALID_STRING_LENGTH => Self::InvalidStringLength,
+            r570::NV_ERR_INVALID_WRITE => Self::InvalidWrite,
+            r570::NV_ERR_INVALID_XLATE => Self::InvalidXlate,
+            r570::NV_ERR_IRQ_EDGE_TRIGGERED => Self::IrqEdgeTriggered,
+            r570::NV_ERR_IRQ_NOT_FIRING => Self::IrqNotFiring,
+            r570::NV_ERR_KEY_ROTATION_IN_PROGRESS => Self::KeyRotationInProgress,
+            r570::NV_ERR_LIB_RM_VERSION_MISMATCH => Self::LibRmVersionMismatch,
+            r570::NV_ERR_MAX_SESSION_LIMIT_REACHED => Self::MaxSessionLimitReached,
+            r570::NV_ERR_MEMORY_ERROR => Self::MemoryError,
+            r570::NV_ERR_MEMORY_TRAINING_FAILED => Self::MemoryTrainingFailed,
+            r570::NV_ERR_MISMATCHED_SLAVE => Self::MismatchedSlave,
+            r570::NV_ERR_MISMATCHED_TARGET => Self::MismatchedTarget,
+            r570::NV_ERR_MISSING_TABLE_ENTRY => Self::MissingTableEntry,
+            r570::NV_ERR_MODULE_LOAD_FAILED => Self::ModuleLoadFailed,
+            r570::NV_ERR_MORE_DATA_AVAILABLE => Self::MoreDataAvailable,
+            r570::NV_ERR_MORE_PROCESSING_REQUIRED => Self::MoreProcessingRequired,
+            r570::NV_ERR_MULTIPLE_MEMORY_TYPES => Self::MultipleMemoryTypes,
+            r570::NV_ERR_NO_FREE_FIFOS => Self::NoFreeFifos,
+            r570::NV_ERR_NO_INTR_PENDING => Self::NoIntrPending,
+            r570::NV_ERR_NO_MEMORY => Self::NoMemory,
+            r570::NV_ERR_NO_SUCH_DOMAIN => Self::NoSuchDomain,
+            r570::NV_ERR_NO_VALID_PATH => Self::NoValidPath,
+            r570::NV_ERR_NOT_COMPATIBLE => Self::NotCompatible,
+            r570::NV_ERR_NOT_READY => Self::NotReady,
+            r570::NV_ERR_NOT_SUPPORTED => Self::NotSupported,
+            r570::NV_ERR_NVLINK_CLOCK_ERROR => Self::NvlinkClockError,
+            r570::NV_ERR_NVLINK_CONFIGURATION_ERROR => Self::NvlinkConfigurationError,
+            r570::NV_ERR_NVLINK_FABRIC_FAILURE => Self::NvlinkFabricFailure,
+            r570::NV_ERR_NVLINK_FABRIC_NOT_READY => Self::NvlinkFabricNotReady,
+            r570::NV_ERR_NVLINK_INIT_ERROR => Self::NvlinkInitError,
+            r570::NV_ERR_NVLINK_MINION_ERROR => Self::NvlinkMinionError,
+            r570::NV_ERR_NVLINK_TRAINING_ERROR => Self::NvlinkTrainingError,
+            r570::NV_ERR_OBJECT_NOT_FOUND => Self::ObjectNotFound,
+            r570::NV_ERR_OBJECT_TYPE_MISMATCH => Self::ObjectTypeMismatch,
+            r570::NV_ERR_OPERATING_SYSTEM => Self::OperatingSystem,
+            r570::NV_ERR_OTHER_DEVICE_FOUND => Self::OtherDeviceFound,
+            r570::NV_ERR_OUT_OF_RANGE => Self::OutOfRange,
+            r570::NV_ERR_OVERLAPPING_UVM_COMMIT => Self::OverlappingUvmCommit,
+            r570::NV_ERR_PAGE_TABLE_NOT_AVAIL => Self::PageTableNotAvail,
+            r570::NV_ERR_PID_NOT_FOUND => Self::PidNotFound,
+            r570::NV_ERR_PMU_NOT_READY => Self::PmuNotReady,
+            r570::NV_ERR_PRIV_SEC_VIOLATION => Self::PrivSecViolation,
+            r570::NV_ERR_PROTECTION_FAULT => Self::ProtectionFault,
+            r570::NV_ERR_QUEUE_TASK_SLOT_NOT_AVAILABLE => Self::QueueTaskSlotNotAvailable,
+            r570::NV_ERR_RC_ERROR => Self::RcError,
+            r570::NV_ERR_REDUCTION_MANAGER_NOT_AVAILABLE => Self::ReductionManagerNotAvailable,
+            r570::NV_ERR_REJECTED_VBIOS => Self::RejectedVbios,
+            r570::NV_ERR_RESET_REQUIRED => Self::ResetRequired,
+            r570::NV_ERR_RESOURCE_LOST => Self::ResourceLost,
+            r570::NV_ERR_RESOURCE_RETIREMENT_ERROR => Self::ResourceRetirementError,
+            r570::NV_ERR_RISCV_ERROR => Self::RiscvError,
+            r570::NV_ERR_SECURE_BOOT_FAILED => Self::SecureBootFailed,
+            r570::NV_ERR_SIGNAL_PENDING => Self::SignalPending,
+            r570::NV_ERR_STATE_IN_USE => Self::StateInUse,
+            r570::NV_ERR_TEST_ONLY_CODE_NOT_ENABLED => Self::TestOnlyCodeNotEnabled,
+            r570::NV_ERR_TIMEOUT => Self::Timeout,
+            r570::NV_ERR_TIMEOUT_RETRY => Self::TimeoutRetry,
+            r570::NV_ERR_TOO_MANY_PRIMARIES => Self::TooManyPrimaries,
+            r570::NV_ERR_UVM_ADDRESS_IN_USE => Self::UvmAddressInUse,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
 /// Empty type to group methods related to heap parameters for running the GSP firmware.
 enum GspFwHeapParams {}
 
