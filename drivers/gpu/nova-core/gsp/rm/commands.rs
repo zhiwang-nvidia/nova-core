@@ -2,10 +2,14 @@
 
 use core::{
     array,
-    convert::Infallible, //
+    convert::Infallible,
+    mem::size_of, //
 };
 
-use kernel::prelude::*;
+use kernel::{
+    prelude::*,
+    transmute::FromBytes, //
+};
 
 use crate::{
     driver::Bar0,
@@ -94,7 +98,6 @@ impl MessageFromGsp for RmControlReply {
 }
 
 /// Sends an RM control command, checks the reply status, and returns the raw parameter bytes.
-#[expect(dead_code)]
 fn send_rm_control(
     cmdq: &Cmdq,
     bar: &Bar0,
@@ -108,4 +111,31 @@ fn send_rm_control(
     Result::from(reply.status)?;
 
     Ok(reply.params)
+}
+
+/// Sends the `CeGetFaultMethodBufferSize` RM control command and waits for its reply.
+///
+/// Returns the CE fault method buffer size in bytes.
+#[expect(dead_code)]
+pub(crate) fn get_ce_fault_method_buffer_size(
+    cmdq: &Cmdq,
+    bar: &Bar0,
+    h_client: u32,
+    h_subdevice: u32,
+) -> Result<u32> {
+    // Stack-allocate the request; CeGetFaultMethodBufferSizeParams is small (4 bytes).
+    let req = [0u8; size_of::<CeGetFaultMethodBufferSizeParams>()];
+
+    let reply = send_rm_control(
+        cmdq,
+        bar,
+        h_client,
+        h_subdevice,
+        RmControlMsgFunction::CeGetFaultMethodBufferSize,
+        &req,
+    )?;
+
+    let params = CeGetFaultMethodBufferSizeParams::from_bytes(&reply).ok_or(EINVAL)?;
+
+    Ok(params.size())
 }
