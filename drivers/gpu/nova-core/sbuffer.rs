@@ -2,7 +2,14 @@
 
 use core::ops::Deref;
 
-use kernel::prelude::*;
+use kernel::{
+    alloc::{
+        Allocator,
+        KVec,
+        KVVec, //
+    },
+    prelude::*, //
+};
 
 /// A buffer abstraction for discontiguous byte slices.
 ///
@@ -132,6 +139,7 @@ where
 }
 
 /// Provides a way to get non-mutable slices of data to read from.
+#[allow(dead_code)] // flush_into_* are public API for future RM control etc.
 impl<'a, I> SBufferIter<I>
 where
     I: Iterator<Item = &'a [u8]>,
@@ -160,6 +168,42 @@ where
         }
 
         Ok(())
+    }
+
+    /// Read all the remaining data into a [`Vec`] with the given allocator.
+    ///
+    /// `self` will be empty after this operation.
+    #[allow(dead_code)] // Public API for callers that need a generic allocator.
+    pub(crate) fn flush_into_vec<A: Allocator>(
+        &mut self,
+        flags: kernel::alloc::Flags,
+    ) -> Result<Vec<u8, A>> {
+        let mut buf = Vec::<u8, A>::new();
+
+        if let Some(slice) = core::mem::take(&mut self.cur_slice) {
+            buf.extend_from_slice(slice, flags)?;
+        }
+        for slice in &mut self.slices {
+            buf.extend_from_slice(slice, flags)?;
+        }
+
+        Ok(buf)
+    }
+
+    /// Read all the remaining data into a [`KVec`].
+    ///
+    /// `self` will be empty after this operation.
+    #[allow(dead_code)] // Public API.
+    pub(crate) fn flush_into_kvec(&mut self, flags: kernel::alloc::Flags) -> Result<KVec<u8>> {
+        self.flush_into_vec(flags)
+    }
+
+    /// Read all the remaining data into a [`KVVec`].
+    ///
+    /// `self` will be empty after this operation.
+    #[allow(dead_code)] // Public API.
+    pub(crate) fn flush_into_kvvec(&mut self, flags: kernel::alloc::Flags) -> Result<KVVec<u8>> {
+        self.flush_into_vec(flags)
     }
 }
 
