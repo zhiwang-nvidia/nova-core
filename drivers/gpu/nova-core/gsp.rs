@@ -17,7 +17,7 @@ use kernel::{
 pub(crate) mod cmdq;
 pub(crate) mod commands;
 mod fw;
-
+pub(crate) mod rm;
 
 pub(crate) use fw::{
     GspFwWprMeta,
