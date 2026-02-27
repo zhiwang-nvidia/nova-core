@@ -2,11 +2,11 @@
 
 pub(crate) mod commands;
 mod r000_00;
-mod r570_144;
+pub(crate) mod r570_144;
+pub(crate) mod rm;
 
 use r570_144 as r570;
 use r000_00 as r000;
-
 use core::ops::Range;
 
 use kernel::{
