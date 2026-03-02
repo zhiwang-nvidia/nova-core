@@ -18,7 +18,7 @@ use kernel::{
 };
 
 use crate::{
-    driver::Bar0,
+    driver::{Bar0, Bar1},
     falcon::{
         gsp::Gsp as GspFalcon,
         sec2::Sec2 as Sec2Falcon,
@@ -362,6 +362,8 @@ pub(crate) struct Gpu {
     pub(crate) gsp: Gsp,
     /// Static GPU information from GSP.
     gsp_static_info: GetGspStaticInfoReply,
+    /// MMIO mapping of PCI BAR 1
+    pub(crate) bar1: Arc<Devres<Bar1>>,
     /// BAR1 user interface for CPU access to GPU virtual memory.
     bar_user: BarUser,
 }
@@ -370,6 +372,7 @@ impl Gpu {
     pub(crate) fn new<'a>(
         pdev: &'a pci::Device<device::Core>,
         devres_bar: Arc<Devres<Bar0>>,
+        devres_bar1: Arc<Devres<Bar1>>,
         bar: &'a Bar0,
     ) -> impl PinInit<Self, Error> + 'a {
         let boot_params: Cell<BootParams> = Cell::new(BootParams {
@@ -472,6 +475,7 @@ impl Gpu {
                 },
 
                 bar: devres_bar,
+                bar1: devres_bar1,
                 spec,
             }))
         })
@@ -499,21 +503,14 @@ impl Gpu {
 
     #[cfg(CONFIG_NOVA_MM_SELFTESTS)]
     fn run_mm_selftests(mut self: Pin<&mut Self>, pdev: &pci::Device<device::Bound>) -> Result {
-        use crate::driver::BAR1_SIZE;
-
         let mmu_version = MmuVersion::from(self.spec.chipset.arch());
 
         // PRAMIN aperture self-tests.
         crate::mm::pramin::run_self_test(pdev.as_ref(), self.bar.clone(), mmu_version)?;
 
-        // BAR1 self-tests.
-        let bar1 = Arc::pin_init(
-            pdev.iomap_region_sized::<BAR1_SIZE>(1, c"nova-core/bar1"),
-            GFP_KERNEL,
-        )?;
-        let bar1_access = bar1.access(pdev.as_ref())?;
-
+        // BAR1 self-tests using the persistent BAR1 mapping.
         let proj = self.as_mut().project();
+        let bar1_access = proj.bar1.access(pdev.as_ref())?;
         let bar1_pde_base = proj.gsp_static_info.bar1_pde_base();
         let mm = proj.mm.as_ref().get_ref();
 
