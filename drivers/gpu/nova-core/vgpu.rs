@@ -236,4 +236,49 @@ impl Vgpu {
         self.instances.remove(pos)?;
         Ok(())
     }
+
+    /// Build the engine bitmap by querying GSP via the device info table.
+    pub(crate) fn build_engine_bitmap(
+        &mut self,
+        cmdq: &Mutex<Cmdq>,
+        bar: &Bar0,
+        h_client: u32,
+        h_subdevice: u32,
+    ) -> Result {
+        let mut base_index: u32 = 0;
+
+        loop {
+            let mut buf = [0u8; size_of::<DeviceInfoTableParams>()];
+            buf[0..4].copy_from_slice(&base_index.to_ne_bytes());
+
+            let nv_status = send_rmcontrol_with_reply(
+                cmdq, bar, CMD_GET_DEVICE_INFO_TABLE, &mut buf,
+                h_client, h_subdevice,
+            )?;
+            if nv_status != 0 {
+                kernel::pr_err!("GET_DEVICE_INFO_TABLE failed: NV_STATUS={:#x}\n", nv_status);
+                return Err(EIO);
+            }
+
+            let params: &DeviceInfoTableParams = unsafe {
+                &*(buf.as_ptr() as *const DeviceInfoTableParams)
+            };
+
+            let n = (params.num_entries as usize).min(DEVICE_INFO_TABLE_MAX_ENTRIES);
+            for i in 0..n {
+                let rm_engine_type = params.entries[i].engine_data[ENGINE_INFO_TYPE_RM_ENGINE_TYPE];
+                let eid = rm_engine_type as usize;
+                if eid > 0 && eid < NV2080_GPU_MAX_ENGINES {
+                    self.engine_bitmap[eid / 64] |= 1u64 << (eid % 64);
+                }
+            }
+
+            if params.b_more == 0 {
+                break;
+            }
+            base_index += params.num_entries;
+        }
+
+        Ok(())
+    }
 }
