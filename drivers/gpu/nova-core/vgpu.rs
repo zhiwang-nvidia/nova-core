@@ -419,6 +419,64 @@ impl Vgpu {
         }
     }
 
+    /// Query the VMMU segment size from GSP via RM control.
+    fn query_vmmu_segment_size(
+        &mut self,
+        cmdq: &Cmdq,
+        bar: &Bar0,
+        h_client: u32,
+        h_subdevice: u32,
+    ) -> Result {
+        let mut params = [0u8; 8];
+        check_rmcontrol_status(
+            cmdq, bar, CMD_GET_VMMU_SEGMENT_SIZE, &mut params, h_client, h_subdevice,
+        )?;
+        self.gsp_config.vmmu_segment_size = u64::from_ne_bytes(params);
+        Ok(())
+    }
+
+    /// Initialize GSP communication buffer layout from fixed region sizes.
+    pub(crate) fn init_comm_layout(&mut self) {
+        self.comm_layout.total_size = VGPU_GSP_CTRL_REGION_SIZE
+            + VGPU_GSP_RESPONSE_REGION_SIZE
+            + VGPU_GSP_MESSAGE_REGION_SIZE
+            + VGPU_GSP_MIGRATION_REGION_SIZE
+            + VGPU_GSP_ERROR_REGION_SIZE
+            + VGPU_GSP_INIT_TASK_LOG_SIZE
+            + VGPU_GSP_VGPU_TASK_LOG_SIZE
+            + VGPU_GSP_KERNEL_LOG_SIZE;
+        self.comm_layout.init_task_log_offset = VGPU_GSP_CTRL_REGION_SIZE
+            + VGPU_GSP_RESPONSE_REGION_SIZE
+            + VGPU_GSP_MESSAGE_REGION_SIZE
+            + VGPU_GSP_MIGRATION_REGION_SIZE
+            + VGPU_GSP_ERROR_REGION_SIZE;
+        self.comm_layout.init_task_log_size = VGPU_GSP_INIT_TASK_LOG_SIZE;
+        self.comm_layout.vgpu_task_log_size = VGPU_GSP_VGPU_TASK_LOG_SIZE;
+        self.comm_layout.kernel_log_size = VGPU_GSP_KERNEL_LOG_SIZE;
+    }
+
+    /// Initialize post-boot vGPU state.
+    ///
+    /// Must be called after GSP boot completes. Queries hardware parameters,
+    /// builds the engine bitmap, and sets up allocators.
+    pub(crate) fn init_post_gsp_boot(
+        &mut self,
+        cmdq: &Cmdq,
+        bar: &Bar0,
+        h_client: u32,
+        h_subdevice: u32,
+        total_vram: u64,
+    ) -> Result {
+        self.query_vmmu_segment_size(cmdq, bar, h_client, h_subdevice)?;
+        self.gsp_config.total_fbmem_size = total_vram;
+        // TODO: query actual available CHIDs from GSP instead of hardcoding.
+        self.gsp_config.total_avail_chids = 2048;
+        self.build_engine_bitmap(cmdq, bar, h_client, h_subdevice)?;
+        self.init_comm_layout();
+        self.init_chid_allocator();
+        Ok(())
+    }
+
     /// Upload a hardcoded L40-1Q vGPU type to GSP and record it locally.
     ///
     /// Builds `NV2080_CTRL_VGPU_MGR_INTERNAL_PGPU_ADD_VGPU_TYPE_PARAMS` with a
@@ -426,7 +484,7 @@ impl Vgpu {
     /// sends it to GSP, then records the corresponding [`VgpuType`].
     pub(crate) fn upload_vgpu_type(
         &mut self,
-        cmdq: &Mutex<Cmdq>,
+        cmdq: &Cmdq,
         bar: &Bar0,
         h_client: u32,
         h_subdevice: u32,
@@ -470,7 +528,7 @@ impl Vgpu {
     pub(crate) fn create_instance(
         &mut self,
         mm: &GpuMm,
-        cmdq: &Mutex<Cmdq>,
+        cmdq: &Cmdq,
         bar: &Bar0,
         h_client: u32,
         h_subdevice: u32,
@@ -511,7 +569,7 @@ impl Vgpu {
     /// Destroy a vGPU instance: shutdown plugin, free resources, unregister.
     pub(crate) fn destroy_instance(
         &mut self,
-        cmdq: &Mutex<Cmdq>,
+        cmdq: &Cmdq,
         bar: &Bar0,
         h_client: u32,
         h_subdevice: u32,
@@ -546,7 +604,7 @@ impl Vgpu {
     /// to avoid a 6616-byte stack allocation.
     pub(crate) fn bootload_plugin(
         &self,
-        cmdq: &Mutex<Cmdq>,
+        cmdq: &Cmdq,
         bar: &Bar0,
         h_client: u32,
         h_subdevice: u32,
@@ -602,7 +660,7 @@ impl Vgpu {
     /// Send a gfid-only RM control command to GSP.
     fn send_gfid_command(
         &self,
-        cmdq: &Mutex<Cmdq>,
+        cmdq: &Cmdq,
         bar: &Bar0,
         cmd: u32,
         h_client: u32,
@@ -616,7 +674,7 @@ impl Vgpu {
     /// Shutdown the vGPU plugin task on GSP.
     pub(crate) fn shutdown_plugin(
         &self,
-        cmdq: &Mutex<Cmdq>,
+        cmdq: &Cmdq,
         bar: &Bar0,
         h_client: u32,
         h_subdevice: u32,
@@ -628,7 +686,7 @@ impl Vgpu {
     /// Cleanup the vGPU plugin task resources on GSP.
     pub(crate) fn cleanup_plugin(
         &self,
-        cmdq: &Mutex<Cmdq>,
+        cmdq: &Cmdq,
         bar: &Bar0,
         h_client: u32,
         h_subdevice: u32,
@@ -640,7 +698,7 @@ impl Vgpu {
     /// Build the engine bitmap by querying GSP via the device info table.
     pub(crate) fn build_engine_bitmap(
         &mut self,
-        cmdq: &Mutex<Cmdq>,
+        cmdq: &Cmdq,
         bar: &Bar0,
         h_client: u32,
         h_subdevice: u32,
