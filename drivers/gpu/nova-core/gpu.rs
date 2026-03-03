@@ -423,6 +423,7 @@ impl Gpu {
                         sec2_falcon,
                         fsp_falcon: None,
                         vgpu_requested: vgpu.vgpu_requested,
+                        vmmu_segment_size: 0,
                         vf_partition_count: if vgpu.vgpu_requested {
                             if vgpu.total_vfs > u16::from(MAX_PARTITIONS_WITH_GFID_32VM) {
                                 MAX_PARTITIONS_WITH_GFID
@@ -448,9 +449,24 @@ impl Gpu {
                         usable_vram.end
                     );
 
+                    let mut vram_start = usable_vram.start;
+                    let mut vram_size = usable_vram.end - usable_vram.start;
+
+                    // Align buddy base to VMMU segment size so that
+                    // power-of-2 buddy allocations produce VMMU-aligned
+                    // absolute addresses without over-allocation.
+                    let seg = ctx.vmmu_segment_size;
+                    if seg > 0 {
+                        let aligned = (vram_start + seg - 1) & !(seg - 1);
+                        vram_size -= aligned - vram_start;
+                        vram_start = aligned;
+                    }
+
+                    vgpu.gsp_config.vmmu_segment_size = seg;
+
                     boot_params.set(BootParams {
-                        usable_vram_start: usable_vram.start,
-                        usable_vram_size: usable_vram.end - usable_vram.start,
+                        usable_vram_start: vram_start,
+                        usable_vram_size: vram_size,
                         bar1_pde_base: info.bar1_pde_base(),
                     });
 
@@ -498,6 +514,51 @@ impl Gpu {
         pdev: &pci::Device<device::Bound>,
     ) -> Result {
         self.as_mut().run_mm_selftests(pdev)?;
+        Ok(())
+    }
+
+
+    /// Run mock vGPU bootload test if vGPU is enabled.
+    ///
+    /// Uploads a hardcoded L40-1Q vGPU type, initializes post-boot state,
+    /// creates a test instance, and verifies the GSP plugin writes the
+    /// bootload completion marker.
+    pub(crate) fn mock_bootload(
+        mut self: Pin<&mut Self>,
+        pdev: &pci::Device<device::Bound>,
+    ) -> Result {
+        if !self.vgpu.vgpu_enabled {
+            return Ok(());
+        }
+
+        let proj = self.as_mut().project();
+        let bar0 = proj.bar.access(pdev.as_ref())?;
+        let bar1 = proj.bar1.access(pdev.as_ref())?;
+        let gsp = proj.gsp.as_ref().get_ref();
+        let mm = proj.mm.as_ref().get_ref();
+        let total_vram = mm.buddy().size();
+
+        proj.vgpu.upload_vgpu_type(
+            &gsp.cmdq, bar0, gsp.h_client(), gsp.h_subdevice(),
+        ).inspect_err(|_| dev_err!(pdev, "failed to upload vGPU type to GSP\n"))?;
+
+        proj.vgpu.init_post_gsp_boot(
+            &gsp.cmdq, bar0, gsp.h_client(), gsp.h_subdevice(), total_vram,
+        ).inspect_err(|_| dev_err!(pdev, "vGPU post-boot init failed\n"))?;
+
+        let comm_size = proj.vgpu.comm_layout.total_size;
+
+        proj.vgpu.mock_create_instance(
+            mm, &gsp.cmdq, bar0, gsp.h_client(), gsp.h_subdevice(), pdev,
+        ).inspect_err(|_| dev_err!(pdev, "failed to create mock vGPU instance\n"))?;
+
+        let idx = proj.vgpu.instances.len() - 1;
+        let instance = &proj.vgpu.instances[idx];
+        Vgpu::wait_plugin_ready(instance, proj.bar_user, mm, bar1, comm_size)
+            .inspect_err(|_| dev_err!(pdev, "vGPU plugin bootload timed out\n"))?;
+
+        dev_info!(pdev, "vGPU plugin bootloaded successfully (magic {:#x})\n", 0x4E65_4A6Fu32);
+
         Ok(())
     }
 

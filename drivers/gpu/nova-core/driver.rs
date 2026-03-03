@@ -11,10 +11,7 @@ use kernel::{
         Vendor, //
     },
     prelude::*,
-    sizes::{
-        SZ_16M,
-        SZ_256M, //
-    },
+    sizes::SZ_16M,
     sync::{
         atomic::{
             Atomic,
@@ -38,10 +35,8 @@ pub(crate) struct NovaCore {
 }
 
 const BAR0_SIZE: usize = SZ_16M;
-pub(crate) const BAR1_SIZE: usize = SZ_256M;
-
 pub(crate) type Bar0 = pci::Bar<BAR0_SIZE>;
-pub(crate) type Bar1 = pci::Bar<BAR1_SIZE>;
+pub(crate) type Bar1 = pci::Bar;
 
 kernel::pci_device_table!(
     PCI_TABLE,
@@ -85,14 +80,18 @@ impl pci::Driver for NovaCore {
             )?;
 
             let bar1 = Arc::pin_init(
-                pdev.iomap_region_sized::<BAR1_SIZE>(1, c"nova-core/bar1"),
+                pdev.iomap_region(1, c"nova-core/bar1"),
                 GFP_KERNEL,
             )?;
 
             Ok(try_pin_init!(Self {
                 gpu <- Gpu::new(pdev, bar.clone(), bar1, bar.access(pdev.as_ref())?),
                 // Run optional GPU selftests.
-                _: { gpu.run_selftests(pdev)? },
+                _: {
+                    let mut gpu = gpu;
+                    gpu.as_mut().run_selftests(pdev)?;
+                    gpu.mock_bootload(pdev)?;
+                },
                 _reg <- auxiliary::Registration::new(
                     pdev.as_ref(),
                     c"nova-drm",

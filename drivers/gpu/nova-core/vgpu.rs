@@ -485,7 +485,6 @@ impl Vgpu {
         h_subdevice: u32,
         total_vram: u64,
     ) -> Result {
-        self.query_vmmu_segment_size(cmdq, bar, h_client, h_subdevice)?;
         self.gsp_config.total_fbmem_size = total_vram;
         // TODO: query actual available CHIDs from GSP instead of hardcoding.
         self.gsp_config.total_avail_chids = 2048;
@@ -530,6 +529,36 @@ impl Vgpu {
         )?;
 
         Ok(())
+    }
+
+    /// Create a mock vGPU instance for bootload testing.
+    ///
+    /// Uses `Gfid(1)` (VF0) and the first registered vGPU type.
+    pub(crate) fn mock_create_instance(
+        &mut self,
+        mm: &GpuMm,
+        cmdq: &Cmdq,
+        bar: &Bar0,
+        h_client: u32,
+        h_subdevice: u32,
+        pdev: &pci::Device<device::Bound>,
+    ) -> Result<usize> {
+        let dbdf = pdev.dev_id() as u32;
+
+        let instance = VgpuInstance {
+            id: 0,
+            gfid: Gfid(1),
+            dbdf: Dbdf(dbdf),
+            vgpu_type_idx: 0,
+            vm_pid: 1,
+            chid_offset: 0,
+            num_chid: 0,
+            num_plugin_channels: 0,
+            fbmem_heap: None,
+            mgmt_heap: None,
+            active: false,
+        };
+        self.create_instance(mm, cmdq, bar, h_client, h_subdevice, instance)
     }
 
     /// Upload a hardcoded L40-1Q vGPU type to GSP and record it locally.

@@ -68,6 +68,8 @@ pub(crate) struct GspBootContext<'a> {
     pub(crate) fsp_falcon: Option<Falcon<crate::falcon::fsp::Fsp>>,
     pub(crate) vgpu_requested: bool,
     pub(crate) vf_partition_count: u8,
+    /// VMMU segment size in bytes (populated by boot when vGPU is enabled).
+    pub(crate) vmmu_segment_size: u64,
 }
 
 impl GspBootContext<'_> {
@@ -286,6 +288,7 @@ impl Gsp {
     }
 
     /// Stores static info from the first GetGspInfo reply (boot path). Used by fwctl etc.
+    #[allow(dead_code)]
     pub(crate) fn set_static_info(&self, info: &commands::GetGspStaticInfoReply) {
         self.h_client.set(info.h_client());
         self.h_subdevice.set(info.h_subdevice());

@@ -174,14 +174,22 @@ pub(crate) fn alloc_vram(mm: &GpuMm, size: u64, align: u64) -> Result<VramBlock>
     })
 }
 
+// GPU virtual address decomposed into MMU v2 page table level indices.
+//
+// Bit widths match the hardware layout from `kern_gmmu_fmt_gp10x.c`:
+//   PD3 (root): [48:47] = 2 bits,  4 entries
+//   PD2:        [46:38] = 9 bits, 512 entries
+//   PD1:        [37:29] = 9 bits, 512 entries
+//   PD0 (dual): [28:21] = 8 bits, 256 entries
+//   PT:         [20:12] = 9 bits, 512 entries
 bitfield! {
     pub(crate) struct VirtualAddress(u64), "Virtual address in GPU address space" {
         11:0    offset          as u64, "Offset within 4KB page";
-        20:12   l4_index        as u64, "Level 4 index (PTE)";
-        29:21   l3_index        as u64, "Level 3 index (Dual PDE)";
-        38:30   l2_index        as u64, "Level 2 index";
-        47:39   l1_index        as u64, "Level 1 index";
-        56:48   l0_index        as u64, "Level 0 index (PDB)";
+        20:12   pt_index        as u64, "PT index (PTE, 9 bits)";
+        28:21   pd0_index       as u64, "PD0 index (Dual PDE, 8 bits)";
+        37:29   pd1_index       as u64, "PD1 index (9 bits)";
+        46:38   pd2_index       as u64, "PD2 index (9 bits)";
+        48:47   pd3_index       as u64, "PD3 index (root PDB, 2 bits)";
         63:12   frame_number    as u64 => Vfn, "Virtual frame number";
     }
 }
@@ -194,16 +202,20 @@ impl VirtualAddress {
     }
 
     /// Get the page table index for a given level (0-5).
+    ///
+    /// Level numbering matches [`PageTableLevel`]: 0=PDB, 1=L1(PD2),
+    /// 2=L2(PD1), 3=L3(PD0 dual), 4=L4(PT). L5 is v3-only and reuses
+    /// the PT index.
     pub(crate) fn level_index(&self, level: u64) -> u64 {
         match level {
-            0 => self.l0_index(),
-            1 => self.l1_index(),
-            2 => self.l2_index(),
-            3 => self.l3_index(),
-            4 => self.l4_index(),
+            0 => self.pd3_index(),
+            1 => self.pd2_index(),
+            2 => self.pd1_index(),
+            3 => self.pd0_index(),
+            4 => self.pt_index(),
 
             // L5 is only used by MMU v3 (PTE level).
-            5 => self.l4_index(),
+            5 => self.pt_index(),
             _ => 0,
         }
     }

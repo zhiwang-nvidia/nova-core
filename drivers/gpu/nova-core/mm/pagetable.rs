@@ -125,8 +125,18 @@ impl MmuVersion {
     }
 
     /// Get the number of entries per page table page for a given level.
+    ///
+    /// Most levels use 9-bit indices (512 entries), but the hardware uses
+    /// narrower fields for some levels — see `kern_gmmu_fmt_gp10x.c`.
     pub(crate) fn entries_per_page(&self, level: PageTableLevel) -> usize {
-        PAGE_SIZE / self.entry_size(level)
+        match self {
+            Self::V2 => match level {
+                PageTableLevel::Pdb => 4,   // PD3 root: bits [48:47] = 2 bits
+                PageTableLevel::L3 => 256,  // PD0 dual: bits [28:21] = 8 bits
+                _ => 512,                   // PD2, PD1, PT: 9 bits each
+            },
+            Self::V3 => PAGE_SIZE / self.entry_size(level),
+        }
     }
 
     /// Compute upper bound on page table pages needed for `num_virt_pages`.

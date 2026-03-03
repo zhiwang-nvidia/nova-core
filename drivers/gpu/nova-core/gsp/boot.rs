@@ -51,6 +51,7 @@ use crate::{
             self,
             GetGspStaticInfoReply, //
         },
+        rm::commands::send_rmcontrol_with_reply,
         fw,
         fw::{
             LibosMemoryRegionInitArgument,
@@ -458,7 +459,8 @@ impl super::Gsp {
 
         // Obtain and display basic GPU information.
         let info = commands::get_gsp_info(&*this.cmdq, ctx.bar)?;
-        self.as_ref().get_ref().set_static_info(&info);
+        this.h_client.set(info.h_client());
+        this.h_subdevice.set(info.h_subdevice());
         match info.gpu_name() {
             Ok(name) => dev_info!(dev, "GPU name: {}\n", name),
             Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
@@ -467,6 +469,18 @@ impl super::Gsp {
         // Populate usable VRAM from GSP response.
         if let Some((base, size)) = info.usable_fb_region() {
             fb_layout.set_usable_vram(base, size);
+        }
+
+        // Query VMMU segment size for vGPU FB alignment.
+        if ctx.vgpu_requested {
+            let mut vmmu_params = [0u8; 8];
+            let nv_status = send_rmcontrol_with_reply(
+                &*this.cmdq, bar, 0x2080_017e, &mut vmmu_params,
+                info.h_client(), info.h_subdevice(),
+            )?;
+            if nv_status == 0 {
+                ctx.vmmu_segment_size = u64::from_ne_bytes(vmmu_params);
+            }
         }
 
         Ok((info, fb_layout))
