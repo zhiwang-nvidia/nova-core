@@ -61,14 +61,14 @@ impl GspRmControl {
     pub(crate) fn new(
         h_client: u32,
         h_object: u32,
-        cmd: RmControlMsgFunction,
+        cmd: impl Into<u32>,
         params_size: u32,
     ) -> Self {
         Self {
             inner: r000::rpc_gsp_rm_control_v03_00 {
                 hClient: h_client,
                 hObject: h_object,
-                cmd: u32::from(cmd),
+                cmd: cmd.into(),
                 status: 0,
                 paramsSize: params_size,
                 rmapiRpcFlags: 0,
