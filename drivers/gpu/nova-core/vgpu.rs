@@ -64,6 +64,11 @@ const CMD_PGPU_ADD_VGPU_TYPE: u32 = 0x2080_4003;
 /// NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_CLEANUP_GSP_VGPU_PLUGIN_TASK
 const CMD_VGPU_CLEANUP: u32 = 0x2080_4008;
 
+/// Prebuilt NVA081_CTRL_VGPU_INFO for L40-1Q (type 871).
+const L40_1Q_VGPU_INFO: &[u8] = include_bytes!("l40_1q.bin");
+const NVA081_CTRL_VGPU_INFO_SIZE: usize = 5224;
+const NVA081_MAX_VGPU_TYPES_PER_PGPU: usize = 64;
+
 const VGPU_GSP_CTRL_REGION_SIZE: u64 = 4096;
 const VGPU_GSP_RESPONSE_REGION_SIZE: u64 = 4096;
 const VGPU_GSP_MESSAGE_REGION_SIZE: u64 = 4096;
@@ -412,6 +417,53 @@ impl Vgpu {
         if count > 0 {
             self.chid_alloc.free(offset, count);
         }
+    }
+
+    /// Upload a hardcoded L40-1Q vGPU type to GSP and record it locally.
+    ///
+    /// Builds `NV2080_CTRL_VGPU_MGR_INTERNAL_PGPU_ADD_VGPU_TYPE_PARAMS` with a
+    /// single `NVA081_CTRL_VGPU_INFO` entry from the embedded L40-1Q binary dump,
+    /// sends it to GSP, then records the corresponding [`VgpuType`].
+    pub(crate) fn upload_vgpu_type(
+        &mut self,
+        cmdq: &Mutex<Cmdq>,
+        bar: &Bar0,
+        h_client: u32,
+        h_subdevice: u32,
+    ) -> Result {
+        let params_size = 8 + NVA081_MAX_VGPU_TYPES_PER_PGPU * NVA081_CTRL_VGPU_INFO_SIZE;
+        let mut params = KVVec::from_elem(0u8, params_size, GFP_KERNEL)?;
+        let p = params.as_mut_slice();
+
+        p[0] = 1; // discardVgpuTypes
+        p[4..8].copy_from_slice(&1u32.to_ne_bytes()); // vgpuInfoCount = 1
+        p[8..8 + NVA081_CTRL_VGPU_INFO_SIZE].copy_from_slice(L40_1Q_VGPU_INFO);
+
+        check_rmcontrol_status(
+            cmdq, bar, CMD_PGPU_ADD_VGPU_TYPE, p, h_client, h_subdevice,
+        )?;
+
+        let mut name = [0u8; VGPU_TYPE_NAME_MAX];
+        let src = b"NVIDIA L40-1Q";
+        name[..src.len()].copy_from_slice(src);
+
+        self.vgpu_types.push(
+            VgpuType {
+                vgpu_type_id: 871,
+                name,
+                vdev_id: 0x26b5_176f,
+                pdev_id: 0x26b5,
+                fb_length: 0x4000_0000,
+                gsp_heap_size: 0x200_0000,
+                bar1_length: 0x100,
+                max_instance: 32,
+                ecc_supported: 1,
+                fb_reservation: 0,
+            },
+            GFP_KERNEL,
+        )?;
+
+        Ok(())
     }
 
     /// Create a vGPU instance: allocate resources, bootload the plugin, register.
