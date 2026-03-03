@@ -15,7 +15,7 @@ use crate::{
         cmdq::Cmdq,
         rm::commands::send_rmcontrol_with_reply,
     },
-    mm::VramBlock,
+    mm::{self, GpuMm, VramBlock},
     module_parameters,
 };
 
@@ -64,6 +64,52 @@ const CMD_PGPU_ADD_VGPU_TYPE: u32 = 0x2080_4003;
 /// NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_CLEANUP_GSP_VGPU_PLUGIN_TASK
 const CMD_VGPU_CLEANUP: u32 = 0x2080_4008;
 
+const VGPU_GSP_CTRL_REGION_SIZE: u64 = 4096;
+const VGPU_GSP_RESPONSE_REGION_SIZE: u64 = 4096;
+const VGPU_GSP_MESSAGE_REGION_SIZE: u64 = 4096;
+const VGPU_GSP_MIGRATION_REGION_SIZE: u64 = 2 * 1024 * 1024;
+const VGPU_GSP_ERROR_REGION_SIZE: u64 = 4096;
+const VGPU_GSP_INIT_TASK_LOG_SIZE: u64 = 128 * 1024;
+const VGPU_GSP_VGPU_TASK_LOG_SIZE: u64 = 256 * 1024;
+const VGPU_GSP_KERNEL_LOG_SIZE: u64 = 64 * 1024;
+
+/// Maximum VMMU segments for guest FB.
+const NV2080_CTRL_MAX_VMMU_SEGMENTS: usize = 384;
+
+/// Bootload parameters for the GSP vGPU plugin task.
+#[repr(C)]
+struct BootloadParams {
+    dbdf: u32,
+    gfid: u32,
+    vgpu_type: u32,
+    vm_pid: u32,
+    swizz_id: u32,
+    num_channels: u32,
+    num_plugin_channels: u32,
+    chid_offset: [u32; NV2080_GPU_MAX_ENGINES],
+    b_disable_default_smc_exec_part_restore: u8,
+    _pad1: [u8; 3],
+    num_guest_fb_segments: u32,
+    _pad2: [u8; 4],
+    guest_fb_phys_addr_list: [u64; NV2080_CTRL_MAX_VMMU_SEGMENTS],
+    guest_fb_length_list: [u64; NV2080_CTRL_MAX_VMMU_SEGMENTS],
+    plugin_heap_memory_phys_addr: u64,
+    plugin_heap_memory_length: u64,
+    ctrl_buff_offset: u64,
+    init_task_log_buff_offset: u64,
+    init_task_log_buff_size: u64,
+    vgpu_task_log_buff_offset: u64,
+    vgpu_task_log_buff_size: u64,
+    kernel_log_buff_offset: u64,
+    kernel_log_buff_size: u64,
+    mig_rm_heap_memory_phys_addr: u64,
+    mig_rm_heap_memory_length: u64,
+    b_device_profiling_enabled: u8,
+    _pad3: [u8; 7],
+}
+
+const _: () = assert!(size_of::<BootloadParams>() == 6616);
+
 /// Maximum number of NV2080 engine types (NV2080_ENGINE_TYPE_LAST).
 pub(crate) const NV2080_GPU_MAX_ENGINES: usize = 0x54;
 
@@ -97,8 +143,6 @@ struct DeviceInfoTableParams {
     entries: [DeviceInfoEntry; DEVICE_INFO_TABLE_MAX_ENTRIES],
 }
 
-// -- vGPU type and instance data structures -----------------------------------
-
 const VGPU_TYPE_NAME_MAX: usize = 32;
 
 /// Configuration of a virtual GPU profile (e.g. L40-1Q).
@@ -107,22 +151,15 @@ pub(crate) struct VgpuType {
     pub(crate) name: [u8; VGPU_TYPE_NAME_MAX],
     pub(crate) vdev_id: u64,
     pub(crate) pdev_id: u64,
-    /// Guest framebuffer size in bytes.
     pub(crate) fb_length: u64,
-    /// GSP plugin heap size in bytes.
     pub(crate) gsp_heap_size: u64,
-    /// BAR1 aperture length in megabytes.
     pub(crate) bar1_length: u64,
-    /// Maximum concurrent instances.
     pub(crate) max_instance: u32,
     pub(crate) ecc_supported: u32,
-    /// Framebuffer reservation in bytes.
     pub(crate) fb_reservation: u64,
 }
 
 /// Per-instance state for a running vGPU.
-///
-/// Resources attached via [`Option<VramBlock>`] are freed automatically on drop.
 pub(crate) struct VgpuInstance {
     pub(crate) id: i32,
     pub(crate) gfid: Gfid,
@@ -311,6 +348,37 @@ impl Vgpu {
     }
 
 
+    /// Allocate VMMU-aligned guest framebuffer memory.
+    fn alloc_guest_fb(&self, mm: &GpuMm, vgpu_type: &VgpuType) -> Result<VramBlock> {
+        let fb_size = self.compute_fb_size(vgpu_type)?;
+        mm::alloc_vram(mm, fb_size, self.gsp_config.vmmu_segment_size.max(4096))
+    }
+
+    /// Allocate the management heap for GSP plugin communication buffers.
+    fn alloc_plugin_heap(mm: &GpuMm, vgpu_type: &VgpuType) -> Result<VramBlock> {
+        mm::alloc_vram(mm, vgpu_type.gsp_heap_size, 4096)
+    }
+
+    /// Compute the FB memory size to allocate, accounting for ECC overhead.
+    fn compute_fb_size(&self, vgpu_type: &VgpuType) -> Result<u64> {
+        if !self.gsp_config.ecc_enabled {
+            return Ok(vgpu_type.fb_length);
+        }
+        if vgpu_type.ecc_supported == 0 {
+            return Err(ENODEV);
+        }
+        let seg = self.gsp_config.vmmu_segment_size;
+        if seg == 0 {
+            return Err(EINVAL);
+        }
+        let aligned_total = (self.gsp_config.total_fbmem_size + seg - 1) / seg * seg;
+        let per_instance = aligned_total / vgpu_type.max_instance as u64
+            - vgpu_type.fb_reservation
+            - vgpu_type.gsp_heap_size;
+        let fb_length = vgpu_type.fb_length.min(per_instance);
+        Ok(fb_length / seg * seg)
+    }
+
     /// Initialize the channel ID allocator with the total available count.
     pub(crate) fn init_chid_allocator(&mut self) {
         self.chid_alloc.init(self.gsp_config.total_avail_chids);
@@ -344,6 +412,104 @@ impl Vgpu {
         if count > 0 {
             self.chid_alloc.free(offset, count);
         }
+    }
+
+    /// Bootload the vGPU plugin task on GSP.
+    ///
+    /// Builds an RM-ABI-compatible [`BootloadParams`] and sends it to GSP.
+    /// The params struct is heap-allocated and cast from a zeroed byte buffer
+    /// to avoid a 6616-byte stack allocation.
+    pub(crate) fn bootload_plugin(
+        &self,
+        cmdq: &Mutex<Cmdq>,
+        bar: &Bar0,
+        h_client: u32,
+        h_subdevice: u32,
+        instance: &VgpuInstance,
+    ) -> Result {
+        let vgpu_type = self.vgpu_types.get(instance.vgpu_type_idx).ok_or(EINVAL)?;
+        let fbmem = instance.fbmem_heap.as_ref().ok_or(EINVAL)?;
+        let mgmt = instance.mgmt_heap.as_ref().ok_or(EINVAL)?;
+
+        let mut buf = KVVec::from_elem(0u8, size_of::<BootloadParams>(), GFP_KERNEL)?;
+        // SAFETY: `buf` is exactly `size_of::<BootloadParams>()` bytes, heap-allocated
+        // (at least 8-byte aligned), and zero-initialized.
+        let params: &mut BootloadParams = unsafe {
+            &mut *(buf.as_mut_ptr() as *mut BootloadParams)
+        };
+
+        params.dbdf = instance.dbdf.0;
+        params.gfid = instance.gfid.0;
+        params.vgpu_type = vgpu_type.vgpu_type_id;
+        params.vm_pid = instance.vm_pid;
+        params.num_channels = instance.num_chid;
+        params.num_plugin_channels = instance.num_plugin_channels;
+
+        for i in 0..NV2080_GPU_MAX_ENGINES {
+            if self.engine_bitmap[i / 64] & (1u64 << (i % 64)) != 0 {
+                params.chid_offset[i] = instance.chid_offset;
+            }
+        }
+
+        params.num_guest_fb_segments = 1;
+        params.guest_fb_phys_addr_list[0] = fbmem.addr();
+        params.guest_fb_length_list[0] = fbmem.size();
+
+        params.plugin_heap_memory_phys_addr = mgmt.addr();
+        params.plugin_heap_memory_length = mgmt.size();
+
+        let vgpu_log_off =
+            self.comm_layout.init_task_log_offset + self.comm_layout.init_task_log_size;
+        let kernel_log_off = vgpu_log_off + self.comm_layout.vgpu_task_log_size;
+
+        params.init_task_log_buff_offset = mgmt.addr() + self.comm_layout.init_task_log_offset;
+        params.init_task_log_buff_size = self.comm_layout.init_task_log_size;
+        params.vgpu_task_log_buff_offset = mgmt.addr() + vgpu_log_off;
+        params.vgpu_task_log_buff_size = self.comm_layout.vgpu_task_log_size;
+        params.kernel_log_buff_offset = mgmt.addr() + kernel_log_off;
+        params.kernel_log_buff_size = self.comm_layout.kernel_log_size;
+
+        check_rmcontrol_status(
+            cmdq, bar, CMD_VGPU_BOOTLOAD, buf.as_mut_slice(), h_client, h_subdevice,
+        )
+    }
+
+    /// Send a gfid-only RM control command to GSP.
+    fn send_gfid_command(
+        &self,
+        cmdq: &Mutex<Cmdq>,
+        bar: &Bar0,
+        cmd: u32,
+        h_client: u32,
+        h_subdevice: u32,
+        gfid: u32,
+    ) -> Result {
+        let mut params = gfid.to_ne_bytes();
+        check_rmcontrol_status(cmdq, bar, cmd, &mut params, h_client, h_subdevice)
+    }
+
+    /// Shutdown the vGPU plugin task on GSP.
+    pub(crate) fn shutdown_plugin(
+        &self,
+        cmdq: &Mutex<Cmdq>,
+        bar: &Bar0,
+        h_client: u32,
+        h_subdevice: u32,
+        gfid: u32,
+    ) -> Result {
+        self.send_gfid_command(cmdq, bar, CMD_VGPU_SHUTDOWN, h_client, h_subdevice, gfid)
+    }
+
+    /// Cleanup the vGPU plugin task resources on GSP.
+    pub(crate) fn cleanup_plugin(
+        &self,
+        cmdq: &Mutex<Cmdq>,
+        bar: &Bar0,
+        h_client: u32,
+        h_subdevice: u32,
+        gfid: u32,
+    ) -> Result {
+        self.send_gfid_command(cmdq, bar, CMD_VGPU_CLEANUP, h_client, h_subdevice, gfid)
     }
 
     /// Build the engine bitmap by querying GSP via the device info table.
