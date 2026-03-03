@@ -414,6 +414,79 @@ impl Vgpu {
         }
     }
 
+    /// Create a vGPU instance: allocate resources, bootload the plugin, register.
+    pub(crate) fn create_instance(
+        &mut self,
+        mm: &GpuMm,
+        cmdq: &Mutex<Cmdq>,
+        bar: &Bar0,
+        h_client: u32,
+        h_subdevice: u32,
+        mut instance: VgpuInstance,
+    ) -> Result<usize> {
+        let vgpu_type_idx = instance.vgpu_type_idx;
+        self.setup_chids(&mut instance)?;
+
+        let vgpu_type = self.vgpu_types.get(vgpu_type_idx).ok_or(EINVAL)?;
+
+        let fbmem = match self.alloc_guest_fb(mm, vgpu_type) {
+            Ok(b) => b,
+            Err(e) => {
+                self.release_chids(&mut instance);
+                return Err(e);
+            }
+        };
+        let mgmt = match Self::alloc_plugin_heap(mm, vgpu_type) {
+            Ok(b) => b,
+            Err(e) => {
+                self.release_chids(&mut instance);
+                return Err(e);
+            }
+        };
+
+        instance.fbmem_heap = Some(fbmem);
+        instance.mgmt_heap = Some(mgmt);
+
+        if let Err(e) = self.bootload_plugin(cmdq, bar, h_client, h_subdevice, &instance) {
+            self.release_chids(&mut instance);
+            return Err(e);
+        }
+
+        instance.active = true;
+        self.register_instance(instance)
+    }
+
+    /// Destroy a vGPU instance: shutdown plugin, free resources, unregister.
+    pub(crate) fn destroy_instance(
+        &mut self,
+        cmdq: &Mutex<Cmdq>,
+        bar: &Bar0,
+        h_client: u32,
+        h_subdevice: u32,
+        vf_id: i32,
+    ) -> Result {
+        let pos = self
+            .instances
+            .iter()
+            .position(|inst| inst.id == vf_id)
+            .ok_or(ENODEV)?;
+
+        let instance = &self.instances[pos];
+        if instance.active {
+            let gfid = instance.gfid.0;
+            if let Err(e) = self.shutdown_plugin(cmdq, bar, h_client, h_subdevice, gfid) {
+                kernel::pr_warn!("vgpu: shutdown failed for gfid {}: {:?}\n", gfid, e);
+            }
+            if let Err(e) = self.cleanup_plugin(cmdq, bar, h_client, h_subdevice, gfid) {
+                kernel::pr_warn!("vgpu: cleanup failed for gfid {}: {:?}\n", gfid, e);
+            }
+        }
+
+        let instance = self.instances.remove(pos)?;
+        self.release_chids_by_value(instance.chid_offset, instance.num_chid);
+        Ok(())
+    }
+
     /// Bootload the vGPU plugin task on GSP.
     ///
     /// Builds an RM-ABI-compatible [`BootloadParams`] and sends it to GSP.
