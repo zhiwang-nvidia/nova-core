@@ -4,11 +4,13 @@ mod boot;
 
 use kernel::{
     device,
+    devres::Devres,
     dma::{
         CoherentAllocation,
         DmaAddress, //
     },
     dma_write,
+    fwctl,
     pci,
     prelude::*,
     transmute::AsBytes, //
@@ -21,15 +23,19 @@ pub(crate) mod rm;
 mod sequencer;
 
 pub(crate) use fw::{
+    rm::RmControlMsgFunction,
     GspFwWprMeta,
     LibosParams, //
 };
 
 use crate::{
-    gsp::cmdq::Cmdq,
-    gsp::fw::{
-        GspArgumentsPadded,
-        LibosMemoryRegionInitArgument, //
+    fwctl::NovaCoreFwCtl,
+    gsp::{
+        cmdq::Cmdq,
+        fw::{
+            GspArgumentsPadded,
+            LibosMemoryRegionInitArgument, //
+        },
     },
     num,
 };
@@ -117,6 +123,12 @@ pub(crate) struct Gsp {
     pub(crate) cmdq: Cmdq,
     /// RM arguments.
     rmargs: CoherentAllocation<GspArgumentsPadded>,
+    /// Cached RM internal client handle from GSP static info.
+    pub(crate) h_client: u32,
+    /// Cached RM internal subdevice handle from GSP static info.
+    pub(crate) h_subdevice: u32,
+    /// fwctl registration for userspace RM control.
+    fwctl: Pin<KBox<Devres<fwctl::Registration<NovaCoreFwCtl>>>>,
 }
 
 impl Gsp {
@@ -124,6 +136,8 @@ impl Gsp {
     pub(crate) fn new(pdev: &pci::Device<device::Bound>) -> impl PinInit<Self, Error> + '_ {
         pin_init::pin_init_scope(move || {
             let dev = pdev.as_ref();
+
+            let fwctl_dev = fwctl::Device::<NovaCoreFwCtl>::new(pdev.as_ref(), Ok(()))?;
 
             Ok(try_pin_init!(Self {
                 libos: CoherentAllocation::<LibosMemoryRegionInitArgument>::alloc_coherent(
@@ -140,6 +154,9 @@ impl Gsp {
                     1,
                     GFP_KERNEL | __GFP_ZERO,
                 )?,
+                h_client: 0,
+                h_subdevice: 0,
+                fwctl: KBox::pin_init(fwctl::Registration::new(pdev.as_ref(), &fwctl_dev), GFP_KERNEL)?,
                 _: {
                     // Initialise the logging structures. The OpenRM equivalents are in:
                     // _kgspInitLibosLoggingStructures (allocates memory for buffers)

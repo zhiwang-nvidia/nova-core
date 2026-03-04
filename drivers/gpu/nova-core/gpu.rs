@@ -241,7 +241,7 @@ impl fmt::Display for Spec {
 pub(crate) struct Gpu {
     spec: Spec,
     /// MMIO mapping of PCI BAR 0
-    bar: Arc<Devres<Bar0>>,
+    pub(crate) bar: Arc<Devres<Bar0>>,
     /// System memory page required for flushing all pending GPU-side memory writes done through
     /// PCIE into system memory, via sysmembar (A GPU-initiated HW memory-barrier operation).
     sysmem_flush: SysmemFlush,
@@ -251,7 +251,7 @@ pub(crate) struct Gpu {
     sec2_falcon: Falcon<Sec2Falcon>,
     /// GSP runtime data. Temporarily an empty placeholder.
     #[pin]
-    gsp: Gsp,
+    pub(crate) gsp: Gsp,
 }
 
 impl Gpu {

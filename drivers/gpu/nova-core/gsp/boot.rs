@@ -128,7 +128,7 @@ impl super::Gsp {
     ///
     /// Upon return, the GSP is up and running, and its runtime object given as return value.
     pub(crate) fn boot(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         pdev: &pci::Device<device::Bound>,
         bar: &Bar0,
         chipset: Chipset,
@@ -221,6 +221,10 @@ impl super::Gsp {
 
         // Obtain and display basic GPU information.
         let info = commands::get_gsp_info(&self.cmdq, bar)?;
+        // SAFETY: h_client and h_subdevice are not structurally pinned.
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+        this.h_client = info.h_client();
+        this.h_subdevice = info.h_subdevice();
         match info.gpu_name() {
             Ok(name) => dev_info!(pdev, "GPU name: {}\n", name),
             Err(e) => dev_warn!(pdev, "GPU name unavailable: {:?}\n", e),

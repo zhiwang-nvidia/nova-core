@@ -19,6 +19,8 @@ use super::{
 pub(crate) enum RmControlMsgFunction {
     /// Get the CE fault method buffer size.
     CeGetFaultMethodBufferSize = bindings::NV2080_CTRL_CMD_CE_GET_FAULT_METHOD_BUFFER_SIZE,
+    /// Upload vGPU type definitions to GSP.
+    VgpuMgrInternalPgpuAddVgpuType = bindings::NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_PGPU_ADD_VGPU_TYPE,
 }
 
 impl TryFrom<u32> for RmControlMsgFunction {
@@ -28,6 +30,9 @@ impl TryFrom<u32> for RmControlMsgFunction {
         match value {
             bindings::NV2080_CTRL_CMD_CE_GET_FAULT_METHOD_BUFFER_SIZE => {
                 Ok(Self::CeGetFaultMethodBufferSize)
+            }
+            bindings::NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_PGPU_ADD_VGPU_TYPE => {
+                Ok(Self::VgpuMgrInternalPgpuAddVgpuType)
             }
             _ => Err(EINVAL),
         }

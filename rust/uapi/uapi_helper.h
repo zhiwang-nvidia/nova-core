@@ -10,6 +10,7 @@
 #include <uapi/drm/drm.h>
 #include <uapi/drm/nova_drm.h>
 #include <uapi/drm/panthor_drm.h>
+#include <uapi/fwctl/nova-core.h>
 #include <uapi/linux/android/binder.h>
 #include <uapi/linux/mdio.h>
 #include <uapi/linux/mii.h>
