@@ -159,6 +159,9 @@ pub(crate) struct GetGspStaticInfoReply {
     /// Usable FB (VRAM) region for driver memory allocation.
     #[expect(dead_code)]
     pub(crate) usable_fb_region: Range<u64>,
+    /// End of VRAM.
+    #[expect(dead_code)]
+    pub(crate) total_fb_end: u64,
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -215,5 +218,6 @@ pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: &Bar0) -> Result<GetGspStaticInfoRe
     Ok(GetGspStaticInfoReply {
         gpu_name,
         usable_fb_region: 0..usable_fb_size,
+        total_fb_end: usable_fb_size,
     })
 }
