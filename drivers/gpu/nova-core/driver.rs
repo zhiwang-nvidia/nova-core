@@ -6,6 +6,7 @@ use kernel::{
         Bound,
         Core, //
     },
+    fwctl,
     io::resource,
     pci,
     pci::{
@@ -23,6 +24,10 @@ use kernel::{
 };
 
 use crate::{
+    fwctl::{
+        NovaCoreFwCtl,
+        NovaCoreFwCtlData, //
+    },
     gpu,
     gpu::{
         Gpu,
@@ -41,6 +46,8 @@ static AUXILIARY_ID_COUNTER: Atomic<u32> = Atomic::new(0);
 
 #[pin_data]
 pub(crate) struct NovaCore<'bound> {
+    /// Firmware-control registration.
+    _fwctl: fwctl::Registration<'bound, NovaCoreFwCtl>,
     #[cfg(CONFIG_PCI_IOV)]
     #[allow(clippy::type_complexity)]
     #[pin]
@@ -173,6 +180,26 @@ impl pci::Driver for NovaCoreDriver {
                     crate::MODULE_NAME,
                     (),
                 )?,
+                _fwctl: {
+                    // SAFETY: `gpu` is fully initialized at its pinned address in this
+                    // `NovaCore`. `_fwctl` is declared before `gpu`, so unregistration drains
+                    // all callbacks before the GPU's command queue and IRQ are dropped.
+                    // It is initialized last, so initializer cleanup also unregisters it
+                    // before dropping the GPU.
+                    let gpu = unsafe { &*core::ptr::addr_of!((*this.as_ptr()).gpu) };
+                    let fwctl_dev = fwctl::Device::<NovaCoreFwCtl>::new(pdev.as_ref())?;
+
+                    // SAFETY: `fwctl_dev` is newly allocated and unregistered, with `pdev` as
+                    // its parent. The registration is stored in this private field and never
+                    // leaked. Its data borrows the pinned GPU's command queue described above.
+                    unsafe {
+                        fwctl::Registration::new(
+                            pdev.as_ref(),
+                            &fwctl_dev,
+                            NovaCoreFwCtlData::new(gpu.cmdq()),
+                        )?
+                    }
+                },
             }))
         })
     }
