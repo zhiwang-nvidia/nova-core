@@ -4,6 +4,7 @@ use kernel::{
     auxiliary,
     device::Bound,
     device::Core,
+    fwctl,
     io::resource,
     pci,
     pci::{
@@ -21,6 +22,10 @@ use kernel::{
 };
 
 use crate::{
+    fwctl::{
+        NovaCoreFwCtl,
+        NovaCoreFwCtlData, //
+    },
     gpu::Gpu,
     irq::gsp::GspIrq, //
 };
@@ -30,17 +35,20 @@ static AUXILIARY_ID_COUNTER: Atomic<u32> = Atomic::new(0);
 
 #[pin_data]
 pub(crate) struct NovaCore<'bound> {
+    #[allow(clippy::type_complexity)]
+    _reg: auxiliary::Registration<'bound, ForLt!(())>,
+    // Declared before the IRQ and GPU so fwctl is unregistered and all callbacks have drained
+    // while interrupt-driven command-queue service is still live.
+    _fwctl: fwctl::Registration<'bound, NovaCoreFwCtl>,
     /// GSP event interrupt registration.
     ///
-    /// Declared first so it is dropped first: `free_irq` runs (waiting out any in-flight handler)
+    /// Declared before the GPU and BAR so `free_irq` runs (waiting out any in-flight handler)
     /// before the GSP is unloaded (`gpu`) or the BAR mapping is released (`bar`).
     #[pin]
     _gsp_irq: GspIrq<'bound>,
     #[pin]
     pub(crate) gpu: Gpu<'bound>,
     bar: pci::Bar<'bound, BAR0_SIZE>,
-    #[allow(clippy::type_complexity)]
-    _reg: auxiliary::Registration<'bound, ForLt!(())>,
 }
 
 pub(crate) struct NovaCoreDriver;
@@ -114,7 +122,7 @@ impl pci::Driver for NovaCoreDriver {
             // whose handler is freed before it returns, and the permanent GSP handler below.
             let vector = crate::irq::alloc_vector(pdev)?;
 
-            Ok(try_pin_init!(NovaCore {
+            Ok(try_pin_init!(&this in NovaCore {
                 bar: pdev.iomap_region_sized::<BAR0_SIZE>(0, c"nova-core/bar0")?,
                 // TODO: Use `&bar` self-referential pin-init syntax once available.
                 //
@@ -125,8 +133,8 @@ impl pci::Driver for NovaCoreDriver {
                 // Register the permanent GSP SWGEN0 handler before enabling the interrupt.
                 //
                 // SAFETY: `bar` is initialized before this expression is evaluated, lives at a
-                // pinned stable address, and is dropped after `_gsp_irq` (declared first, so
-                // dropped first), so the handler's borrow stays valid for its whole lifetime.
+                // pinned stable address, and is dropped after `_gsp_irq` (declared before the GPU
+                // and BAR), so the handler's borrow stays valid for its whole lifetime.
                 // `_gsp_irq` is stored in `NovaCore`, whose `Drop` runs `free_irq`, so the
                 // registration is never leaked.
                 _gsp_irq <- unsafe {
@@ -145,6 +153,27 @@ impl pci::Driver for NovaCoreDriver {
                     let bar = unsafe { &*core::ptr::from_ref(bar) };
                     crate::irq::gsp::enable(bar, gpu.chipset());
                     gpu.cmdq().drain(bar)?;
+                },
+                _fwctl: {
+                    // SAFETY: `gpu` was initialized above in this pinned `NovaCore`. The fwctl
+                    // registration is declared before `_gsp_irq` and `gpu`, so its Drop
+                    // implementation unregisters the device and drains callbacks before IRQ
+                    // teardown or command-queue release. The same ordering also holds during
+                    // initializer cleanup.
+                    let gpu = unsafe { &*core::ptr::addr_of!((*this.as_ptr()).gpu) };
+                    let fwctl_dev = fwctl::Device::<NovaCoreFwCtl>::new(pdev.as_ref())?;
+
+                    // SAFETY: `fwctl_dev` is newly allocated and unregistered. The returned
+                    // registration is stored in `NovaCore` and cannot outlive the bound parent
+                    // device. Its registration data borrows pinned BAR0 and owns a shared
+                    // command-queue handle obtained from the pinned `gpu` above.
+                    unsafe {
+                        fwctl::Registration::new(
+                            pdev.as_ref(),
+                            &fwctl_dev,
+                            NovaCoreFwCtlData::new(gpu.bar0(), gpu.cmdq()),
+                        )?
+                    }
                 },
                 _reg: auxiliary::Registration::new(
                     pdev.as_ref(),

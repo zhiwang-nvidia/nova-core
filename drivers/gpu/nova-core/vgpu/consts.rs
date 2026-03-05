@@ -2,6 +2,11 @@
 
 /// Development OpenRM GMC command identifiers used by vGPU management.
 pub(crate) mod gmc {
+    pub(crate) const VGPU_MGMT_ADD_TYPE: u32 = 0x0002_0001;
+    pub(crate) const VGPU_MGMT_QUERY_SUPPORTED: u32 = 0x0002_0002;
+    pub(crate) const VGPU_MGMT_QUERY_CREATABLE: u32 = 0x0002_0003;
+    pub(crate) const VGPU_MGMT_ASSIGN_TYPE: u32 = 0x0002_0004;
+    pub(crate) const VGPU_MGMT_DEASSIGN_TYPE: u32 = 0x0002_0005;
     pub(crate) const VGPU_MGMT_QUERY_PROPERTIES: u32 = 0x0002_0006;
     pub(crate) const VGPU_MGMT_QUERY_ASSIGNED_VF: u32 = 0x0002_0007;
     pub(crate) const BOOTLOAD: u32 = 0x0002_0020;
