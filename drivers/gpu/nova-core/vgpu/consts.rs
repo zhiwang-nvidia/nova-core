@@ -5,6 +5,15 @@
 pub(crate) mod gmc {
     use crate::gsp::vgpu_bindings as bindings;
 
+    pub(crate) const VGPU_MGMT_ADD_TYPE: u32 = bindings::GMCAPI_COMMANDS_GMCAPI_CMD_ADD_VGPU_TYPE;
+    pub(crate) const VGPU_MGMT_QUERY_SUPPORTED: u32 =
+        bindings::GMCAPI_COMMANDS_GMCAPI_CMD_QUERY_SUPPORTED_VGPU_TYPES;
+    pub(crate) const VGPU_MGMT_QUERY_CREATABLE: u32 =
+        bindings::GMCAPI_COMMANDS_GMCAPI_CMD_QUERY_CREATABLE_VGPU_TYPES;
+    pub(crate) const VGPU_MGMT_ASSIGN_TYPE: u32 =
+        bindings::GMCAPI_COMMANDS_GMCAPI_CMD_ASSIGN_VGPU_TYPE;
+    pub(crate) const VGPU_MGMT_DEASSIGN_TYPE: u32 =
+        bindings::GMCAPI_COMMANDS_GMCAPI_CMD_DEASSIGN_VGPU_TYPE;
     pub(crate) const VGPU_MGMT_QUERY_PROPERTIES: u32 =
         bindings::GMCAPI_COMMANDS_GMCAPI_CMD_QUERY_VGPU_PROPERTIES;
     pub(crate) const VGPU_MGMT_QUERY_ASSIGNED_VF: u32 =
