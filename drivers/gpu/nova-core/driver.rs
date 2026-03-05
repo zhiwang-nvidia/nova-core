@@ -7,6 +7,7 @@ use kernel::{
         Bound,
         Core, //
     },
+    fwctl,
     io::resource,
     pci,
     pci::{
@@ -27,6 +28,10 @@ use kernel::{
 };
 
 use crate::{
+    fwctl::{
+        NovaCoreFwCtl,
+        NovaCoreFwCtlData, //
+    },
     gpu::Gpu,
     irq::{
         gsp::GspIrq,
@@ -41,10 +46,14 @@ static AUXILIARY_ID_COUNTER: Atomic<u32> = Atomic::new(0);
 pub(crate) struct NovaCore<'bound> {
     /// Auxiliary DRM-device registration.
     ///
-    /// Declared first so consumers are unregistered before the interrupt and GPU resources are
-    /// torn down.
+    /// Declared first so consumers are unregistered before fwctl, interrupt, and GPU resources.
     #[allow(clippy::type_complexity)]
     _reg: auxiliary::Registration<'bound, ForLt!(())>,
+    /// Firmware-control registration.
+    ///
+    /// Declared before the IRQ and GPU so unregistration drains all callbacks while
+    /// interrupt-driven command-queue service is still live.
+    _fwctl: fwctl::Registration<'bound, NovaCoreFwCtl>,
     /// GSP event interrupt registration.
     ///
     /// Declared before the GPU and BAR resources so `free_irq` runs (waiting out any in-flight
@@ -131,7 +140,7 @@ impl pci::Driver for NovaCoreDriver {
             pdev.enable_device_mem()?;
             pdev.set_master();
 
-            Ok(try_pin_init!(NovaCore {
+            Ok(try_pin_init!(&this in NovaCore {
                 vectors: crate::irq::alloc_vectors(pdev, crate::irq::gsp::GSP_SUBTREE)?,
                 // SAFETY: `vectors` is initialized above, lives at a pinned stable address, and
                 // is dropped after all fields that use `vectors_ref` (struct field drop order).
@@ -159,7 +168,7 @@ impl pci::Driver for NovaCoreDriver {
                 // Register the permanent GSP SWGEN0 handler before enabling the interrupt.
                 //
                 // SAFETY: `bar` and `vectors` are initialized and pinned (see above). `_gsp_irq`
-                // is declared before `vectors` in the struct, so it is dropped first, ensuring
+                // is declared before `vectors` in the struct, so it is dropped earlier, ensuring
                 // `free_irq` runs before the vectors are freed. The registration is stored in
                 // `NovaCore` and never leaked.
                 _gsp_irq <- unsafe {
@@ -182,6 +191,27 @@ impl pci::Driver for NovaCoreDriver {
                 // Run optional GPU selftests.
                 #[cfg(CONFIG_NOVA_CORE_SELFTESTS)]
                 _: { gpu.run_selftests(pdev) },
+                _fwctl: {
+                    // SAFETY: `gpu` was initialized above in this pinned `NovaCore`. The fwctl
+                    // registration is declared before `_gsp_irq` and `gpu`, so its Drop
+                    // implementation unregisters the device and drains callbacks before IRQ
+                    // teardown or command-queue release. The same ordering also holds during
+                    // initializer cleanup.
+                    let gpu = unsafe { &*core::ptr::addr_of!((*this.as_ptr()).gpu) };
+                    let fwctl_dev = fwctl::Device::<NovaCoreFwCtl>::new(pdev.as_ref())?;
+
+                    // SAFETY: `fwctl_dev` is newly allocated and unregistered. The returned
+                    // registration is stored in `NovaCore` and cannot outlive the bound parent
+                    // device. Its registration data borrows pinned BAR0 and owns a shared
+                    // command-queue handle obtained from the pinned `gpu` above.
+                    unsafe {
+                        fwctl::Registration::new(
+                            pdev.as_ref(),
+                            &fwctl_dev,
+                            NovaCoreFwCtlData::new(gpu.bar0(), gpu.cmdq()),
+                        )?
+                    }
+                },
                 _reg: auxiliary::Registration::new(
                     pdev.as_ref(),
                     c"nova-drm",
