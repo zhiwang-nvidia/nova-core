@@ -27,6 +27,7 @@ pub(crate) mod booter;
 pub(crate) mod fsp;
 pub(crate) mod fwsec;
 pub(crate) mod gsp;
+pub(crate) mod radix3;
 pub(crate) mod riscv;
 pub(crate) mod tlv;
 
