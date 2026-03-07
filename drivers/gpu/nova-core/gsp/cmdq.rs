@@ -607,6 +607,17 @@ impl Cmdq {
     {
         self.inner.lock().receive_msg(timeout)
     }
+
+    /// Receive the next message from GSP and dispatch it through a handler.
+    ///
+    /// See [`CmdqInner::receive_and_dispatch`] for details.
+    pub(crate) fn receive_and_dispatch<R>(
+        &self,
+        timeout: Delta,
+        handler: impl FnOnce(MsgFunction, &[u8], &[u8]) -> R,
+    ) -> Result<R> {
+        self.inner.lock().receive_and_dispatch(timeout, handler)
+    }
 }
 
 /// Inner mutex protected state of [`Cmdq`].
@@ -854,5 +865,31 @@ impl CmdqInner {
         )?);
 
         result
+    }
+
+    /// Receive the next message from GSP and dispatch it through a handler.
+    ///
+    /// The handler receives the [`MsgFunction`] and the raw payload slices (two slices because
+    /// the circular buffer may wrap). The message is consumed from the queue after the handler
+    /// returns, regardless of the handler's result.
+    ///
+    /// This is the dispatch-based counterpart to [`CmdqInner::receive_msg`]. Where `receive_msg`
+    /// expects a specific message type, this method lets the caller handle multiple event types
+    /// in a single receive loop (e.g. waiting for `INIT_DONE` while handling `LOAD_EXEC` events).
+    fn receive_and_dispatch<R>(
+        &mut self,
+        timeout: Delta,
+        handler: impl FnOnce(MsgFunction, &[u8], &[u8]) -> R,
+    ) -> Result<R> {
+        let message = self.wait_for_msg(timeout)?;
+        let function = message.header.function().map_err(|_| EINVAL)?;
+
+        let result = handler(function, message.contents.0, message.contents.1);
+
+        self.gsp_mem.advance_cpu_read_ptr(u32::try_from(
+            message.header.length().div_ceil(GSP_PAGE_SIZE),
+        )?);
+
+        Ok(result)
     }
 }
