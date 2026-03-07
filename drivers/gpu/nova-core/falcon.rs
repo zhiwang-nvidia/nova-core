@@ -133,7 +133,7 @@ pub(crate) enum FalconMem {
     /// Secure Instruction Memory.
     ImemSecure,
     /// Non-Secure Instruction Memory.
-    #[expect(unused)]
+    #[expect(dead_code)]
     ImemNonSecure,
     /// Data Memory.
     Dmem,
@@ -608,6 +608,87 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
         Ok(())
     }
 
+    /// Perform a raw DMA transfer from a physical address to falcon IMEM or DMEM.
+    ///
+    /// Used by the GSP boot event handlers where the firmware provides the source
+    /// address directly (in GPU physical address space, routed through the FBIF
+    /// aperture). The caller must configure the FBIF TRANSCFG register
+    /// corresponding to `ctx_dma` before calling this method.
+    #[expect(dead_code)]
+    pub(crate) fn raw_dma_transfer(
+        &self,
+        ctx_dma: u8,
+        src_addr: u64,
+        target_mem: FalconMem,
+        src_offset: u32,
+        dst_offset: u32,
+        len: u32,
+    ) -> Result {
+        const DMA_LEN: u32 = 256;
+        const NUM_CTXDMA_SLOTS: u8 = 8;
+
+        if ctx_dma >= NUM_CTXDMA_SLOTS {
+            dev_err!(self.dev, "raw DMA: ctx_dma {} out of range\n", ctx_dma);
+            return Err(EINVAL);
+        }
+
+        if src_addr % u64::from(DMA_LEN) > 0 {
+            dev_err!(
+                self.dev,
+                "raw DMA: source address {:#x} not 256B-aligned\n",
+                src_addr
+            );
+            return Err(EINVAL);
+        }
+
+        if src_addr > DmaMask::new::<49>().value() {
+            dev_err!(
+                self.dev,
+                "raw DMA: address {:#x} exceeds 49 bits\n",
+                src_addr
+            );
+            return Err(ERANGE);
+        }
+
+        let num_transfers = len.div_ceil(DMA_LEN);
+
+        self.bar.write(
+            WithBase::of::<E>(),
+            regs::NV_PFALCON_FALCON_DMATRFBASE::zeroed().with_base((src_addr >> 8) as u32),
+        );
+        self.bar.write(
+            WithBase::of::<E>(),
+            regs::NV_PFALCON_FALCON_DMATRFBASE1::zeroed().try_with_base(src_addr >> 40)?,
+        );
+
+        let cmd = regs::NV_PFALCON_FALCON_DMATRFCMD::zeroed()
+            .with_size(DmaTrfCmdSize::Size256B)
+            .try_with_ctxdma(u32::from(ctx_dma))?
+            .with_falcon_mem(target_mem);
+
+        for pos in (0..num_transfers).map(|i| i * DMA_LEN) {
+            self.bar.write(
+                WithBase::of::<E>(),
+                regs::NV_PFALCON_FALCON_DMATRFMOFFS::zeroed().try_with_offs(dst_offset + pos)?,
+            );
+            self.bar.write(
+                WithBase::of::<E>(),
+                regs::NV_PFALCON_FALCON_DMATRFFBOFFS::zeroed().with_offs(src_offset + pos),
+            );
+
+            self.bar.write(WithBase::of::<E>(), cmd);
+
+            read_poll_timeout(
+                || Ok(self.bar.read(regs::NV_PFALCON_FALCON_DMATRFCMD::of::<E>())),
+                |r| r.idle(),
+                Delta::ZERO,
+                Delta::from_secs(2),
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Perform a DMA load into `IMEM` and `DMEM` of `fw`, and prepare the falcon to run it.
     fn dma_load<F: FalconFirmware<Target = E> + FalconDmaLoadable>(&self, fw: &F) -> Result {
         // DMA object with firmware content as the source of the DMA engine.
@@ -656,6 +737,25 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
         read_poll_timeout(
             || Ok(self.bar.read(regs::NV_PFALCON_FALCON_CPUCTL::of::<E>())),
             |r| r.halted(),
+            Delta::ZERO,
+            Delta::from_secs(2),
+        )?;
+
+        Ok(())
+    }
+
+    /// Wait until the GSP processor has suspended.
+    ///
+    /// For RISC-V GSP (libos3), the processor signals suspension by setting
+    /// bit 31 (`0x80000000`) in `MAILBOX0`. This is different from classic Falcon
+    /// which uses `CPUCTL.halted`.
+    #[expect(dead_code)]
+    pub(crate) fn wait_for_processor_suspend(&self) -> Result<()> {
+        const INTERRUPT_PROCESSOR_SUSPENDED: u32 = 0x80000000;
+
+        read_poll_timeout(
+            || Ok(self.read_mailbox0()),
+            |val| (*val & INTERRUPT_PROCESSOR_SUSPENDED) != 0,
             Delta::ZERO,
             Delta::from_secs(2),
         )?;
