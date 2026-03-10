@@ -6,12 +6,14 @@
 
 use crate::{
     bindings,
+    debugfs,
     device,
     device::{Bound, Core},
     error::{
         to_result,
         Result, //
     },
+    fs::file,
     io::{
         Io,
         IoCapable, //
@@ -22,7 +24,8 @@ use crate::{
     transmute::{
         AsBytes,
         FromBytes, //
-    }, //
+    },
+    uaccess::UserSliceWriter, //
 };
 use core::ptr::NonNull;
 
@@ -634,6 +637,37 @@ impl<T: ?Sized + AsBytes + FromBytes + KnownSize> Io for Coherent<T> {
     #[inline]
     fn as_ptr(&self) -> *mut Self::Type {
         self.as_mut_ptr()
+    }
+}
+
+// SAFETY: Sharing `&Coherent` across threads is safe if `T` is `Sync`, because all
+// methods that access the buffer contents are `unsafe`, and callers are responsible for
+// ensuring no data races occur.
+unsafe impl<T: AsBytes + FromBytes + KnownSize + Sync + ?Sized> Sync for Coherent<T> {}
+
+impl debugfs::BinaryWriter for Coherent<[u8]> {
+    fn write_to_slice(
+        &self,
+        writer: &mut UserSliceWriter,
+        offset: &mut file::Offset,
+    ) -> Result<usize> {
+        if offset.is_negative() {
+            return Err(EINVAL);
+        }
+
+        let offset_val: usize = (*offset).try_into().map_err(|_| EINVAL)?;
+        let len = self.size();
+
+        if offset_val >= len {
+            return Ok(0);
+        }
+
+        let count = (len - offset_val).min(writer.len());
+
+        writer.write_dma(self, offset_val, count)?;
+
+        *offset += count as i64;
+        Ok(count)
     }
 }
 
