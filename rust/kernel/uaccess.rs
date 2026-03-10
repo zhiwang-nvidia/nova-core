@@ -523,7 +523,7 @@ impl UserSliceWriter {
         offset: usize,
         count: usize,
     ) -> Result {
-        let len = alloc.size();
+        let len = alloc.len();
         if offset.checked_add(count).ok_or(EOVERFLOW)? > len {
             return Err(ERANGE);
         }
@@ -532,7 +532,7 @@ impl UserSliceWriter {
             return Err(ERANGE);
         }
 
-        // SAFETY: `start_ptr()` returns a valid pointer to a memory region of `size()` bytes,
+        // SAFETY: `as_ptr()` returns a valid pointer to a memory region of `len()` bytes,
         // as guaranteed by the `Coherent` invariants. The check above ensures
         // `offset + count <= len`.
         let src_ptr = unsafe { (alloc.as_ptr() as *const u8).add(offset) };

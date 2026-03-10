@@ -656,7 +656,7 @@ impl debugfs::BinaryWriter for Coherent<[u8]> {
         }
 
         let offset_val: usize = (*offset).try_into().map_err(|_| EINVAL)?;
-        let len = self.size();
+        let len = self.len();
 
         if offset_val >= len {
             return Ok(0);

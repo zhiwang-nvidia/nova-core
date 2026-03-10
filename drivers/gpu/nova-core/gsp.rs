@@ -3,6 +3,7 @@
 mod boot;
 
 use kernel::{
+    c_str,
     device,
     dma::{
         Coherent,
@@ -13,6 +14,8 @@ use kernel::{
     prelude::*,
     transmute::AsBytes, //
 };
+
+use kernel::debugfs;
 
 pub(crate) mod cmdq;
 pub(crate) mod commands;
@@ -114,7 +117,6 @@ impl LogBuffer {
 ///
 /// r000+ firmware expects log buffers for all LIBOS3 tasks. Each buffer is
 /// registered as a libos memory region entry, identified by its id8 name.
-#[expect(dead_code)]
 struct LogBuffers {
     /// Init task log buffer (LOGINIT, 64KB).
     loginit: LogBuffer,
@@ -135,8 +137,9 @@ struct LogBuffers {
 pub(crate) struct Gsp {
     /// Libos arguments.
     pub(crate) libos: Coherent<[LibosMemoryRegionInitArgument]>,
-    /// Log buffers for all LIBOS3 tasks.
-    logs: LogBuffers,
+    /// Log buffers, optionally exposed via debugfs.
+    #[pin]
+    logs: debugfs::Scope<LogBuffers>,
     /// Command queue.
     #[pin]
     pub(crate) cmdq: Cmdq,
@@ -199,13 +202,33 @@ impl Gsp {
                     ));
                     io_write!(libos, [6]?, LibosMemoryRegionInitArgument::new("RMARGS", &rmargs));
                 },
-                logs: LogBuffers {
-                    loginit,
-                    logintr,
-                    logrm,
-                    logmnoc,
-                    logroot,
-                    logrmon,
+                logs <- {
+                    let log_buffers = LogBuffers {
+                        loginit,
+                        logintr,
+                        logrm,
+                        logmnoc,
+                        logroot,
+                        logrmon,
+                    };
+
+                    #[allow(static_mut_refs)]
+                    // SAFETY: `DEBUGFS_ROOT` is created before driver registration and cleared
+                    // after driver unregistration, so no probe() can race with its modification.
+                    // PANIC: `DEBUGFS_ROOT` cannot be `None` here. It is set before driver
+                    // registration and cleared after driver unregistration, so it is always
+                    // `Some` for the entire lifetime that probe() can be called.
+                    let log_parent: &debugfs::Dir = unsafe { crate::DEBUGFS_ROOT.as_ref() }
+                        .expect("DEBUGFS_ROOT not initialized");
+
+                    log_parent.scope(log_buffers, dev.name(), |logs, dir| {
+                        dir.read_binary_file(c_str!("loginit"), &logs.loginit.0);
+                        dir.read_binary_file(c_str!("logintr"), &logs.logintr.0);
+                        dir.read_binary_file(c_str!("logrm"), &logs.logrm.0);
+                        dir.read_binary_file(c_str!("logmnoc"), &logs.logmnoc.0);
+                        dir.read_binary_file(c_str!("logroot"), &logs.logroot.0);
+                        dir.read_binary_file(c_str!("logrmon"), &logs.logrmon.0);
+                    })
                 },
             }))
         })
