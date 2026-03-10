@@ -18,8 +18,12 @@ use kernel::{
     },
     io::poll::read_poll_timeout,
     io_write,
+    new_mutex,
     prelude::*,
-    sync::aref::ARef,
+    sync::{
+        aref::ARef,
+        Mutex, //
+    },
     time::Delta,
     transmute::{
         AsBytes,
@@ -462,12 +466,8 @@ struct GspMessage<'a> {
 /// area.
 #[pin_data]
 pub(crate) struct Cmdq {
-    /// Device this command queue belongs to.
-    dev: ARef<device::Device>,
-    /// Current command sequence number.
-    seq: u32,
-    /// Memory area shared with the GSP for communicating commands and messages.
-    gsp_mem: DmaGspMem,
+    #[pin]
+    inner: Mutex<CmdqInner>,
 }
 
 impl Cmdq {
@@ -487,19 +487,67 @@ impl Cmdq {
     /// Number of page table entries for the GSP shared region.
     pub(crate) const NUM_PTES: usize = size_of::<GspMem>() >> GSP_PAGE_SHIFT;
 
-    /// Timeout for waiting for space on the command queue.
-    const ALLOCATE_TIMEOUT: Delta = Delta::from_secs(1);
-
     /// Default timeout for receiving a message from the GSP.
     pub(super) const RECEIVE_TIMEOUT: Delta = Delta::from_secs(5);
 
     /// Creates a new command queue for `dev`.
     pub(crate) fn new(dev: &device::Device<device::Bound>) -> impl PinInit<Self, Error> + '_ {
         try_pin_init!(Self {
-            gsp_mem: DmaGspMem::new(dev)?,
-            dev: dev.into(),
-            seq: 0,
+            inner <- new_mutex!(CmdqInner {
+                dev: dev.into(),
+                gsp_mem: DmaGspMem::new(dev)?,
+                seq: 0,
+            }),
         })
+    }
+
+    /// Sends `command` to the GSP and waits for the reply.
+    pub(crate) fn send_command<M>(&self, bar: &Bar0, command: M) -> Result<M::Reply>
+    where
+        M: CommandToGsp,
+        M::Reply: MessageFromGsp,
+        Error: From<M::InitError>,
+        Error: From<<M::Reply as MessageFromGsp>::InitError>,
+    {
+        let mut inner = self.inner.lock();
+        inner.send_command(bar, command)?;
+
+        loop {
+            match inner.receive_msg::<M::Reply>(Self::RECEIVE_TIMEOUT) {
+                Ok(reply) => break Ok(reply),
+                Err(ERANGE) => continue,
+                Err(e) => break Err(e),
+            }
+        }
+    }
+
+    /// Sends `command` to the GSP without waiting for a reply.
+    pub(crate) fn send_command_no_wait<M>(&self, bar: &Bar0, command: M) -> Result
+    where
+        M: CommandToGsp<Reply = NoReply>,
+        Error: From<M::InitError>,
+    {
+        self.inner.lock().send_command(bar, command)
+    }
+
+    /// Receives a message from the GSP.
+    pub(crate) fn receive_msg<M: MessageFromGsp>(&self, timeout: Delta) -> Result<M>
+    where
+        Error: From<M::InitError>,
+    {
+        self.inner.lock().receive_msg(timeout)
+    }
+
+    /// Returns the DMA handle of the command queue's shared memory region.
+    pub(crate) fn dma_handle(&self) -> DmaAddress {
+        self.inner.lock().gsp_mem.0.dma_handle()
+    }
+
+    /// Notifies the GSP that we have updated the command queue pointers.
+    fn notify_gsp(bar: &Bar0) {
+        regs::NV_PGSP_QUEUE_HEAD::default()
+            .set_address(0)
+            .write(bar);
     }
 
     /// Computes the checksum for the message pointed to by `it`.
@@ -514,13 +562,21 @@ impl Cmdq {
 
         ((sum64 >> 32) as u32) ^ (sum64 as u32)
     }
+}
 
-    /// Notifies the GSP that we have updated the command queue pointers.
-    fn notify_gsp(bar: &Bar0) {
-        regs::NV_PGSP_QUEUE_HEAD::default()
-            .set_address(0)
-            .write(bar);
-    }
+/// Inner state of the command queue, protected by a mutex.
+struct CmdqInner {
+    /// Device this command queue belongs to.
+    dev: ARef<device::Device>,
+    /// Current command sequence number.
+    seq: u32,
+    /// Memory area shared with the GSP for communicating commands and messages.
+    gsp_mem: DmaGspMem,
+}
+
+impl CmdqInner {
+    /// Timeout for waiting for space on the command queue.
+    const ALLOCATE_TIMEOUT: Delta = Delta::from_secs(1);
 
     /// Sends `command` to the GSP, without splitting it.
     ///
@@ -534,7 +590,6 @@ impl Cmdq {
     fn send_single_command<M>(&mut self, bar: &Bar0, command: M) -> Result
     where
         M: CommandToGsp,
-        // This allows all error types, including `Infallible`, to be used for `M::InitError`.
         Error: From<M::InitError>,
     {
         let size_in_bytes = command.size();
@@ -601,7 +656,7 @@ impl Cmdq {
     ///   written to by its [`CommandToGsp::init_variable_payload`] method.
     ///
     /// Error codes returned by the command initializers are propagated as-is.
-    fn send_command_internal<M>(&mut self, bar: &Bar0, command: M) -> Result
+    fn send_command<M>(&mut self, bar: &Bar0, command: M) -> Result
     where
         M: CommandToGsp,
         Error: From<M::InitError>,
@@ -619,51 +674,6 @@ impl Cmdq {
                 Ok(())
             }
         }
-    }
-
-    /// Sends `command` to the GSP and waits for the reply.
-    ///
-    /// # Errors
-    ///
-    /// - `ETIMEDOUT` if space does not become available to send the command, or if the reply is
-    ///   not received within the timeout.
-    /// - `EIO` if the variable payload requested by the command has not been entirely
-    ///   written to by its [`CommandToGsp::init_variable_payload`] method.
-    ///
-    /// Error codes returned by the command and reply initializers are propagated as-is.
-    pub(crate) fn send_command<M>(&mut self, bar: &Bar0, command: M) -> Result<M::Reply>
-    where
-        M: CommandToGsp,
-        M::Reply: MessageFromGsp,
-        Error: From<M::InitError>,
-        Error: From<<M::Reply as MessageFromGsp>::InitError>,
-    {
-        self.send_command_internal(bar, command)?;
-
-        loop {
-            match self.receive_msg::<M::Reply>(Self::RECEIVE_TIMEOUT) {
-                Ok(reply) => break Ok(reply),
-                Err(ERANGE) => continue,
-                Err(e) => break Err(e),
-            }
-        }
-    }
-
-    /// Sends `command` to the GSP without waiting for a reply.
-    ///
-    /// # Errors
-    ///
-    /// - `ETIMEDOUT` if space does not become available within the timeout.
-    /// - `EIO` if the variable payload requested by the command has not been entirely
-    ///   written to by its [`CommandToGsp::init_variable_payload`] method.
-    ///
-    /// Error codes returned by the command initializers are propagated as-is.
-    pub(crate) fn send_command_no_wait<M>(&mut self, bar: &Bar0, command: M) -> Result
-    where
-        M: CommandToGsp<Reply = NoReply>,
-        Error: From<M::InitError>,
-    {
-        self.send_command_internal(bar, command)
     }
 
     /// Wait for a message to become available on the message queue.
@@ -701,7 +711,7 @@ impl Cmdq {
         let (header, slice_1) = GspMsgElement::from_bytes_prefix(slice_1).ok_or(EIO)?;
 
         dev_dbg!(
-            self.dev,
+            &self.dev,
             "GSP RPC: receive: seq# {}, function={:?}, length=0x{:x}\n",
             header.sequence(),
             header.function(),
@@ -736,7 +746,7 @@ impl Cmdq {
         ])) != 0
         {
             dev_err!(
-                self.dev,
+                &self.dev,
                 "GSP RPC: receive: Call {} - bad checksum\n",
                 header.sequence()
             );
@@ -766,10 +776,12 @@ impl Cmdq {
     /// - `ETIMEDOUT` if `timeout` has elapsed before any message becomes available.
     /// - `EIO` if there was some inconsistency (e.g. message shorter than advertised) on the
     ///   message queue.
-    /// - `EINVAL` if the function of the message was unrecognized.
-    pub(crate) fn receive_msg<M: MessageFromGsp>(&mut self, timeout: Delta) -> Result<M>
+    /// - `EINVAL` if the function code of the message was not recognized.
+    /// - `ERANGE` if the message had a recognized but non-matching function code.
+    ///
+    /// Error codes returned by [`MessageFromGsp::read`] are propagated as-is.
+    fn receive_msg<M: MessageFromGsp>(&mut self, timeout: Delta) -> Result<M>
     where
-        // This allows all error types, including `Infallible`, to be used for `M::InitError`.
         Error: From<M::InitError>,
     {
         let message = self.wait_for_msg(timeout)?;
@@ -802,10 +814,5 @@ impl Cmdq {
         )?);
 
         result
-    }
-
-    /// Returns the DMA handle of the command queue's shared memory region.
-    pub(crate) fn dma_handle(&self) -> DmaAddress {
-        self.gsp_mem.0.dma_handle()
     }
 }
