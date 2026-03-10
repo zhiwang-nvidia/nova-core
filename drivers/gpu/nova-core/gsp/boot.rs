@@ -370,7 +370,7 @@ impl super::Gsp {
             Coherent::<GspFwWprMeta>::zeroed(dev, GFP_KERNEL)?;
         kernel::io_project!(wpr_meta,).write(GspFwWprMeta::new(&gsp_fw, &fb_layout));
 
-        let mut this = self.as_mut().project();
+        let this = self.as_mut().project();
 
         // Rewrite the RM arguments with bindata info now that we have it.
         let bindata_opt = ucodes_radix3.as_ref().map(|r| fw::BindataArgs {
@@ -427,7 +427,7 @@ impl super::Gsp {
 
         // Wait for GSP-RM to complete initialization, handling boot events inline.
         Self::wait_gsp_boot_events(
-            this.cmdq.as_mut().get_mut(),
+            &*this.cmdq,
             gsp_falcon,
             sec2_falcon,
             bar,
@@ -437,7 +437,7 @@ impl super::Gsp {
         )?;
 
         // Obtain and display basic GPU information.
-        let info = commands::get_gsp_info(this.cmdq.as_mut().get_mut(), bar)?;
+        let info = commands::get_gsp_info(&*this.cmdq, bar)?;
         match info.gpu_name() {
             Ok(name) => dev_info!(dev, "GPU name: {}\n", name),
             Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
@@ -455,7 +455,7 @@ impl super::Gsp {
     /// resume GSP-RM). The loop runs until `INIT_DONE` arrives.
     #[allow(clippy::too_many_arguments)]
     fn wait_gsp_boot_events(
-        cmdq: &mut Cmdq,
+        cmdq: &Cmdq,
         gsp_falcon: &Falcon<Gsp>,
         sec2_falcon: &Falcon<Sec2>,
         bar: &Bar0,
