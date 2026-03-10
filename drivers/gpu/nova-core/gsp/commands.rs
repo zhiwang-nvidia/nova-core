@@ -11,7 +11,6 @@ use kernel::{
     device,
     pci,
     prelude::*,
-    time::Delta,
     transmute::AsBytes, //
 };
 
@@ -205,7 +204,7 @@ pub(crate) fn get_gsp_info(cmdq: &mut Cmdq, bar: &Bar0) -> Result<GetGspStaticIn
     cmdq.send_command(bar, GetGspStaticInfo)?;
 
     loop {
-        match cmdq.receive_msg::<GetGspStaticInfoReply>(Delta::from_secs(5)) {
+        match cmdq.receive_msg::<GetGspStaticInfoReply>(Cmdq::RECEIVE_TIMEOUT) {
             Ok(info) => return Ok(info),
             Err(ERANGE) => continue,
             Err(e) => return Err(e),
