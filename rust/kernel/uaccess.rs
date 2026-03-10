@@ -7,7 +7,7 @@
 use crate::{
     alloc::{Allocator, Flags},
     bindings,
-    dma::CoherentAllocation,
+    dma::Coherent,
     error::Result,
     ffi::{c_char, c_void},
     fs::file,
@@ -519,11 +519,11 @@ impl UserSliceWriter {
     /// the copied data may be inconsistent, but this does not cause undefined behavior.
     pub fn write_dma(
         &mut self,
-        alloc: &CoherentAllocation<u8>,
+        alloc: &Coherent<[u8]>,
         offset: usize,
         count: usize,
     ) -> Result {
-        let len = alloc.size();
+        let len = alloc.len();
         if offset.checked_add(count).ok_or(EOVERFLOW)? > len {
             return Err(ERANGE);
         }
@@ -532,10 +532,10 @@ impl UserSliceWriter {
             return Err(ERANGE);
         }
 
-        // SAFETY: `start_ptr()` returns a valid pointer to a memory region of `count()` bytes,
-        // as guaranteed by the `CoherentAllocation` invariants. The check above ensures
+        // SAFETY: `as_ptr()` returns a valid pointer to a memory region of `len()` bytes,
+        // as guaranteed by the `Coherent` invariants. The check above ensures
         // `offset + count <= len`.
-        let src_ptr = unsafe { alloc.start_ptr().add(offset) };
+        let src_ptr = unsafe { (alloc.as_ptr() as *const u8).add(offset) };
 
         // Note: Use `write_raw` instead of `write_slice` because the allocation is coherent
         // memory that hardware may modify (e.g., DMA); we cannot form a `&[u8]` slice over
