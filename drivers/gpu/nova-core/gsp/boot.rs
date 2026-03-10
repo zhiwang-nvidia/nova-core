@@ -419,8 +419,9 @@ impl super::Gsp {
 
         // Send system info and registry RPCs now that GSP is active.
         this.cmdq
-            .send_command(bar, commands::SetSystemInfo::new(pdev, chipset))?;
-        this.cmdq.send_command(bar, commands::SetRegistry::new())?;
+            .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset))?;
+        this.cmdq
+            .send_command_no_wait(bar, commands::SetRegistry::new())?;
 
         // Wait for GSP-RM to complete initialization, handling boot events inline.
         Self::wait_gsp_boot_events(
