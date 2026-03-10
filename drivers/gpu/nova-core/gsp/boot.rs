@@ -344,8 +344,9 @@ impl super::Gsp {
         if uses_sec2 {
             // SEC2 path: send commands before GSP reset/boot (original order).
             self.cmdq
-                .send_command(bar, commands::SetSystemInfo::new(pdev, chipset))?;
-            self.cmdq.send_command(bar, commands::SetRegistry::new())?;
+                .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset))?;
+            self.cmdq
+                .send_command_no_wait(bar, commands::SetRegistry::new())?;
 
             Self::boot_via_sec2(
                 dev,
@@ -387,8 +388,9 @@ impl super::Gsp {
             Architecture::Hopper | Architecture::Blackwell
         ) {
             self.cmdq
-                .send_command(bar, commands::SetSystemInfo::new(pdev, chipset))?;
-            self.cmdq.send_command(bar, commands::SetRegistry::new())?;
+                .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset))?;
+            self.cmdq
+                .send_command_no_wait(bar, commands::SetRegistry::new())?;
         }
 
         // SEC2-based architectures need to run the GSP sequencer
