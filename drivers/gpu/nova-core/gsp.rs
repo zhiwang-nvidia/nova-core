@@ -138,6 +138,7 @@ pub(crate) struct Gsp {
     /// Log buffers for all LIBOS3 tasks.
     logs: LogBuffers,
     /// Command queue.
+    #[pin]
     pub(crate) cmdq: Cmdq,
     /// RM arguments.
     rmargs: Coherent<GspArgumentsPadded>,
@@ -164,7 +165,7 @@ impl Gsp {
                     GSP_PAGE_SIZE / size_of::<LibosMemoryRegionInitArgument>(),
                     GFP_KERNEL,
                 )?,
-                cmdq: Cmdq::new(dev)?,
+                cmdq <- Cmdq::new(dev),
                 rmargs: Coherent::<GspArgumentsPadded>::zeroed(dev, GFP_KERNEL)?,
                 rm_state_monitor: Coherent::zeroed_slice(
                     dev,
@@ -196,7 +197,7 @@ impl Gsp {
                     io_write!(rmargs, .inner, fw::GspArgumentsCached::new(
                         &cmdq, None, &rm_state_monitor
                     ));
-                    io_write!(libos, [6]?, LibosMemoryRegionInitArgument::new("RMARGS", rmargs));
+                    io_write!(libos, [6]?, LibosMemoryRegionInitArgument::new("RMARGS", &rmargs));
                 },
                 logs: LogBuffers {
                     loginit,

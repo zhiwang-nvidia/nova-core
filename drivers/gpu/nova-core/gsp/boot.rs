@@ -370,7 +370,7 @@ impl super::Gsp {
             Coherent::<GspFwWprMeta>::zeroed(dev, GFP_KERNEL)?;
         kernel::io_project!(wpr_meta,).write(GspFwWprMeta::new(&gsp_fw, &fb_layout));
 
-        let this = self.as_mut().project();
+        let mut this = self.as_mut().project();
 
         // Rewrite the RM arguments with bindata info now that we have it.
         let bindata_opt = ucodes_radix3.as_ref().map(|r| fw::BindataArgs {
@@ -378,7 +378,9 @@ impl super::Gsp {
             size: r.size as u64,
         });
         io_write!(this.rmargs, .inner, fw::GspArgumentsCached::new(
-            this.cmdq, bindata_opt.as_ref(), this.rm_state_monitor
+            &*this.cmdq,
+            bindata_opt.as_ref(),
+            this.rm_state_monitor
         ));
 
         // Architecture-specific boot path
@@ -425,7 +427,7 @@ impl super::Gsp {
 
         // Wait for GSP-RM to complete initialization, handling boot events inline.
         Self::wait_gsp_boot_events(
-            this.cmdq,
+            this.cmdq.as_mut().get_mut(),
             gsp_falcon,
             sec2_falcon,
             bar,
@@ -435,7 +437,7 @@ impl super::Gsp {
         )?;
 
         // Obtain and display basic GPU information.
-        let info = commands::get_gsp_info(this.cmdq, bar)?;
+        let info = commands::get_gsp_info(this.cmdq.as_mut().get_mut(), bar)?;
         match info.gpu_name() {
             Ok(name) => dev_info!(dev, "GPU name: {}\n", name),
             Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
