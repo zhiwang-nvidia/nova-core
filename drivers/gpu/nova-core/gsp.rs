@@ -113,6 +113,7 @@ pub(crate) struct Gsp {
     /// RM log buffer.
     logrm: LogBuffer,
     /// Command queue.
+    #[pin]
     pub(crate) cmdq: Cmdq,
     /// RM arguments.
     rmargs: Coherent<GspArgumentsPadded>,
@@ -133,7 +134,7 @@ impl Gsp {
                 loginit: LogBuffer::new(dev)?,
                 logintr: LogBuffer::new(dev)?,
                 logrm: LogBuffer::new(dev)?,
-                cmdq: Cmdq::new(dev)?,
+                cmdq <- Cmdq::new(dev),
                 rmargs: Coherent::<GspArgumentsPadded>::zeroed(dev, GFP_KERNEL)?,
                 _: {
                     // Initialise the logging structures. The OpenRM equivalents are in:
@@ -146,8 +147,8 @@ impl Gsp {
                         libos, [1]?, LibosMemoryRegionInitArgument::new("LOGINTR", &logintr.0)
                     );
                     io_write!(libos, [2]?, LibosMemoryRegionInitArgument::new("LOGRM", &logrm.0));
-                    io_write!(rmargs, .inner, fw::GspArgumentsCached::new(cmdq));
-                    io_write!(libos, [3]?, LibosMemoryRegionInitArgument::new("RMARGS", rmargs));
+                    io_write!(rmargs, .inner, fw::GspArgumentsCached::new(&cmdq));
+                    io_write!(libos, [3]?, LibosMemoryRegionInitArgument::new("RMARGS", &rmargs));
                 },
             }))
         })
