@@ -34,7 +34,12 @@ use crate::{
         commands::GetGspStaticInfoReply,
         Gsp, //
     },
-    mm::GpuMm,
+    mm::{
+        bar_user::BarUser,
+        pagetable::MmuVersion,
+        GpuMm,
+        VramAddress, //
+    },
     regs,
 };
 
@@ -307,6 +312,8 @@ pub(crate) struct Gpu {
     gsp: Gsp,
     /// Static GPU information from GSP.
     gsp_static_info: GetGspStaticInfoReply,
+    /// BAR1 user interface for CPU access to GPU virtual memory.
+    bar_user: Option<BarUser>,
     /// fwctl device registration for GMC API pass-through.
     #[pin]
     _fwctl_reg: Devres<fwctl::Registration<crate::fwctl::NovaCoreFwCtl>>,
@@ -400,7 +407,22 @@ impl Gpu {
                     }, pramin_vram_region)?
                 },
 
+                bar_user: {
+                    let mmu_version = MmuVersion::from(spec.chipset.arch());
+                    // TODO: Extend BarUser/Vmm to support MMU V3 for Hopper/Blackwell.
+                    if mmu_version == MmuVersion::V2 {
+                        let pdb_addr = VramAddress::new(gsp_static_info.bar1_pde_base);
+                        let bar1_size = pdev.resource_len(1)?;
+                        Some(BarUser::new(pdb_addr, mmu_version, bar1_size)?)
+                    } else {
+                        None
+                    }
+                },
+
                 _fwctl_reg <- {
+                    // SAFETY: `cmdq_cell.get()` returns a valid pointer to
+                    // the pinned `Cmdq` inside `Gsp`, which outlives the fwctl
+                    // registration (see `NovaCoreFwCtlData::new` safety docs).
                     let fwctl_data = unsafe {
                         crate::fwctl::NovaCoreFwCtlData::new(
                             devres_bar.clone(),
