@@ -473,27 +473,24 @@ impl Gpu {
 
     #[cfg(CONFIG_NOVA_MM_SELFTESTS)]
     fn run_mm_selftests(self: Pin<&mut Self>, pdev: &pci::Device<device::Bound>) -> Result {
-        use crate::driver::BAR1_SIZE;
-
         let mmu_version = MmuVersion::from(self.spec.chipset.arch());
 
         // PRAMIN aperture self-tests.
         crate::mm::pramin::run_self_test(pdev.as_ref(), self.mm.pramin(), self.spec.chipset)?;
 
-        // BAR1 self-tests.
-        let bar1 = Arc::pin_init(
-            pdev.iomap_region_sized::<BAR1_SIZE>(1, c"nova-core/bar1"),
-            GFP_KERNEL,
-        )?;
-        let bar1_access = bar1.access(pdev.as_ref())?;
+        // BAR1 self-tests — only on V2 MMU (BarUser is None on V3+).
+        if self.bar_user.is_some() {
+            let bar1 = Arc::pin_init(pdev.iomap_region(1, c"nova-core/bar1"), GFP_KERNEL)?;
+            let bar1_access = bar1.access(pdev.as_ref())?;
 
-        crate::mm::bar_user::run_self_test(
-            pdev.as_ref(),
-            &self.mm,
-            bar1_access,
-            self.gsp_static_info.bar1_pde_base,
-            mmu_version,
-        )?;
+            crate::mm::bar_user::run_self_test(
+                pdev.as_ref(),
+                &self.mm,
+                bar1_access,
+                self.gsp_static_info.bar1_pde_base,
+                mmu_version,
+            )?;
+        }
 
         Ok(())
     }
