@@ -9,11 +9,12 @@ use r570_144 as bindings;
 use core::ops::Range;
 
 use kernel::{
-    dma::CoherentAllocation,
+    dma::Coherent,
     prelude::*,
     ptr::{
         Alignable,
-        Alignment, //
+        Alignment,
+        KnownSize, //
     },
     sizes::*,
     transmute::{
@@ -603,9 +604,9 @@ unsafe impl AsBytes for LibosMemoryRegionInitArgument {}
 unsafe impl FromBytes for LibosMemoryRegionInitArgument {}
 
 impl LibosMemoryRegionInitArgument {
-    pub(crate) fn new<A: AsBytes + FromBytes>(
+    pub(crate) fn new<A: AsBytes + FromBytes + KnownSize + ?Sized>(
         name: &'static str,
-        obj: &CoherentAllocation<A>,
+        obj: &Coherent<A>,
     ) -> Self {
         /// Generates the `ID8` identifier required for some GSP objects.
         fn id8(name: &str) -> u64 {
@@ -677,6 +678,9 @@ impl MsgqTxHeader {
     }
 }
 
+// SAFETY: All bit-patterns are valid for this type.
+unsafe impl FromBytes for MsgqTxHeader {}
+
 // SAFETY: Padding is explicit and does not contain uninitialized data.
 unsafe impl AsBytes for MsgqTxHeader {}
 
@@ -707,6 +711,9 @@ impl MsgqRxHeader {
         unsafe { ptr.write_volatile(val) }
     }
 }
+
+// SAFETY: All bit-patterns are valid for this type.
+unsafe impl FromBytes for MsgqRxHeader {}
 
 // SAFETY: Padding is explicit and does not contain uninitialized data.
 unsafe impl AsBytes for MsgqRxHeader {}
@@ -851,6 +858,9 @@ impl GspArgumentsCached {
         })
     }
 }
+
+// SAFETY: All bit patterns are valid for this type.
+unsafe impl FromBytes for GspArgumentsCached {}
 
 // SAFETY: Padding is explicit and will not contain uninitialized data.
 unsafe impl AsBytes for GspArgumentsCached {}

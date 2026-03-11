@@ -2,9 +2,9 @@
 
 use kernel::{
     device,
-    dma::CoherentAllocation,
-    dma_write,
+    dma::Coherent,
     io::poll::read_poll_timeout,
+    io_write,
     pci,
     prelude::*,
     time::Delta, //
@@ -193,7 +193,7 @@ impl super::Gsp {
         bar: &Bar0,
         chipset: Chipset,
         sec2_falcon: &Falcon<Sec2>,
-        wpr_meta: &CoherentAllocation<GspFwWprMeta>,
+        wpr_meta: &Coherent<GspFwWprMeta>,
     ) -> Result {
         let booter = BooterFirmware::new(
             dev,
@@ -219,8 +219,8 @@ impl super::Gsp {
         gsp_falcon: &Falcon<Gsp>,
         sec2_falcon: &Falcon<Sec2>,
         fb_layout: &FbLayout,
-        libos: &CoherentAllocation<LibosMemoryRegionInitArgument>,
-        wpr_meta: &CoherentAllocation<GspFwWprMeta>,
+        libos: &Coherent<[LibosMemoryRegionInitArgument]>,
+        wpr_meta: &Coherent<GspFwWprMeta>,
     ) -> Result {
         // Run FWSEC-FRTS to set up the WPR2 region
         let bios = Vbios::new(dev, bar)?;
@@ -253,8 +253,8 @@ impl super::Gsp {
         bar: &Bar0,
         chipset: Chipset,
         gsp_falcon: &Falcon<Gsp>,
-        wpr_meta: &CoherentAllocation<GspFwWprMeta>,
-        libos: &CoherentAllocation<LibosMemoryRegionInitArgument>,
+        wpr_meta: &Coherent<GspFwWprMeta>,
+        libos: &Coherent<[LibosMemoryRegionInitArgument]>,
     ) -> Result {
         let fsp_falcon = Falcon::<FspEngine>::new(dev, chipset)?;
 
@@ -337,9 +337,8 @@ impl super::Gsp {
         let fb_layout = FbLayout::new(chipset, bar, &gsp_fw)?;
         dev_dbg!(dev, "{:#x?}\n", fb_layout);
 
-        let wpr_meta =
-            CoherentAllocation::<GspFwWprMeta>::alloc_coherent(dev, 1, GFP_KERNEL | __GFP_ZERO)?;
-        dma_write!(wpr_meta, [0]?, GspFwWprMeta::new(&gsp_fw, &fb_layout));
+        let wpr_meta = Coherent::<GspFwWprMeta>::zeroed(dev, GFP_KERNEL)?;
+        io_write!(wpr_meta, , GspFwWprMeta::new(&gsp_fw, &fb_layout));
 
         // Architecture-specific boot path
         if uses_sec2 {
