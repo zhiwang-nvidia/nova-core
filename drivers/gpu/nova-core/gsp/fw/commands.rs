@@ -168,6 +168,25 @@ impl GspStaticConfigInfo {
         }
         None
     }
+
+    /// Compute the end of physical VRAM from all FB regions.
+    pub(crate) fn total_fb_end(&self) -> Option<u64> {
+        let fb_info = &self.0.fbRegionInfoParams;
+        let mut max_end: Option<u64> = None;
+        for i in 0..fb_info.numFBRegions.into_safe_cast() {
+            if let Some(reg) = fb_info.fbRegion.get(i) {
+                if reg.limit < reg.base {
+                    continue;
+                }
+                let end = reg.limit.saturating_add(1);
+                max_end = Some(match max_end {
+                    None => end,
+                    Some(prev) => prev.max(end),
+                });
+            }
+        }
+        max_end
+    }
 }
 
 // SAFETY: Padding is explicit and will not contain uninitialized data.
