@@ -154,6 +154,9 @@ const GSP_GET_STATIC_INFO_MAX_RESPONSE: u32 = 8192;
 /// The reply from the GSP to the `GSP_GET_STATIC_INFO` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
+    /// BAR1 Page Directory Entry base address.
+    #[expect(dead_code)]
+    pub(crate) bar1_pde_base: u64,
     /// Usable FB (VRAM) region for driver memory allocation.
     pub(crate) usable_fb_region: Range<u64>,
     /// End of VRAM.
@@ -207,6 +210,7 @@ pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: &Bar0) -> Result<GetGspStaticInfoRe
 
     Ok(GetGspStaticInfoReply {
         gpu_name,
+        bar1_pde_base: 0,
         usable_fb_region: 0..0,
         total_fb_end: 0,
     })
