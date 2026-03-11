@@ -27,7 +27,10 @@ use crate::{
     fb::SysmemFlush,
     firmware,
     fsp::FspCotVersion,
-    gsp::Gsp,
+    gsp::{
+        commands::GetGspStaticInfoReply,
+        Gsp, //
+    },
     regs,
 };
 
@@ -295,6 +298,8 @@ pub(crate) struct Gpu {
     /// GSP runtime data. Temporarily an empty placeholder.
     #[pin]
     gsp: Gsp,
+    /// Static GPU information from GSP.
+    gsp_static_info: GetGspStaticInfoReply,
     /// fwctl device registration for GMC API pass-through.
     #[pin]
     _fwctl_reg: Devres<fwctl::Registration<crate::fwctl::NovaCoreFwCtl>>,
@@ -360,10 +365,13 @@ impl Gpu {
                     // SAFETY: We do not move the pinned `Gsp`; `addr_of!` only
                     // computes the address.
                     cmdq_cell.set(core::ptr::addr_of!(gsp.as_ref().get_ref().cmdq));
+                },
+
+                gsp_static_info: {
                     gsp.boot(
                         pdev, bar, chipset, gsp_falcon, sec2_falcon,
                         &gsp_fw_blob, gsp_fw_path,
-                    )?;
+                    )?
                 },
 
                 _fwctl_reg <- {
