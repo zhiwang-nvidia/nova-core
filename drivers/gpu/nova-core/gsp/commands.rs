@@ -3,6 +3,7 @@
 use core::{
     convert::Infallible,
     ffi::FromBytesUntilNulError,
+    ops::Range,
     str::Utf8Error, //
 };
 
@@ -153,6 +154,9 @@ const GSP_GET_STATIC_INFO_MAX_RESPONSE: u32 = 8192;
 /// The reply from the GSP to the `GSP_GET_STATIC_INFO` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
+    /// Usable FB (VRAM) region for driver memory allocation.
+    #[expect(dead_code)]
+    pub(crate) usable_fb_region: Range<u64>,
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -200,5 +204,8 @@ pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: &Bar0) -> Result<GetGspStaticInfoRe
         gpu_name[..len].copy_from_slice(&name_bytes[..len]);
     }
 
-    Ok(GetGspStaticInfoReply { gpu_name })
+    Ok(GetGspStaticInfoReply {
+        gpu_name,
+        usable_fb_region: 0..0,
+    })
 }
