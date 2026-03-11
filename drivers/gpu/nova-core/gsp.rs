@@ -6,10 +6,12 @@ use kernel::{
     c_str,
     debugfs,
     device,
+    devres::Devres,
     dma::{
         Coherent,
         DmaAddress, //
     },
+    fwctl,
     io_write,
     pci,
     prelude::*,
@@ -26,6 +28,7 @@ pub(crate) mod rm;
 mod sequencer;
 
 pub(crate) use fw::{
+    rm::RmControlMsgFunction,
     GSP_FW_HEAP_SIZE_VGPU_48VMS,
     GSP_FW_HEAP_SIZE_VGPU_DEFAULT,
     GspFwWprMeta,
@@ -42,11 +45,14 @@ use crate::{
         sec2::Sec2 as Sec2Falcon,
         Falcon, //
     },
+    fwctl::NovaCoreFwCtl,
     gpu::Chipset,
-    gsp::cmdq::Cmdq,
-    gsp::fw::{
-        GspArgumentsPadded,
-        LibosMemoryRegionInitArgument, //
+    gsp::{
+        cmdq::Cmdq,
+        fw::{
+            GspArgumentsPadded,
+            LibosMemoryRegionInitArgument, //
+        },
     },
     num,
 };
@@ -157,6 +163,12 @@ pub(crate) struct Gsp {
     pub(crate) cmdq: Cmdq,
     /// RM arguments.
     rmargs: Coherent<GspArgumentsPadded>,
+    /// Cached RM internal client handle from GSP static info.
+    pub(crate) h_client: u32,
+    /// Cached RM internal subdevice handle from GSP static info.
+    pub(crate) h_subdevice: u32,
+    /// fwctl registration for userspace RM control.
+    fwctl: Pin<KBox<Devres<fwctl::Registration<NovaCoreFwCtl>>>>,
 }
 
 impl Gsp {
@@ -165,10 +177,11 @@ impl Gsp {
         pin_init::pin_init_scope(move || {
             let dev = pdev.as_ref();
 
-            // Create log buffers before try_pin_init! so they're accessible throughout
             let loginit = LogBuffer::new(dev)?;
             let logintr = LogBuffer::new(dev)?;
             let logrm = LogBuffer::new(dev)?;
+
+            let fwctl_dev = fwctl::Device::<NovaCoreFwCtl>::new(pdev.as_ref(), Ok(()))?;
 
             Ok(try_pin_init!(Self {
                 libos: Coherent::zeroed_slice(
@@ -178,6 +191,9 @@ impl Gsp {
                 )?,
                 cmdq <- Cmdq::new(dev),
                 rmargs: Coherent::<GspArgumentsPadded>::zeroed(dev, GFP_KERNEL)?,
+                h_client: 0,
+                h_subdevice: 0,
+                fwctl: KBox::pin_init(fwctl::Registration::new(pdev.as_ref(), &fwctl_dev), GFP_KERNEL)?,
                 _: {
                     // Initialise the logging structures. The OpenRM equivalents are in:
                     // _kgspInitLibosLoggingStructures (allocates memory for buffers)

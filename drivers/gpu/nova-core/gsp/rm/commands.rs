@@ -98,7 +98,7 @@ impl MessageFromGsp for RmControlReply {
 }
 
 /// Sends an RM control command, checks the reply status, and returns the raw parameter bytes.
-fn send_rm_control(
+pub(crate) fn send_rm_control(
     cmdq: &Cmdq,
     bar: &Bar0,
     h_client: u32,

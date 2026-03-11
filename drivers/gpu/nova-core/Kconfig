@@ -4,6 +4,8 @@ config NOVA_CORE
 	depends on PCI
 	depends on RUST
 	select AUXILIARY_BUS
+	select FWCTL
+	select RUST_FWCTL_ABSTRACTIONS
 	select RUST_FW_LOADER_ABSTRACTIONS
 	default n
 	help
