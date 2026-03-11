@@ -2,13 +2,16 @@
 
 mod boot;
 
+use core::cell::Cell;
 use kernel::{
     c_str,
     device,
+    devres::Devres,
     dma::{
         Coherent,
         DmaAddress, //
     },
+    fwctl,
     io_write,
     pci,
     prelude::*,
@@ -31,6 +34,7 @@ pub(crate) use fw::{
     MAX_PARTITIONS_WITH_GFID,
     MAX_PARTITIONS_WITH_GFID_32VM, //
 };
+pub(crate) use fw::rm::RmControlMsgFunction;
 
 use crate::{
     driver::Bar0,
@@ -177,6 +181,13 @@ pub(crate) struct Gsp {
     rmargs: Coherent<GspArgumentsPadded>,
     /// RM state monitor buffer (4KB, required by r000+ GSP-RM for diagnostics).
     rm_state_monitor: Coherent<[u8]>,
+    /// Internal client handle from GSP-RM (set after boot via [`Self::set_static_info`]).
+    h_client: Cell<u32>,
+    /// Internal subdevice handle from GSP-RM (set after boot via [`Self::set_static_info`]).
+    h_subdevice: Cell<u32>,
+    /// fwctl registration for userspace RM control (e.g. vGPU type upload).
+    #[pin]
+    fwctl: Pin<KBox<Devres<fwctl::Registration<crate::fwctl::NovaCoreFwCtl>>>>,
 }
 
 impl Gsp {
@@ -205,6 +216,16 @@ impl Gsp {
                     GSP_PAGE_SIZE,
                     GFP_KERNEL,
                 )?,
+                h_client: Cell::new(0),
+                h_subdevice: Cell::new(0),
+                fwctl <- {
+                    let fwctl_dev =
+                        fwctl::Device::<crate::fwctl::NovaCoreFwCtl>::new(pdev.as_ref(), Ok(()))?;
+                    KBox::pin_init(
+                        fwctl::Registration::new(pdev.as_ref(), &fwctl_dev),
+                        GFP_KERNEL,
+                    )?
+                },
                 _: {
                     // Set up libos memory region entries for each LIBOS3 task log buffer,
                     // followed by RMARGS. The order matches Open RM's
@@ -262,5 +283,19 @@ impl Gsp {
                 },
             }))
         })
+    }
+
+    /// Stores static info from the first GetGspInfo reply (boot path). Used by fwctl etc.
+    pub(crate) fn set_static_info(&self, info: &commands::GetGspStaticInfoReply) {
+        self.h_client.set(info.h_client());
+        self.h_subdevice.set(info.h_subdevice());
+    }
+
+    pub(crate) fn h_client(&self) -> u32 {
+        self.h_client.get()
+    }
+
+    pub(crate) fn h_subdevice(&self) -> u32 {
+        self.h_subdevice.get()
     }
 }

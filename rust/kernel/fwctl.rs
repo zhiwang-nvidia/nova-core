@@ -34,6 +34,8 @@ pub enum DeviceType {
     Cxl = bindings::fwctl_device_type_FWCTL_DEVICE_TYPE_CXL,
     /// AMD/Pensando PDS device.
     Pds = bindings::fwctl_device_type_FWCTL_DEVICE_TYPE_PDS,
+    /// NVIDIA Nova Core GPU device.
+    NovaCore = bindings::fwctl_device_type_FWCTL_DEVICE_TYPE_NOVA_CORE,
 }
 
 impl From<DeviceType> for u32 {

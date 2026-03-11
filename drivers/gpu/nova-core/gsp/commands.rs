@@ -244,13 +244,11 @@ impl GetGspStaticInfoReply {
     }
 
     /// Returns the internal client handle allocated by GSP-RM.
-    #[expect(dead_code)]
     pub(crate) fn h_client(&self) -> u32 {
         self.h_client
     }
 
     /// Returns the internal subdevice handle allocated by GSP-RM.
-    #[expect(dead_code)]
     pub(crate) fn h_subdevice(&self) -> u32 {
         self.h_subdevice
     }
