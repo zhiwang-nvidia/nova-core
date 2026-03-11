@@ -29,6 +29,13 @@ __rust_helper u32 rust_helper_pci_ext_cap_next(u32 header)
 	return PCI_EXT_CAP_NEXT(header);
 }
 
+#ifndef CONFIG_PCI_IOV
+__rust_helper int rust_helper_pci_sriov_get_totalvfs(struct pci_dev *dev)
+{
+	return pci_sriov_get_totalvfs(dev);
+}
+#endif
+
 #ifndef CONFIG_PCI_MSI
 __rust_helper int rust_helper_pci_alloc_irq_vectors(struct pci_dev *dev,
 						    unsigned int min_vecs,
