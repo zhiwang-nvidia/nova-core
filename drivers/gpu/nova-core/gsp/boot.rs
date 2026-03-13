@@ -55,6 +55,7 @@ use crate::{
         },
         fw,
         fw::{
+            GspVfInfo,
             LibosMemoryRegionInitArgument,
             MsgFunction, //
         },
@@ -417,6 +418,12 @@ impl super::Gsp {
 
         let wpr_meta = Coherent::init(dev, GFP_KERNEL, GspFwWprMeta::new(&gsp_fw, &fb_layout))?;
 
+        let vf_info = if ctx.vgpu_requested {
+            Some(GspVfInfo::new(ctx.pdev)?)
+        } else {
+            None
+        };
+
         // Rewrite the RM arguments with bindata info now that we have it.
         let bindata_opt = ucodes_radix3.as_ref().map(|r| fw::BindataArgs {
             radix3: r.dma_handle(),
@@ -470,7 +477,7 @@ impl super::Gsp {
 
         // Send system info and registry RPCs now that GSP is active.
         self.cmdq
-            .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset))?;
+            .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset, vf_info))?;
         self.cmdq
             .send_command_no_wait(bar, commands::SetRegistry::new())?;
 
