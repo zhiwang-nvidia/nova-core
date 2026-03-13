@@ -33,7 +33,9 @@ use crate::{
     gsp::{
         commands::GetGspStaticInfoReply,
         Gsp,
-        GspBootContext, //
+        GspBootContext,
+        MAX_PARTITIONS_WITH_GFID,
+        MAX_PARTITIONS_WITH_GFID_32VM, //
     },
     mm::{
         bar_user::BarUser,
@@ -408,6 +410,15 @@ impl Gpu {
                         sec2_falcon,
                         fsp_falcon: None,
                         vgpu_requested: vgpu.vgpu_requested,
+                        vf_partition_count: if vgpu.vgpu_requested {
+                            if vgpu.total_vfs > u16::from(MAX_PARTITIONS_WITH_GFID_32VM) {
+                                MAX_PARTITIONS_WITH_GFID
+                            } else {
+                                MAX_PARTITIONS_WITH_GFID_32VM
+                            }
+                        } else {
+                            0
+                        },
                     };
                     let info = gsp.boot(
                         &mut ctx,

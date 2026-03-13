@@ -63,6 +63,11 @@ enum GspFwHeapParams {}
 /// Minimum required alignment for the GSP heap.
 const GSP_HEAP_ALIGNMENT: Alignment = Alignment::new::<{ 1 << 20 }>();
 
+pub(crate) const GSP_FW_HEAP_SIZE_VGPU_DEFAULT: u64 = r570::GSP_FW_HEAP_SIZE_VGPU_DEFAULT as u64;
+pub(crate) const GSP_FW_HEAP_SIZE_VGPU_48VMS: u64 = r570::GSP_FW_HEAP_SIZE_VGPU_48VMS as u64;
+pub(crate) const MAX_PARTITIONS_WITH_GFID: u8 = r570::MAX_PARTITIONS_WITH_GFID;
+pub(crate) const MAX_PARTITIONS_WITH_GFID_32VM: u8 = r570::MAX_PARTITIONS_WITH_GFID_32VM;
+
 // These constants override the generated bindings for architecture-specific heap sizing.
 // See Open RM: kgspCalculateGspFwHeapSize and related functions.
 //
