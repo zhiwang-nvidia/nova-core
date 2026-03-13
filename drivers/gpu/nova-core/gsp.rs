@@ -36,6 +36,13 @@ pub(crate) use fw::{
 };
 
 use crate::{
+    driver::Bar0,
+    falcon::{
+        fsp::Fsp as FspFalcon,
+        gsp::Gsp as GspFalcon,
+        sec2::Sec2 as Sec2Falcon,
+        Falcon, //
+    },
     firmware::BuildId,
     gpu::Chipset,
     gsp::cmdq::Cmdq,
@@ -45,6 +52,23 @@ use crate::{
     },
     num,
 };
+
+/// Common context for the GSP boot process.
+pub(crate) struct GspBootContext<'a> {
+    pub(crate) pdev: &'a pci::Device<device::Bound>,
+    pub(crate) bar: &'a Bar0,
+    pub(crate) chipset: Chipset,
+    pub(crate) gsp_falcon: &'a Falcon<GspFalcon>,
+    pub(crate) sec2_falcon: &'a Falcon<Sec2Falcon>,
+    pub(crate) fsp_falcon: Option<Falcon<FspFalcon>>,
+    pub(crate) vgpu_requested: bool,
+}
+
+impl GspBootContext<'_> {
+    pub(crate) fn dev(&self) -> &device::Device<device::Bound> {
+        self.pdev.as_ref()
+    }
+}
 
 pub(crate) const GSP_PAGE_SHIFT: usize = 12;
 pub(crate) const GSP_PAGE_SIZE: usize = 1 << GSP_PAGE_SHIFT;

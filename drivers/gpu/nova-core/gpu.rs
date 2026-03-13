@@ -32,7 +32,8 @@ use crate::{
     fsp::FspCotVersion,
     gsp::{
         commands::GetGspStaticInfoReply,
-        Gsp, //
+        Gsp,
+        GspBootContext, //
     },
     mm::{
         bar_user::BarUser,
@@ -41,6 +42,7 @@ use crate::{
         VramAddress, //
     },
     regs,
+    vgpu::Vgpu, //
 };
 
 mod hal;
@@ -194,6 +196,19 @@ bounded_enum! {
 }
 
 impl Architecture {
+    /// Whether this architecture uses SEC2 for GSP boot (vs FSP Chain of Trust).
+    pub(crate) const fn uses_sec2_boot(&self) -> bool {
+        matches!(self, Self::Turing | Self::Ampere | Self::Ada)
+    }
+
+    /// Whether this architecture supports vGPU.
+    pub(crate) const fn supports_vgpu(&self) -> bool {
+        matches!(
+            self,
+            Self::Ada | Self::BlackwellGB10x | Self::BlackwellGB20x
+        )
+    }
+
     /// Returns the DMA mask supported by this architecture.
     pub(crate) const fn dma_mask(&self) -> DmaMask {
         match self {
@@ -296,7 +311,7 @@ impl fmt::Display for Spec {
 pub(crate) struct Gpu {
     spec: Spec,
     /// MMIO mapping of PCI BAR 0
-    bar: Arc<Devres<Bar0>>,
+    pub(crate) bar: Arc<Devres<Bar0>>,
     /// System memory page required for flushing all pending GPU-side memory writes done through
     /// PCIE into system memory, via sysmembar (A GPU-initiated HW memory-barrier operation).
     sysmem_flush: SysmemFlush,
@@ -309,7 +324,8 @@ pub(crate) struct Gpu {
     mm: GpuMm,
     /// GSP runtime data. Temporarily an empty placeholder.
     #[pin]
-    gsp: Gsp,
+    pub(crate) gsp: Gsp,
+    vgpu: Vgpu,
     /// Static GPU information from GSP.
     gsp_static_info: GetGspStaticInfoReply,
     /// BAR1 user interface for CPU access to GPU virtual memory.
@@ -367,6 +383,8 @@ impl Gpu {
 
                 sec2_falcon: Falcon::new(pdev.as_ref(), chipset)?,
 
+                vgpu: Vgpu::new(pdev, chipset)?,
+
                 gsp <- Gsp::new(pdev, chipset, build_id.as_ref()),
 
                 _: {
@@ -382,10 +400,20 @@ impl Gpu {
                 },
 
                 gsp_static_info: {
+                    let mut ctx = GspBootContext {
+                        pdev,
+                        bar,
+                        chipset,
+                        gsp_falcon,
+                        sec2_falcon,
+                        fsp_falcon: None,
+                        vgpu_requested: vgpu.vgpu_requested,
+                    };
                     let info = gsp.boot(
-                        pdev, bar, chipset, gsp_falcon, sec2_falcon,
+                        &mut ctx,
                         &gsp_fw_blob, gsp_fw_path,
                     )?;
+                    vgpu.vgpu_enabled = ctx.vgpu_requested;
 
                     dev_info!(
                         pdev.as_ref(),
