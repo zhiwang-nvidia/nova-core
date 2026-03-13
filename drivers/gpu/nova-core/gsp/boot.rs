@@ -8,7 +8,6 @@ use kernel::{
         register::WithBase, //
         Io,
     },
-    pci,
     prelude::*,
     time::Delta,
     transmute::FromBytes, //
@@ -44,12 +43,10 @@ use crate::{
     },
     fsp::{
         FmcBootArgs,
-        Fsp, //
+        Fsp,
+        VgpuMode, //
     },
-    gpu::{
-        Architecture,
-        Chipset, //
-    },
+    gpu::Chipset,
     gsp::{
         cmdq::Cmdq,
         commands::{
@@ -299,11 +296,8 @@ impl super::Gsp {
         gsp_falcon: &Falcon<Gsp>,
         wpr_meta: &Coherent<GspFwWprMeta>,
         libos: &Coherent<[LibosMemoryRegionInitArgument]>,
+        fsp_falcon: &Falcon<FspEngine>,
     ) -> Result {
-        let fsp_falcon = Falcon::<FspEngine>::new(dev, chipset)?;
-
-        Fsp::wait_secure_boot(dev, bar, chipset.arch())?;
-
         let fsp_fw = FspFirmware::new(dev, chipset, FIRMWARE_VERSION)?;
 
         let signatures = Fsp::extract_fmc_signatures(dev, fsp_fw.fmc_elf.data())?;
@@ -319,7 +313,7 @@ impl super::Gsp {
             &signatures,
         )?;
 
-        Fsp::boot_fmc(dev, bar, &fsp_falcon, &args)?;
+        Fsp::boot_fmc(dev, bar, fsp_falcon, &args)?;
 
         let fmc_boot_params_addr = args.boot_params_dma_handle();
         Self::wait_for_gsp_lockdown_release(dev, bar, gsp_falcon, fmc_boot_params_addr)?;
@@ -362,22 +356,35 @@ impl super::Gsp {
     /// structures that the GSP will use at runtime.
     ///
     /// Upon return, the GSP is up and running, and its runtime object given as return value.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn boot(
         self: Pin<&mut Self>,
-        pdev: &pci::Device<device::Bound>,
-        bar: &Bar0,
-        chipset: Chipset,
-        gsp_falcon: &Falcon<Gsp>,
-        sec2_falcon: &Falcon<Sec2>,
+        ctx: &mut super::GspBootContext<'_>,
         gsp_firmware: &kernel::firmware::Firmware,
         gsp_fw_path: kernel::str::CString,
     ) -> Result<GetGspStaticInfoReply> {
-        let dev = pdev.as_ref();
-        let uses_sec2 = matches!(
-            chipset.arch(),
-            Architecture::Turing | Architecture::Ampere | Architecture::Ada
-        );
+        let bar = ctx.bar;
+        let chipset = ctx.chipset;
+        let arch = chipset.arch();
+        let pdev = ctx.pdev;
+        let gsp_falcon = ctx.gsp_falcon;
+        let sec2_falcon = ctx.sec2_falcon;
+
+        // For FSP-based architectures (Blackwell), refine the vGPU request
+        // by reading the PRC knob from FSP - only keep the request if the
+        // hardware knob is set.
+        //
+        // SEC2-based architectures (Ada) keep the initial request as-is
+        // (module parameter + SR-IOV, already filtered by Vgpu::new).
+        if !arch.uses_sec2_boot() {
+            let fsp_falcon = Falcon::<FspEngine>::new(ctx.dev(), chipset)?;
+            Fsp::wait_secure_boot(ctx.dev(), bar, arch)?;
+            let vgpu_mode = Fsp::read_vgpu_mode(ctx.dev(), bar, &fsp_falcon)?;
+            dev_dbg!(ctx.dev(), "vGPU mode: {:?}\n", vgpu_mode);
+            ctx.fsp_falcon = Some(fsp_falcon);
+            ctx.vgpu_requested &= vgpu_mode == VgpuMode::Enabled;
+        }
+
+        let dev = ctx.dev();
 
         let gsp_fw = KBox::pin_init(
             GspFirmware::new(dev, chipset, FIRMWARE_VERSION, gsp_firmware, gsp_fw_path),
@@ -425,7 +432,7 @@ impl super::Gsp {
         }
 
         // Architecture-specific boot path
-        if uses_sec2 {
+        if arch.uses_sec2_boot() {
             Self::boot_via_sec2(
                 dev,
                 bar,
@@ -437,7 +444,15 @@ impl super::Gsp {
                 &wpr_meta,
             )?;
         } else {
-            Self::boot_via_fsp(dev, bar, chipset, gsp_falcon, &wpr_meta, &self.libos)?;
+            Self::boot_via_fsp(
+                dev,
+                bar,
+                chipset,
+                gsp_falcon,
+                &wpr_meta,
+                &self.libos,
+                ctx.fsp_falcon.as_ref().ok_or(ENODEV)?,
+            )?;
         }
 
         // Common post-boot initialization
