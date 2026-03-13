@@ -479,7 +479,7 @@ impl super::Gsp {
         self.cmdq
             .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset, vf_info))?;
         self.cmdq
-            .send_command_no_wait(bar, commands::SetRegistry::new())?;
+            .send_command_no_wait(bar, commands::SetRegistry::new(ctx.vgpu_requested)?)?;
 
         // Wait for GSP-RM to complete initialization, handling boot events inline.
         Self::wait_gsp_boot_events(
