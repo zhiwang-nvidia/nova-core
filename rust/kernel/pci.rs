@@ -450,6 +450,20 @@ impl Device {
         // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
         Class::from_raw(unsafe { (*self.as_raw()).class })
     }
+
+    /// Returns total number of VFs, or `Err(ENODEV)` if none available.
+    pub fn sriov_get_totalvfs(&self) -> Result<u16> {
+        // SAFETY: `self.as_raw()` is a valid pointer to a `struct pci_dev`.
+        let vfs = unsafe { bindings::pci_sriov_get_totalvfs(self.as_raw()) };
+
+        if vfs == 0 {
+            return Err(ENODEV);
+        }
+
+        // `pci_sriov_get_totalvfs` reads from the SR-IOV total_VFs field (u16
+        // in the PCI spec), so non-zero values always fit in u16.
+        Ok(vfs.try_into()?)
+    }
 }
 
 impl Device<device::Core> {
