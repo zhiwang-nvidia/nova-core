@@ -3,10 +3,16 @@
 
 use kernel::{
     bits,
+    device,
     dma::Coherent,
-    io::poll::read_poll_timeout,
+    io::{
+        poll::read_poll_timeout,
+        register::WithBase,
+        Io, //
+    },
     prelude::*,
     time::Delta,
+    transmute::FromBytes,
     types::ScopeGuard, //
 };
 
@@ -14,16 +20,57 @@ use crate::{
     driver::Bar0,
     falcon::{
         gsp::Gsp,
-        Falcon, //
+        sec2::Sec2,
+        Falcon,
+        FalconFbifMemType,
+        FalconFbifTarget,
+        FalconMem,
+        FalconModSelAlgo, //
     },
     fb::FbLayout,
     firmware::gsp::GspFirmware,
     gsp::{
         cmdq::Cmdq,
         commands,
+        fw::MsgFunction,
         GspFwWprMeta, //
     },
+    regs, //
 };
+
+fn read_gsp_fbif_transcfg(bar: Bar0<'_>, ctx_dma: u8) -> Result<regs::NV_PFALCON_FBIF_TRANSCFG> {
+    if ctx_dma >= 8 {
+        return Err(EINVAL);
+    }
+    Ok(bar.read(regs::NV_PFALCON_FBIF_TRANSCFG::of::<Gsp>().at(usize::from(ctx_dma))))
+}
+
+fn write_gsp_fbif_transcfg(
+    bar: Bar0<'_>,
+    ctx_dma: u8,
+    reg: regs::NV_PFALCON_FBIF_TRANSCFG,
+) -> Result {
+    if ctx_dma >= 8 {
+        return Err(EINVAL);
+    }
+    bar.write(WithBase::of::<Gsp>().at(usize::from(ctx_dma)), reg);
+    Ok(())
+}
+
+fn update_gsp_fbif_transcfg(
+    bar: Bar0<'_>,
+    ctx_dma: u8,
+    f: impl FnOnce(regs::NV_PFALCON_FBIF_TRANSCFG) -> regs::NV_PFALCON_FBIF_TRANSCFG,
+) -> Result {
+    if ctx_dma >= 8 {
+        return Err(EINVAL);
+    }
+    bar.update(
+        regs::NV_PFALCON_FBIF_TRANSCFG::of::<Gsp>().at(usize::from(ctx_dma)),
+        f,
+    );
+    Ok(())
+}
 
 impl super::Gsp {
     /// Attempt to boot the GSP.
@@ -96,6 +143,373 @@ impl super::Gsp {
         Ok(unload_guard.dismiss().1)
     }
 
+    /// Wait for GSP boot to complete, handling load-and-execute events inline.
+    ///
+    /// r000 firmware replaces the CPU sequencer with structured boot events.
+    /// When the GSP sends a `LOAD_EXEC_GENERIC_BOOTLOADER` or `LOAD_EXEC_HS_BINARY`
+    /// event, the driver loads the requested firmware onto the GSP falcon, executes
+    /// it, and performs a core resume (reset GSP into RISCV, start SEC2-RTOS to
+    /// resume GSP-RM). The loop runs until `INIT_DONE` arrives.
+    #[expect(dead_code)]
+    #[allow(clippy::too_many_arguments)]
+    fn wait_gsp_boot_events(
+        cmdq: &mut Cmdq,
+        gsp_falcon: &Falcon<'_, Gsp>,
+        sec2_falcon: &Falcon<'_, Sec2>,
+        bar: Bar0<'_>,
+        dev: &device::Device,
+        bootloader_app_version: u32,
+        libos_dma_handle: u64,
+    ) -> Result {
+        loop {
+            let done = cmdq.receive_and_dispatch(
+                Delta::from_secs(10),
+                |function, payload_0, _payload_1| -> Result<bool> {
+                    match function {
+                        MsgFunction::GspInitDone => Ok(true),
+                        MsgFunction::GspLoadExecGenericBootloader => {
+                            Self::handle_load_exec_bootloader(
+                                payload_0,
+                                gsp_falcon,
+                                sec2_falcon,
+                                bar,
+                                dev,
+                                bootloader_app_version,
+                                libos_dma_handle,
+                            )?;
+                            Ok(false)
+                        }
+                        MsgFunction::GspLoadExecHsBinary => {
+                            Self::handle_load_exec_hs_binary(
+                                payload_0,
+                                gsp_falcon,
+                                sec2_falcon,
+                                bar,
+                                dev,
+                                bootloader_app_version,
+                                libos_dma_handle,
+                            )?;
+                            Ok(false)
+                        }
+                        _ => Ok(false),
+                    }
+                },
+            )??;
+
+            if done {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Handle a `GSP_LOAD_EXEC_GENERIC_BOOTLOADER` event.
+    ///
+    /// The GSP firmware sends this event with a bootloader descriptor and the
+    /// aperture metadata needed to DMA the firmware from CPU-controlled memory
+    /// into GSP IMEM and DMEM. Once the image has run to completion, the driver
+    /// performs a core resume to restart GSP-RM.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_load_exec_bootloader(
+        payload: &[u8],
+        gsp_falcon: &Falcon<'_, Gsp>,
+        sec2_falcon: &Falcon<'_, Sec2>,
+        bar: Bar0<'_>,
+        dev: &device::Device,
+        bootloader_app_version: u32,
+        libos_dma_handle: u64,
+    ) -> Result {
+        let params = LoadExecGenericBootloaderParams::from_bytes_prefix(payload)
+            .ok_or(EINVAL)?
+            .0;
+        let dmem_desc_size =
+            u32::try_from(core::mem::size_of::<FalconBlDmemDesc>()).map_err(|_| EOVERFLOW)?;
+        if params.dmem_desc_size != dmem_desc_size {
+            dev_err!(
+                dev,
+                "Unexpected load-exec descriptor size: {} (expected {})\n",
+                params.dmem_desc_size,
+                dmem_desc_size
+            );
+            return Err(EINVAL);
+        }
+
+        let ctx_dma = params.ctx_dma().inspect_err(|_| {
+            dev_err!(
+                dev,
+                "Unsupported load-exec DMA context: {}\n",
+                params.dmem_desc.ctx_dma
+            );
+        })?;
+        let fbif_target = params.fbif_target().inspect_err(|_| {
+            dev_err!(
+                dev,
+                "Unsupported load-exec aperture: addr_space={}, cpu_cache_attrib={}\n",
+                params.addr_space,
+                params.cpu_cache_attrib
+            );
+        })?;
+        let dmem_desc = params.dmem_desc;
+
+        let code_dma_base =
+            u64::from(dmem_desc.code_dma_base_lo) | (u64::from(dmem_desc.code_dma_base_hi) << 32);
+        let data_dma_base =
+            u64::from(dmem_desc.data_dma_base_lo) | (u64::from(dmem_desc.data_dma_base_hi) << 32);
+        dev_dbg!(
+            dev,
+            "Load-exec bootloader: ctx_dma={}, addr_space={}, cpu_cache_attrib={}, code_dma_base={:#x}, data_dma_base={:#x}\n",
+            ctx_dma,
+            params.addr_space,
+            params.cpu_cache_attrib,
+            code_dma_base,
+            data_dma_base
+        );
+
+        gsp_falcon.wait_for_processor_suspend().inspect_err(|_| {
+            dev_err!(
+                dev,
+                "Timeout waiting for GSP suspend (mbox0={:#x})\n",
+                gsp_falcon.read_mailbox0()
+            );
+        })?;
+
+        gsp_falcon.reset()?;
+
+        gsp_falcon.dma_reset();
+        let saved_fbif_transcfg = read_gsp_fbif_transcfg(bar, ctx_dma)?;
+        update_gsp_fbif_transcfg(bar, ctx_dma, |v| {
+            v.with_target(fbif_target)
+                .with_mem_type(FalconFbifMemType::Physical)
+        })?;
+
+        let load_result = (|| -> Result {
+            if dmem_desc.non_secure_code_size > 0 {
+                gsp_falcon.raw_dma_transfer(
+                    ctx_dma,
+                    code_dma_base,
+                    FalconMem::ImemNonSecure,
+                    dmem_desc.non_secure_code_off,
+                    dmem_desc.non_secure_code_off,
+                    dmem_desc.non_secure_code_size,
+                )?;
+            }
+
+            if dmem_desc.secure_code_size > 0 {
+                gsp_falcon.raw_dma_transfer(
+                    ctx_dma,
+                    code_dma_base,
+                    FalconMem::ImemSecure,
+                    dmem_desc.secure_code_off,
+                    dmem_desc.secure_code_off,
+                    dmem_desc.secure_code_size,
+                )?;
+            }
+
+            if dmem_desc.data_size > 0 {
+                gsp_falcon.raw_dma_transfer(
+                    ctx_dma,
+                    data_dma_base,
+                    FalconMem::Dmem,
+                    0,
+                    0,
+                    dmem_desc.data_size,
+                )?;
+            }
+
+            bar.write(
+                WithBase::of::<Gsp>(),
+                regs::NV_PFALCON_FALCON_BOOTVEC::zeroed().with_value(dmem_desc.code_entry_point),
+            );
+
+            gsp_falcon.start()?;
+
+            gsp_falcon.wait_till_halted().inspect_err(|_| {
+                dev_err!(
+                    dev,
+                    "Timeout waiting for firmware to halt (mbox0={:#x})\n",
+                    gsp_falcon.read_mailbox0()
+                );
+            })?;
+
+            Ok(())
+        })();
+        write_gsp_fbif_transcfg(bar, ctx_dma, saved_fbif_transcfg)?;
+        load_result?;
+
+        // Core resume: restart GSP-RM via SEC2.
+        gsp_falcon.reset()?;
+
+        gsp_falcon.write_mailboxes(
+            Some(libos_dma_handle as u32),
+            Some((libos_dma_handle >> 32) as u32),
+        );
+
+        sec2_falcon.start()?;
+
+        gsp_falcon
+            .check_reload_completed(Delta::from_secs(2))
+            .inspect_err(|_| {
+                let mbox0 = sec2_falcon.read_mailbox0();
+                dev_err!(
+                    dev,
+                    "Timeout waiting for SEC2 to resume GSP-RM (SEC2 mbox0={:#x})\n",
+                    mbox0
+                );
+            })?;
+
+        let sec2_mbox0 = sec2_falcon.read_mailbox0();
+        if sec2_mbox0 != 0 {
+            dev_err!(
+                dev,
+                "SEC2 reported error during core resume: {:#x}\n",
+                sec2_mbox0
+            );
+            return Err(EIO);
+        }
+
+        gsp_falcon.write_os_version(bootloader_app_version);
+
+        if !gsp_falcon.is_riscv_active() {
+            dev_err!(dev, "GSP RISC-V not active after core resume\n");
+            return Err(EIO);
+        }
+
+        Ok(())
+    }
+
+    /// Handle a `GSP_LOAD_EXEC_HS_BINARY` event.
+    ///
+    /// Similar to the generic bootloader handler, but loads a high-security (HS)
+    /// binary from framebuffer memory. The HS binary requires PKC signature
+    /// validation via BROM registers before execution.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_load_exec_hs_binary(
+        payload: &[u8],
+        gsp_falcon: &Falcon<'_, Gsp>,
+        sec2_falcon: &Falcon<'_, Sec2>,
+        bar: Bar0<'_>,
+        dev: &device::Device,
+        bootloader_app_version: u32,
+        libos_dma_handle: u64,
+    ) -> Result {
+        let params = HsBinaryParams::from_bytes_prefix(payload).ok_or(EINVAL)?.0;
+
+        gsp_falcon.wait_for_processor_suspend().inspect_err(|_| {
+            dev_err!(
+                dev,
+                "Timeout waiting for GSP suspend (mbox0={:#x})\n",
+                gsp_falcon.read_mailbox0()
+            );
+        })?;
+
+        gsp_falcon.reset()?;
+
+        gsp_falcon.dma_reset();
+        bar.update(regs::NV_PFALCON_FBIF_TRANSCFG::of::<Gsp>().at(0), |v| {
+            v.with_target(FalconFbifTarget::LocalFb)
+                .with_mem_type(FalconFbifMemType::Physical)
+                .with_engine_id_flag(true)
+        });
+
+        if params.ucode_imem_size > 0 {
+            gsp_falcon.raw_dma_transfer(
+                0,
+                params.imem_phys_addr,
+                FalconMem::ImemSecure,
+                params.ucode_imem_va,
+                params.ucode_imem_pa,
+                params.ucode_imem_size,
+            )?;
+        }
+
+        if params.ucode_dmem_size > 0 {
+            let dmem_mem_off = if params.ucode_dmem_va == 0xFFFFFFFF {
+                0
+            } else {
+                params.ucode_dmem_va
+            };
+            gsp_falcon.raw_dma_transfer(
+                0,
+                params.dmem_phys_addr,
+                FalconMem::Dmem,
+                dmem_mem_off,
+                params.ucode_dmem_pa,
+                params.ucode_dmem_size,
+            )?;
+        }
+
+        bar.write(
+            WithBase::of::<Gsp>().at(0),
+            regs::NV_PFALCON2_FALCON_BROM_PARAADDR::zeroed().with_value(params.hs_sig_dmem_addr),
+        );
+        bar.write(
+            WithBase::of::<Gsp>(),
+            regs::NV_PFALCON2_FALCON_BROM_ENGIDMASK::zeroed().with_value(params.engine_id_mask),
+        );
+        bar.write(
+            WithBase::of::<Gsp>(),
+            regs::NV_PFALCON2_FALCON_BROM_CURR_UCODE_ID::zeroed()
+                .with_ucode_id(params.ucode_id as u8),
+        );
+        bar.write(
+            WithBase::of::<Gsp>(),
+            regs::NV_PFALCON2_FALCON_MOD_SEL::zeroed().with_algo(FalconModSelAlgo::Rsa3k),
+        );
+
+        gsp_falcon.write_mailboxes(Some(0xdead), None);
+
+        bar.write(
+            WithBase::of::<Gsp>(),
+            regs::NV_PFALCON_FALCON_BOOTVEC::zeroed().with_value(params.ucode_imem_va),
+        );
+
+        gsp_falcon.start()?;
+        gsp_falcon.wait_till_halted().inspect_err(|_| {
+            dev_err!(
+                dev,
+                "Timeout waiting for HS binary to halt (mbox0={:#x})\n",
+                gsp_falcon.read_mailbox0()
+            );
+        })?;
+
+        // Core resume: restart GSP-RM via SEC2.
+        gsp_falcon.reset()?;
+        gsp_falcon.write_mailboxes(
+            Some(libos_dma_handle as u32),
+            Some((libos_dma_handle >> 32) as u32),
+        );
+        sec2_falcon.start()?;
+
+        gsp_falcon
+            .check_reload_completed(Delta::from_secs(2))
+            .inspect_err(|_| {
+                let mbox0 = sec2_falcon.read_mailbox0();
+                dev_err!(
+                    dev,
+                    "Timeout waiting for SEC2 to resume GSP-RM (SEC2 mbox0={:#x})\n",
+                    mbox0
+                );
+            })?;
+
+        let sec2_mbox0 = sec2_falcon.read_mailbox0();
+        if sec2_mbox0 != 0 {
+            dev_err!(
+                dev,
+                "SEC2 reported error during core resume: {:#x}\n",
+                sec2_mbox0
+            );
+            return Err(EIO);
+        }
+
+        gsp_falcon.write_os_version(bootloader_app_version);
+
+        if !gsp_falcon.is_riscv_active() {
+            dev_err!(dev, "GSP RISC-V not active after core resume\n");
+            return Err(EIO);
+        }
+
+        Ok(())
+    }
+
     /// Shut down the GSP and wait until it is offline.
     fn shutdown_gsp(
         cmdq: &Cmdq,
@@ -156,3 +570,103 @@ impl super::Gsp {
         res.inspect(|()| dev_info!(dev, "GSP successfully unloaded\n"))
     }
 }
+
+/// Falcon bootloader DMEM descriptor (RM_FLCN_BL_DMEM_DESC).
+///
+/// This is nested within the `GSP_LOAD_EXEC_GENERIC_BOOTLOADER` payload and
+/// describes the firmware image to be loaded by the host into the GSP falcon.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct FalconBlDmemDesc {
+    _reserved: [u32; 4],
+    _signature: [u32; 4],
+    ctx_dma: u32,
+    code_dma_base_lo: u32,
+    code_dma_base_hi: u32,
+    non_secure_code_off: u32,
+    non_secure_code_size: u32,
+    secure_code_off: u32,
+    secure_code_size: u32,
+    code_entry_point: u32,
+    data_dma_base_lo: u32,
+    data_dma_base_hi: u32,
+    data_size: u32,
+    _argc: u32,
+    _argv: u32,
+}
+
+// SAFETY: This struct only contains integer types for which all bit patterns are valid.
+unsafe impl FromBytes for FalconBlDmemDesc {}
+
+/// Parameters for loading and executing the generic bootloader.
+///
+/// Sent by GSP-RM as the payload of `GSP_LOAD_EXEC_GENERIC_BOOTLOADER`.
+/// The descriptor carries the code and data addresses, while `addr_space` and
+/// `cpu_cache_attrib` tell the CPU side how to configure the selected FBIF
+/// aperture.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct LoadExecGenericBootloaderParams {
+    dmem_desc: FalconBlDmemDesc,
+    dmem_desc_size: u32,
+    addr_space: u32,
+    cpu_cache_attrib: u32,
+    _reserved: [u32; 4],
+}
+
+impl LoadExecGenericBootloaderParams {
+    const ADDR_SYSMEM: u32 = 1;
+    const ADDR_FBMEM: u32 = 2;
+    const NV_MEMORY_CACHED: u32 = 0;
+    const NV_MEMORY_UNCACHED: u32 = 1;
+    const NUM_CTX_DMA: usize = 8;
+
+    fn ctx_dma(&self) -> Result<u8> {
+        let ctx_dma = u8::try_from(self.dmem_desc.ctx_dma).map_err(|_| EINVAL)?;
+
+        if usize::from(ctx_dma) >= Self::NUM_CTX_DMA {
+            return Err(EINVAL);
+        }
+
+        Ok(ctx_dma)
+    }
+
+    fn fbif_target(&self) -> Result<FalconFbifTarget> {
+        match (self.addr_space, self.cpu_cache_attrib) {
+            (Self::ADDR_FBMEM, _) => Ok(FalconFbifTarget::LocalFb),
+            (Self::ADDR_SYSMEM, Self::NV_MEMORY_CACHED) => Ok(FalconFbifTarget::CoherentSysmem),
+            (Self::ADDR_SYSMEM, Self::NV_MEMORY_UNCACHED) => {
+                Ok(FalconFbifTarget::NoncoherentSysmem)
+            }
+            _ => Err(EINVAL),
+        }
+    }
+}
+
+// SAFETY: This struct only contains integer types for which all bit patterns are valid.
+unsafe impl FromBytes for LoadExecGenericBootloaderParams {}
+
+/// Parameters for loading and executing an HS (High-Security) binary.
+///
+/// Sent by GSP-RM as the payload of `GSP_LOAD_EXEC_HS_BINARY`. The firmware
+/// code and data are located in framebuffer memory at the given physical addresses.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct HsBinaryParams {
+    imem_phys_addr: u64,
+    dmem_phys_addr: u64,
+    _reserved64: [u64; 2],
+    ucode_imem_va: u32,
+    ucode_imem_pa: u32,
+    ucode_imem_size: u32,
+    ucode_dmem_va: u32,
+    ucode_dmem_pa: u32,
+    ucode_dmem_size: u32,
+    hs_sig_dmem_addr: u32,
+    engine_id_mask: u32,
+    ucode_id: u32,
+    _reserved32: [u32; 3],
+}
+
+// SAFETY: This struct only contains integer types for which all bit patterns are valid.
+unsafe impl FromBytes for HsBinaryParams {}
