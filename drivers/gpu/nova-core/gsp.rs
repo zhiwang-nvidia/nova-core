@@ -21,8 +21,6 @@ use kernel::{
 pub(crate) mod cmdq;
 pub(crate) mod commands;
 mod fw;
-#[expect(dead_code)]
-mod sequencer;
 
 pub(crate) use fw::{
     GspFwWprMeta,
