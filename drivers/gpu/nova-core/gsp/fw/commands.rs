@@ -19,7 +19,10 @@ use crate::{
     num::IntoSafeCast, //
 };
 
-use super::r570;
+use super::{
+    r000,
+    r570, //
+};
 
 /// Payload of the `GspSetSystemInfo` command.
 #[repr(transparent)]
@@ -123,7 +126,7 @@ unsafe impl FromBytes for PackedRegistryTable {}
 /// Payload of the `GetGspStaticInfo` command and message.
 #[repr(transparent)]
 #[derive(Zeroable)]
-pub(crate) struct GspStaticConfigInfo(r570::GspStaticConfigInfo_t);
+pub(crate) struct GspStaticConfigInfo(r000::GspStaticConfigInfo_t);
 
 impl GspStaticConfigInfo {
     /// Returns a bytes array containing the (hopefully) zero-terminated name of this GPU.
@@ -134,7 +137,7 @@ impl GspStaticConfigInfo {
     /// Returns an iterator over valid FB regions from GSP firmware data.
     fn fb_regions(
         &self,
-    ) -> impl Iterator<Item = &r570::NV2080_CTRL_CMD_FB_GET_FB_REGION_FB_REGION_INFO> {
+    ) -> impl Iterator<Item = &r000::NV2080_CTRL_CMD_FB_GET_FB_REGION_FB_REGION_INFO> {
         let fb_info = &self.0.fbRegionInfoParams;
         fb_info
             .fbRegion
