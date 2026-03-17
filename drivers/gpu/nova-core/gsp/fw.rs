@@ -250,6 +250,8 @@ pub(crate) enum MsgFunction {
     // Event codes
     GspInitDone = r570::NV_VGPU_MSG_EVENT_GSP_INIT_DONE,
     GspLockdownNotice = r570::NV_VGPU_MSG_EVENT_GSP_LOCKDOWN_NOTICE,
+    GspLoadExecGenericBootloader = r000::NV_VGPU_MSG_EVENT_GSP_LOAD_EXEC_GENERIC_BOOTLOADER,
+    GspLoadExecHsBinary = r000::NV_VGPU_MSG_EVENT_GSP_LOAD_EXEC_HS_BINARY,
     GspPostNoCat = r570::NV_VGPU_MSG_EVENT_GSP_POST_NOCAT_RECORD,
     GspRunCpuSequencer = r570::NV_VGPU_MSG_EVENT_GSP_RUN_CPU_SEQUENCER,
     MmuFaultQueued = r570::NV_VGPU_MSG_EVENT_MMU_FAULT_QUEUED,
@@ -291,6 +293,10 @@ impl TryFrom<u32> for MsgFunction {
             // Event codes
             r570::NV_VGPU_MSG_EVENT_GSP_INIT_DONE => Ok(MsgFunction::GspInitDone),
             r570::NV_VGPU_MSG_EVENT_GSP_LOCKDOWN_NOTICE => Ok(MsgFunction::GspLockdownNotice),
+            r000::NV_VGPU_MSG_EVENT_GSP_LOAD_EXEC_GENERIC_BOOTLOADER => {
+                Ok(MsgFunction::GspLoadExecGenericBootloader)
+            }
+            r000::NV_VGPU_MSG_EVENT_GSP_LOAD_EXEC_HS_BINARY => Ok(MsgFunction::GspLoadExecHsBinary),
             r570::NV_VGPU_MSG_EVENT_GSP_POST_NOCAT_RECORD => Ok(MsgFunction::GspPostNoCat),
             r570::NV_VGPU_MSG_EVENT_GSP_RUN_CPU_SEQUENCER => Ok(MsgFunction::GspRunCpuSequencer),
             r570::NV_VGPU_MSG_EVENT_MMU_FAULT_QUEUED => Ok(MsgFunction::MmuFaultQueued),
@@ -310,13 +316,15 @@ impl MsgFunction {
         matches!(
             self,
             Self::GspInitDone
+                | Self::GspLockdownNotice
+                | Self::GspLoadExecGenericBootloader
+                | Self::GspLoadExecHsBinary
                 | Self::GspRunCpuSequencer
                 | Self::PostEvent
                 | Self::RcTriggered
                 | Self::MmuFaultQueued
                 | Self::OsErrorLog
                 | Self::GspPostNoCat
-                | Self::GspLockdownNotice
                 | Self::UcodeLibOsPrint //
         )
     }
