@@ -565,6 +565,7 @@ impl Cmdq {
     /// Receive a message from the GSP.
     ///
     /// See [`CmdqInner::receive_msg`] for details.
+    #[expect(dead_code)]
     pub(crate) fn receive_msg<M: MessageFromGsp>(&self, timeout: Delta) -> Result<M>
     where
         // This allows all error types, including `Infallible`, to be used for `M::InitError`.
