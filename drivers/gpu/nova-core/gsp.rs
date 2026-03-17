@@ -26,8 +26,6 @@ pub(crate) mod commands;
 mod fw;
 mod nvkv;
 mod regs;
-#[expect(dead_code)]
-mod sequencer;
 
 pub(crate) use fw::{
     GspFmcBootParams,
