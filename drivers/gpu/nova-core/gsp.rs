@@ -136,13 +136,23 @@ impl LogBuffer {
     }
 }
 
+/// Log buffers used by GSP-RM for debug logging.
+///
+/// r000+ firmware expects log buffers for all LIBOS3 tasks. Each buffer is
+/// registered as a libos memory region entry, identified by its id8 name.
 struct LogBuffers {
-    /// Init log buffer.
+    /// Init task log buffer (LOGINIT, 64KB).
     loginit: LogBuffer,
-    /// Interrupts log buffer.
+    /// Interrupt task log buffer (LOGINTR, 64KB).
     logintr: LogBuffer,
-    /// RM log buffer.
+    /// RM task log buffer (LOGRM, 64KB).
     logrm: LogBuffer,
+    /// MNOC task log buffer (LOGMNOC, 64KB).
+    logmnoc: LogBuffer,
+    /// Root task log buffer (LOGROOT, 4KB).
+    logroot: LogBuffer,
+    /// RM state monitor task log buffer (LOGRMON, 4KB).
+    logrmon: LogBuffer,
 }
 
 /// GSP runtime data.
@@ -158,6 +168,8 @@ pub(crate) struct Gsp {
     pub(crate) cmdq: Cmdq,
     /// RM arguments.
     rmargs: Coherent<GspArgumentsPadded>,
+    /// RM state monitor buffer (required by r000+ GSP-RM for diagnostics).
+    rm_state_monitor: Coherent<[u8; GSP_PAGE_SIZE]>,
 }
 
 impl Gsp {
@@ -169,13 +181,14 @@ impl Gsp {
             let loginit = LogBuffer::new(dev)?;
             let logintr = LogBuffer::new(dev)?;
             let logrm = LogBuffer::new(dev)?;
+            let logmnoc = LogBuffer::new(dev)?;
+            let logroot = LogBuffer::new(dev)?;
+            let logrmon = LogBuffer::new(dev)?;
 
-            // Initialise the logging structures. The OpenRM equivalents are in:
-            // _kgspInitLibosLoggingStructures (allocates memory for buffers)
-            // kgspSetupLibosInitArgs_IMPL (creates pLibosInitArgs[] array)
             Ok(try_pin_init!(Self {
                 cmdq <- Cmdq::new(dev),
                 rmargs: Coherent::init(dev, GFP_KERNEL, GspArgumentsPadded::new(&cmdq))?,
+                rm_state_monitor: Coherent::zeroed(dev, GFP_KERNEL)?,
                 libos: {
                     let mut libos = CoherentBox::zeroed_slice(
                         dev,
@@ -195,6 +208,9 @@ impl Gsp {
                         loginit,
                         logintr,
                         logrm,
+                        logmnoc,
+                        logroot,
+                        logrmon,
                     };
 
                     #[allow(static_mut_refs)]
@@ -211,6 +227,9 @@ impl Gsp {
                         dir.read_binary_file(c"loginit", &logs.loginit.0);
                         dir.read_binary_file(c"logintr", &logs.logintr.0);
                         dir.read_binary_file(c"logrm", &logs.logrm.0);
+                        dir.read_binary_file(c"logmnoc", &logs.logmnoc.0);
+                        dir.read_binary_file(c"logroot", &logs.logroot.0);
+                        dir.read_binary_file(c"logrmon", &logs.logrmon.0);
                     })
                 },
             }))
