@@ -28,11 +28,19 @@ use crate::{
         FalconModSelAlgo, //
     },
     fb::FbLayout,
-    firmware::gsp::GspFirmware,
+    firmware::{
+        bindata::request_ucodes_firmware,
+        gsp::GspFirmware,
+        radix3::Radix3, //
+    },
     gsp::{
         cmdq::Cmdq,
         commands,
-        fw::MsgFunction,
+        fw::{
+            BindataArgs,
+            GspArgumentsPadded,
+            MsgFunction, //
+        },
         GspFwWprMeta, //
     },
     regs, //
@@ -94,6 +102,39 @@ impl super::Gsp {
 
         let gsp_fw = KBox::pin_init(GspFirmware::new(dev, chipset), GFP_KERNEL)?;
 
+        dev_info!(
+            dev,
+            "GSP firmware: {} (internal version: {})\n",
+            gsp_fw.fw_path.to_str().unwrap_or("unknown"),
+            gsp_fw.fw_version.to_str().unwrap_or("unknown")
+        );
+
+        // Load the optional ucodes firmware and map it through the radix3 page-table format
+        // expected by GSP-RM. The mapping must stay alive until initialization has completed.
+        let ucodes_radix3 = match request_ucodes_firmware(dev, chipset)? {
+            Some(ucodes) => Some(KBox::pin_init(
+                Radix3::new(dev, ucodes.as_slice()),
+                GFP_KERNEL,
+            )?),
+            None => {
+                dev_dbg!(
+                    dev,
+                    "ucodes firmware not found; bindata arguments remain empty\n"
+                );
+                None
+            }
+        };
+
+        let bindata = if let Some(radix3) = ucodes_radix3.as_ref() {
+            Some(BindataArgs {
+                radix3: radix3.dma_handle(),
+                size: radix3.size.try_into().map_err(|_| EOVERFLOW)?,
+            })
+        } else {
+            None
+        };
+        GspArgumentsPadded::set_bindata(&self.rmargs, bindata.as_ref());
+
         let fb_layout = FbLayout::new(chipset, bar, &gsp_fw, ctx.vgpu.state())?;
         dev_dbg!(dev, "{:#x?}\n", fb_layout);
 
@@ -135,10 +176,16 @@ impl super::Gsp {
         self.cmdq
             .send_command_no_wait(bar, commands::SetRegistry::new(ctx.vgpu.state())?)?;
 
-        hal.post_boot(&self, ctx, &gsp_fw)?;
-
-        // Wait until GSP is fully initialized.
-        commands::wait_gsp_init_done(&self.cmdq)?;
+        // Wait for GSP-RM to complete initialization, handling boot events inline.
+        Self::wait_gsp_boot_events(
+            &self.cmdq,
+            gsp_falcon,
+            ctx.sec2_falcon,
+            bar,
+            dev,
+            gsp_fw.bootloader.app_version,
+            self.libos.dma_handle(),
+        )?;
 
         Ok(unload_guard.dismiss().1)
     }
@@ -150,10 +197,9 @@ impl super::Gsp {
     /// event, the driver loads the requested firmware onto the GSP falcon, executes
     /// it, and performs a core resume (reset GSP into RISCV, start SEC2-RTOS to
     /// resume GSP-RM). The loop runs until `INIT_DONE` arrives.
-    #[expect(dead_code)]
     #[allow(clippy::too_many_arguments)]
     fn wait_gsp_boot_events(
-        cmdq: &mut Cmdq,
+        cmdq: &Cmdq,
         gsp_falcon: &Falcon<'_, Gsp>,
         sec2_falcon: &Falcon<'_, Sec2>,
         bar: Bar0<'_>,

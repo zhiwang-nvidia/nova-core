@@ -27,8 +27,7 @@ use crate::{
             bootloader::FwsecFirmwareWithBl,
             FwsecCommand,
             FwsecFirmware, //
-        },
-        gsp::GspFirmware, //
+        }, //
     },
     gpu::Chipset,
     gsp::{
@@ -36,7 +35,6 @@ use crate::{
             GspHal,
             UnloadBundle, //
         },
-        sequencer::GspSequencer,
         Gsp,
         GspBootContext,
         GspFwWprMeta, //
@@ -307,17 +305,6 @@ impl GspHal for Tu102 {
         )?;
 
         Ok(unload_guard.dismiss())
-    }
-
-    fn post_boot(
-        &self,
-        gsp: &Gsp,
-        ctx: &mut GspBootContext<'_, '_>,
-        gsp_fw: &GspFirmware,
-    ) -> Result {
-        GspSequencer::run(&gsp.cmdq, ctx, &gsp.libos, gsp_fw.bootloader.app_version)?;
-
-        Ok(())
     }
 }
 

@@ -26,6 +26,7 @@ pub(crate) mod commands;
 mod fw;
 mod nvkv;
 mod regs;
+#[expect(dead_code)]
 mod sequencer;
 
 pub(crate) use fw::{
@@ -187,8 +188,12 @@ impl Gsp {
 
             Ok(try_pin_init!(Self {
                 cmdq <- Cmdq::new(dev),
-                rmargs: Coherent::init(dev, GFP_KERNEL, GspArgumentsPadded::new(&cmdq))?,
                 rm_state_monitor: Coherent::zeroed(dev, GFP_KERNEL)?,
+                rmargs: Coherent::init(
+                    dev,
+                    GFP_KERNEL,
+                    GspArgumentsPadded::new(&cmdq, None, rm_state_monitor),
+                )?,
                 libos: {
                     let mut libos = CoherentBox::zeroed_slice(
                         dev,
@@ -199,7 +204,10 @@ impl Gsp {
                     libos.init_at(0, LibosMemoryRegionInitArgument::new("LOGINIT", &loginit.0))?;
                     libos.init_at(1, LibosMemoryRegionInitArgument::new("LOGINTR", &logintr.0))?;
                     libos.init_at(2, LibosMemoryRegionInitArgument::new("LOGRM", &logrm.0))?;
-                    libos.init_at(3, LibosMemoryRegionInitArgument::new("RMARGS", rmargs))?;
+                    libos.init_at(3, LibosMemoryRegionInitArgument::new("LOGMNOC", &logmnoc.0))?;
+                    libos.init_at(4, LibosMemoryRegionInitArgument::new("LOGROOT", &logroot.0))?;
+                    libos.init_at(5, LibosMemoryRegionInitArgument::new("LOGRMON", &logrmon.0))?;
+                    libos.init_at(6, LibosMemoryRegionInitArgument::new("RMARGS", rmargs))?;
 
                     libos.into()
                 },

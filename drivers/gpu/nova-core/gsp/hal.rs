@@ -12,7 +12,6 @@ use kernel::{
 
 use crate::{
     fb::FbLayout,
-    firmware::gsp::GspFirmware,
     gpu::{
         Architecture,
         Chipset, //
@@ -47,19 +46,6 @@ pub(super) trait GspHal: Send {
         fb_layout: &FbLayout,
         wpr_meta: &Coherent<GspFwWprMeta>,
     ) -> Result<Option<crate::gsp::UnloadBundle>>;
-
-    /// Performs HAL-specific post-GSP boot tasks.
-    ///
-    /// This method is called by the GSP boot code after the GSP is confirmed to be running, and
-    /// after the initialization commands have been pushed onto its queue.
-    fn post_boot(
-        &self,
-        _gsp: &Gsp,
-        _ctx: &mut GspBootContext<'_, '_>,
-        _gsp_fw: &GspFirmware,
-    ) -> Result {
-        Ok(())
-    }
 }
 
 /// Returns the names of the firmware files required to boot the GSP of `chipset`, in addition to
