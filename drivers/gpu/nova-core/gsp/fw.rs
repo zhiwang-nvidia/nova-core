@@ -5,8 +5,8 @@ pub(crate) mod commands;
 mod r000_00;
 mod r570_144;
 
-// Alias to avoid repeating the version number with every use.
-use r570_144 as bindings;
+use r000_00 as r000;
+use r570_144 as r570;
 
 use core::ops::Range;
 
@@ -55,7 +55,7 @@ use crate::{
 
 /// Maximum size of a single GSP message queue element in bytes.
 pub(crate) const GSP_MSG_QUEUE_ELEMENT_SIZE_MAX: usize =
-    num::u32_as_usize(bindings::GSP_MSG_QUEUE_ELEMENT_SIZE_MAX);
+    num::u32_as_usize(r570::GSP_MSG_QUEUE_ELEMENT_SIZE_MAX);
 
 /// Empty type to group methods related to heap parameters for running the GSP firmware.
 enum GspFwHeapParams {}
@@ -69,17 +69,17 @@ impl GspFwHeapParams {
     fn base_rm_size(chipset: Chipset) -> u64 {
         match chipset.arch() {
             Architecture::Turing | Architecture::Ampere | Architecture::Ada => {
-                u64::from(bindings::GSP_FW_HEAP_PARAM_BASE_RM_SIZE_TU10X)
+                u64::from(r570::GSP_FW_HEAP_PARAM_BASE_RM_SIZE_TU10X)
             }
             Architecture::Hopper | Architecture::BlackwellGB10x | Architecture::BlackwellGB20x => {
-                u64::from(bindings::GSP_FW_HEAP_PARAM_BASE_RM_SIZE_GH100)
+                u64::from(r570::GSP_FW_HEAP_PARAM_BASE_RM_SIZE_GH100)
             }
         }
     }
 
     /// Returns the amount of heap memory required to support a single channel allocation.
     fn client_alloc_size() -> u64 {
-        u64::from(bindings::GSP_FW_HEAP_PARAM_CLIENT_ALLOC_SIZE)
+        u64::from(r570::GSP_FW_HEAP_PARAM_CLIENT_ALLOC_SIZE)
             .align_up(GSP_HEAP_ALIGNMENT)
             .unwrap_or(u64::MAX)
     }
@@ -89,9 +89,8 @@ impl GspFwHeapParams {
     fn management_overhead(fb_size: u64) -> Result<u64> {
         let fb_size_gb = fb_size.div_ceil(u64::SZ_1G);
 
-        u64::from(bindings::GSP_FW_HEAP_PARAM_SIZE_PER_GB_FB)
-            .checked_mul(fb_size_gb)
-            .ok_or(EINVAL)?
+        u64::from(r570::GSP_FW_HEAP_PARAM_SIZE_PER_GB_FB)
+            .saturating_mul(fb_size_gb)
             .align_up(GSP_HEAP_ALIGNMENT)
             .ok_or(EINVAL)
     }
@@ -108,20 +107,18 @@ pub(crate) struct LibosParams {
 impl LibosParams {
     /// Version 2 of the GSP LIBOS (Turing and GA100)
     const LIBOS2: LibosParams = LibosParams {
-        carveout_size: num::u32_as_u64(bindings::GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS2),
-        allowed_heap_size: num::u32_as_u64(bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS2_MIN_MB)
+        carveout_size: num::u32_as_u64(r570::GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS2),
+        allowed_heap_size: num::u32_as_u64(r570::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS2_MIN_MB)
             * u64::SZ_1M
-            ..num::u32_as_u64(bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS2_MAX_MB) * u64::SZ_1M,
+            ..num::u32_as_u64(r570::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS2_MAX_MB) * u64::SZ_1M,
     };
 
     /// Version 3 of the GSP LIBOS (GA102+)
     const LIBOS3: LibosParams = LibosParams {
-        carveout_size: num::u32_as_u64(bindings::GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS3_BAREMETAL),
-        allowed_heap_size: num::u32_as_u64(
-            bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MIN_MB,
-        ) * u64::SZ_1M
-            ..num::u32_as_u64(bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MAX_MB)
-                * u64::SZ_1M,
+        carveout_size: num::u32_as_u64(r570::GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS3_BAREMETAL),
+        allowed_heap_size: num::u32_as_u64(r570::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MIN_MB)
+            * u64::SZ_1M
+            ..num::u32_as_u64(r570::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MAX_MB) * u64::SZ_1M,
     };
 
     /// Returns the libos parameters corresponding to `chipset`.
@@ -135,7 +132,7 @@ impl LibosParams {
 
     /// Returns the WPR heap size to reserve when vGPU is enabled.
     pub(crate) fn vgpu_wpr_heap_size() -> u64 {
-        u64::from(bindings::GSP_FW_HEAP_SIZE_VGPU_DEFAULT)
+        u64::from(r000::GSP_FW_HEAP_SIZE_VGPU_DEFAULT)
     }
 
     /// Returns the amount of memory (in bytes) to allocate for the WPR heap for a framebuffer size
@@ -160,7 +157,7 @@ impl LibosParams {
 /// addresses of the GSP bootloader and firmware.
 #[repr(transparent)]
 pub(crate) struct GspFwWprMeta {
-    inner: bindings::GspFwWprMeta,
+    inner: r570::GspFwWprMeta,
 }
 
 // SAFETY: Padding is explicit and does not contain uninitialized data.
@@ -170,8 +167,8 @@ unsafe impl AsBytes for GspFwWprMeta {}
 // are valid.
 unsafe impl FromBytes for GspFwWprMeta {}
 
-type GspFwWprMetaBootResumeInfo = bindings::GspFwWprMeta__bindgen_ty_1;
-type GspFwWprMetaBootInfo = bindings::GspFwWprMeta__bindgen_ty_1__bindgen_ty_1;
+type GspFwWprMetaBootResumeInfo = r570::GspFwWprMeta__bindgen_ty_1;
+type GspFwWprMetaBootInfo = r570::GspFwWprMeta__bindgen_ty_1__bindgen_ty_1;
 
 impl GspFwWprMeta {
     /// Returns an initializer for a `GspFwWprMeta` suitable for booting `gsp_firmware` using the
@@ -180,10 +177,10 @@ impl GspFwWprMeta {
         gsp_firmware: &'a GspFirmware,
         fb_layout: &'a FbLayout,
     ) -> impl Init<Self> + 'a {
-        let init_inner = init!(bindings::GspFwWprMeta {
+        let init_inner = init!(r570::GspFwWprMeta {
             // CAST: we want to store the bits of `GSP_FW_WPR_META_MAGIC` unmodified.
-            magic: bindings::GSP_FW_WPR_META_MAGIC as u64,
-            revision: u64::from(bindings::GSP_FW_WPR_META_REVISION),
+            magic: r570::GSP_FW_WPR_META_MAGIC as u64,
+            revision: u64::from(r570::GSP_FW_WPR_META_REVISION),
             sysmemAddrOfRadix3Elf: gsp_firmware.radix3_dma_handle(),
             sizeOfRadix3Elf: u64::from_safe_cast(gsp_firmware.size()),
             sysmemAddrOfBootloader: gsp_firmware.bootloader.ucode.dma_handle(),
@@ -229,37 +226,37 @@ impl GspFwWprMeta {
 #[repr(u32)]
 pub(crate) enum MsgFunction {
     // Common function codes
-    AllocChannelDma = bindings::NV_VGPU_MSG_FUNCTION_ALLOC_CHANNEL_DMA,
-    AllocCtxDma = bindings::NV_VGPU_MSG_FUNCTION_ALLOC_CTX_DMA,
-    AllocDevice = bindings::NV_VGPU_MSG_FUNCTION_ALLOC_DEVICE,
-    AllocMemory = bindings::NV_VGPU_MSG_FUNCTION_ALLOC_MEMORY,
-    AllocObject = bindings::NV_VGPU_MSG_FUNCTION_ALLOC_OBJECT,
-    AllocRoot = bindings::NV_VGPU_MSG_FUNCTION_ALLOC_ROOT,
-    BindCtxDma = bindings::NV_VGPU_MSG_FUNCTION_BIND_CTX_DMA,
-    ContinuationRecord = bindings::NV_VGPU_MSG_FUNCTION_CONTINUATION_RECORD,
-    Free = bindings::NV_VGPU_MSG_FUNCTION_FREE,
-    GetGspStaticInfo = bindings::NV_VGPU_MSG_FUNCTION_GET_GSP_STATIC_INFO,
-    GetStaticInfo = bindings::NV_VGPU_MSG_FUNCTION_GET_STATIC_INFO,
-    GspInitPostObjGpu = bindings::NV_VGPU_MSG_FUNCTION_GSP_INIT_POST_OBJGPU,
-    GspRmControl = bindings::NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL,
-    GspSetSystemInfo = bindings::NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO,
-    Log = bindings::NV_VGPU_MSG_FUNCTION_LOG,
-    MapMemory = bindings::NV_VGPU_MSG_FUNCTION_MAP_MEMORY,
-    Nop = bindings::NV_VGPU_MSG_FUNCTION_NOP,
-    SetGuestSystemInfo = bindings::NV_VGPU_MSG_FUNCTION_SET_GUEST_SYSTEM_INFO,
-    SetRegistry = bindings::NV_VGPU_MSG_FUNCTION_SET_REGISTRY,
-    UnloadingGuestDriver = bindings::NV_VGPU_MSG_FUNCTION_UNLOADING_GUEST_DRIVER,
+    AllocChannelDma = r570::NV_VGPU_MSG_FUNCTION_ALLOC_CHANNEL_DMA,
+    AllocCtxDma = r570::NV_VGPU_MSG_FUNCTION_ALLOC_CTX_DMA,
+    AllocDevice = r570::NV_VGPU_MSG_FUNCTION_ALLOC_DEVICE,
+    AllocMemory = r570::NV_VGPU_MSG_FUNCTION_ALLOC_MEMORY,
+    AllocObject = r570::NV_VGPU_MSG_FUNCTION_ALLOC_OBJECT,
+    AllocRoot = r570::NV_VGPU_MSG_FUNCTION_ALLOC_ROOT,
+    BindCtxDma = r570::NV_VGPU_MSG_FUNCTION_BIND_CTX_DMA,
+    ContinuationRecord = r570::NV_VGPU_MSG_FUNCTION_CONTINUATION_RECORD,
+    Free = r570::NV_VGPU_MSG_FUNCTION_FREE,
+    GetGspStaticInfo = r570::NV_VGPU_MSG_FUNCTION_GET_GSP_STATIC_INFO,
+    GetStaticInfo = r570::NV_VGPU_MSG_FUNCTION_GET_STATIC_INFO,
+    GspInitPostObjGpu = r570::NV_VGPU_MSG_FUNCTION_GSP_INIT_POST_OBJGPU,
+    GspRmControl = r570::NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL,
+    GspSetSystemInfo = r570::NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO,
+    Log = r570::NV_VGPU_MSG_FUNCTION_LOG,
+    MapMemory = r570::NV_VGPU_MSG_FUNCTION_MAP_MEMORY,
+    Nop = r570::NV_VGPU_MSG_FUNCTION_NOP,
+    SetGuestSystemInfo = r570::NV_VGPU_MSG_FUNCTION_SET_GUEST_SYSTEM_INFO,
+    SetRegistry = r570::NV_VGPU_MSG_FUNCTION_SET_REGISTRY,
+    UnloadingGuestDriver = r570::NV_VGPU_MSG_FUNCTION_UNLOADING_GUEST_DRIVER,
 
     // Event codes
-    GspInitDone = bindings::NV_VGPU_MSG_EVENT_GSP_INIT_DONE,
-    GspLockdownNotice = bindings::NV_VGPU_MSG_EVENT_GSP_LOCKDOWN_NOTICE,
-    GspPostNoCat = bindings::NV_VGPU_MSG_EVENT_GSP_POST_NOCAT_RECORD,
-    GspRunCpuSequencer = bindings::NV_VGPU_MSG_EVENT_GSP_RUN_CPU_SEQUENCER,
-    MmuFaultQueued = bindings::NV_VGPU_MSG_EVENT_MMU_FAULT_QUEUED,
-    OsErrorLog = bindings::NV_VGPU_MSG_EVENT_OS_ERROR_LOG,
-    PostEvent = bindings::NV_VGPU_MSG_EVENT_POST_EVENT,
-    RcTriggered = bindings::NV_VGPU_MSG_EVENT_RC_TRIGGERED,
-    UcodeLibOsPrint = bindings::NV_VGPU_MSG_EVENT_UCODE_LIBOS_PRINT,
+    GspInitDone = r570::NV_VGPU_MSG_EVENT_GSP_INIT_DONE,
+    GspLockdownNotice = r570::NV_VGPU_MSG_EVENT_GSP_LOCKDOWN_NOTICE,
+    GspPostNoCat = r570::NV_VGPU_MSG_EVENT_GSP_POST_NOCAT_RECORD,
+    GspRunCpuSequencer = r570::NV_VGPU_MSG_EVENT_GSP_RUN_CPU_SEQUENCER,
+    MmuFaultQueued = r570::NV_VGPU_MSG_EVENT_MMU_FAULT_QUEUED,
+    OsErrorLog = r570::NV_VGPU_MSG_EVENT_OS_ERROR_LOG,
+    PostEvent = r570::NV_VGPU_MSG_EVENT_POST_EVENT,
+    RcTriggered = r570::NV_VGPU_MSG_EVENT_RC_TRIGGERED,
+    UcodeLibOsPrint = r570::NV_VGPU_MSG_EVENT_UCODE_LIBOS_PRINT,
 }
 
 impl TryFrom<u32> for MsgFunction {
@@ -268,47 +265,39 @@ impl TryFrom<u32> for MsgFunction {
     fn try_from(value: u32) -> Result<MsgFunction> {
         match value {
             // Common function codes
-            bindings::NV_VGPU_MSG_FUNCTION_ALLOC_CHANNEL_DMA => Ok(MsgFunction::AllocChannelDma),
-            bindings::NV_VGPU_MSG_FUNCTION_ALLOC_CTX_DMA => Ok(MsgFunction::AllocCtxDma),
-            bindings::NV_VGPU_MSG_FUNCTION_ALLOC_DEVICE => Ok(MsgFunction::AllocDevice),
-            bindings::NV_VGPU_MSG_FUNCTION_ALLOC_MEMORY => Ok(MsgFunction::AllocMemory),
-            bindings::NV_VGPU_MSG_FUNCTION_ALLOC_OBJECT => Ok(MsgFunction::AllocObject),
-            bindings::NV_VGPU_MSG_FUNCTION_ALLOC_ROOT => Ok(MsgFunction::AllocRoot),
-            bindings::NV_VGPU_MSG_FUNCTION_BIND_CTX_DMA => Ok(MsgFunction::BindCtxDma),
-            bindings::NV_VGPU_MSG_FUNCTION_CONTINUATION_RECORD => {
-                Ok(MsgFunction::ContinuationRecord)
-            }
-            bindings::NV_VGPU_MSG_FUNCTION_FREE => Ok(MsgFunction::Free),
-            bindings::NV_VGPU_MSG_FUNCTION_GET_GSP_STATIC_INFO => Ok(MsgFunction::GetGspStaticInfo),
-            bindings::NV_VGPU_MSG_FUNCTION_GET_STATIC_INFO => Ok(MsgFunction::GetStaticInfo),
-            bindings::NV_VGPU_MSG_FUNCTION_GSP_INIT_POST_OBJGPU => {
-                Ok(MsgFunction::GspInitPostObjGpu)
-            }
-            bindings::NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL => Ok(MsgFunction::GspRmControl),
-            bindings::NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO => Ok(MsgFunction::GspSetSystemInfo),
-            bindings::NV_VGPU_MSG_FUNCTION_LOG => Ok(MsgFunction::Log),
-            bindings::NV_VGPU_MSG_FUNCTION_MAP_MEMORY => Ok(MsgFunction::MapMemory),
-            bindings::NV_VGPU_MSG_FUNCTION_NOP => Ok(MsgFunction::Nop),
-            bindings::NV_VGPU_MSG_FUNCTION_SET_GUEST_SYSTEM_INFO => {
-                Ok(MsgFunction::SetGuestSystemInfo)
-            }
-            bindings::NV_VGPU_MSG_FUNCTION_SET_REGISTRY => Ok(MsgFunction::SetRegistry),
-            bindings::NV_VGPU_MSG_FUNCTION_UNLOADING_GUEST_DRIVER => {
+            r570::NV_VGPU_MSG_FUNCTION_ALLOC_CHANNEL_DMA => Ok(MsgFunction::AllocChannelDma),
+            r570::NV_VGPU_MSG_FUNCTION_ALLOC_CTX_DMA => Ok(MsgFunction::AllocCtxDma),
+            r570::NV_VGPU_MSG_FUNCTION_ALLOC_DEVICE => Ok(MsgFunction::AllocDevice),
+            r570::NV_VGPU_MSG_FUNCTION_ALLOC_MEMORY => Ok(MsgFunction::AllocMemory),
+            r570::NV_VGPU_MSG_FUNCTION_ALLOC_OBJECT => Ok(MsgFunction::AllocObject),
+            r570::NV_VGPU_MSG_FUNCTION_ALLOC_ROOT => Ok(MsgFunction::AllocRoot),
+            r570::NV_VGPU_MSG_FUNCTION_BIND_CTX_DMA => Ok(MsgFunction::BindCtxDma),
+            r570::NV_VGPU_MSG_FUNCTION_CONTINUATION_RECORD => Ok(MsgFunction::ContinuationRecord),
+            r570::NV_VGPU_MSG_FUNCTION_FREE => Ok(MsgFunction::Free),
+            r570::NV_VGPU_MSG_FUNCTION_GET_GSP_STATIC_INFO => Ok(MsgFunction::GetGspStaticInfo),
+            r570::NV_VGPU_MSG_FUNCTION_GET_STATIC_INFO => Ok(MsgFunction::GetStaticInfo),
+            r570::NV_VGPU_MSG_FUNCTION_GSP_INIT_POST_OBJGPU => Ok(MsgFunction::GspInitPostObjGpu),
+            r570::NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL => Ok(MsgFunction::GspRmControl),
+            r570::NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO => Ok(MsgFunction::GspSetSystemInfo),
+            r570::NV_VGPU_MSG_FUNCTION_LOG => Ok(MsgFunction::Log),
+            r570::NV_VGPU_MSG_FUNCTION_MAP_MEMORY => Ok(MsgFunction::MapMemory),
+            r570::NV_VGPU_MSG_FUNCTION_NOP => Ok(MsgFunction::Nop),
+            r570::NV_VGPU_MSG_FUNCTION_SET_GUEST_SYSTEM_INFO => Ok(MsgFunction::SetGuestSystemInfo),
+            r570::NV_VGPU_MSG_FUNCTION_SET_REGISTRY => Ok(MsgFunction::SetRegistry),
+            r570::NV_VGPU_MSG_FUNCTION_UNLOADING_GUEST_DRIVER => {
                 Ok(MsgFunction::UnloadingGuestDriver)
             }
 
             // Event codes
-            bindings::NV_VGPU_MSG_EVENT_GSP_INIT_DONE => Ok(MsgFunction::GspInitDone),
-            bindings::NV_VGPU_MSG_EVENT_GSP_LOCKDOWN_NOTICE => Ok(MsgFunction::GspLockdownNotice),
-            bindings::NV_VGPU_MSG_EVENT_GSP_POST_NOCAT_RECORD => Ok(MsgFunction::GspPostNoCat),
-            bindings::NV_VGPU_MSG_EVENT_GSP_RUN_CPU_SEQUENCER => {
-                Ok(MsgFunction::GspRunCpuSequencer)
-            }
-            bindings::NV_VGPU_MSG_EVENT_MMU_FAULT_QUEUED => Ok(MsgFunction::MmuFaultQueued),
-            bindings::NV_VGPU_MSG_EVENT_OS_ERROR_LOG => Ok(MsgFunction::OsErrorLog),
-            bindings::NV_VGPU_MSG_EVENT_POST_EVENT => Ok(MsgFunction::PostEvent),
-            bindings::NV_VGPU_MSG_EVENT_RC_TRIGGERED => Ok(MsgFunction::RcTriggered),
-            bindings::NV_VGPU_MSG_EVENT_UCODE_LIBOS_PRINT => Ok(MsgFunction::UcodeLibOsPrint),
+            r570::NV_VGPU_MSG_EVENT_GSP_INIT_DONE => Ok(MsgFunction::GspInitDone),
+            r570::NV_VGPU_MSG_EVENT_GSP_LOCKDOWN_NOTICE => Ok(MsgFunction::GspLockdownNotice),
+            r570::NV_VGPU_MSG_EVENT_GSP_POST_NOCAT_RECORD => Ok(MsgFunction::GspPostNoCat),
+            r570::NV_VGPU_MSG_EVENT_GSP_RUN_CPU_SEQUENCER => Ok(MsgFunction::GspRunCpuSequencer),
+            r570::NV_VGPU_MSG_EVENT_MMU_FAULT_QUEUED => Ok(MsgFunction::MmuFaultQueued),
+            r570::NV_VGPU_MSG_EVENT_OS_ERROR_LOG => Ok(MsgFunction::OsErrorLog),
+            r570::NV_VGPU_MSG_EVENT_POST_EVENT => Ok(MsgFunction::PostEvent),
+            r570::NV_VGPU_MSG_EVENT_RC_TRIGGERED => Ok(MsgFunction::RcTriggered),
+            r570::NV_VGPU_MSG_EVENT_UCODE_LIBOS_PRINT => Ok(MsgFunction::UcodeLibOsPrint),
             _ => Err(EINVAL),
         }
     }
@@ -345,19 +334,19 @@ impl From<MsgFunction> for u32 {
 #[repr(u32)]
 pub(crate) enum SeqBufOpcode {
     // Core operation opcodes
-    CoreReset = bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_RESET,
-    CoreResume = bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_RESUME,
-    CoreStart = bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_START,
-    CoreWaitForHalt = bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_WAIT_FOR_HALT,
+    CoreReset = r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_RESET,
+    CoreResume = r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_RESUME,
+    CoreStart = r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_START,
+    CoreWaitForHalt = r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_WAIT_FOR_HALT,
 
     // Delay opcode
-    DelayUs = bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_DELAY_US,
+    DelayUs = r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_DELAY_US,
 
     // Register operation opcodes
-    RegModify = bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_MODIFY,
-    RegPoll = bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_POLL,
-    RegStore = bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_STORE,
-    RegWrite = bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_WRITE,
+    RegModify = r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_MODIFY,
+    RegPoll = r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_POLL,
+    RegStore = r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_STORE,
+    RegWrite = r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_WRITE,
 }
 
 impl TryFrom<u32> for SeqBufOpcode {
@@ -365,25 +354,17 @@ impl TryFrom<u32> for SeqBufOpcode {
 
     fn try_from(value: u32) -> Result<SeqBufOpcode> {
         match value {
-            bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_RESET => {
-                Ok(SeqBufOpcode::CoreReset)
-            }
-            bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_RESUME => {
-                Ok(SeqBufOpcode::CoreResume)
-            }
-            bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_START => {
-                Ok(SeqBufOpcode::CoreStart)
-            }
-            bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_WAIT_FOR_HALT => {
+            r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_RESET => Ok(SeqBufOpcode::CoreReset),
+            r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_RESUME => Ok(SeqBufOpcode::CoreResume),
+            r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_START => Ok(SeqBufOpcode::CoreStart),
+            r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_CORE_WAIT_FOR_HALT => {
                 Ok(SeqBufOpcode::CoreWaitForHalt)
             }
-            bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_DELAY_US => Ok(SeqBufOpcode::DelayUs),
-            bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_MODIFY => {
-                Ok(SeqBufOpcode::RegModify)
-            }
-            bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_POLL => Ok(SeqBufOpcode::RegPoll),
-            bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_STORE => Ok(SeqBufOpcode::RegStore),
-            bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_WRITE => Ok(SeqBufOpcode::RegWrite),
+            r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_DELAY_US => Ok(SeqBufOpcode::DelayUs),
+            r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_MODIFY => Ok(SeqBufOpcode::RegModify),
+            r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_POLL => Ok(SeqBufOpcode::RegPoll),
+            r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_STORE => Ok(SeqBufOpcode::RegStore),
+            r570::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_WRITE => Ok(SeqBufOpcode::RegWrite),
             _ => Err(EINVAL),
         }
     }
@@ -399,7 +380,7 @@ impl From<SeqBufOpcode> for u32 {
 /// Wrapper for GSP sequencer register write payload.
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct RegWritePayload(bindings::GSP_SEQ_BUF_PAYLOAD_REG_WRITE);
+pub(crate) struct RegWritePayload(r570::GSP_SEQ_BUF_PAYLOAD_REG_WRITE);
 
 impl RegWritePayload {
     /// Returns the register address.
@@ -422,7 +403,7 @@ unsafe impl AsBytes for RegWritePayload {}
 /// Wrapper for GSP sequencer register modify payload.
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct RegModifyPayload(bindings::GSP_SEQ_BUF_PAYLOAD_REG_MODIFY);
+pub(crate) struct RegModifyPayload(r570::GSP_SEQ_BUF_PAYLOAD_REG_MODIFY);
 
 impl RegModifyPayload {
     /// Returns the register address.
@@ -450,7 +431,7 @@ unsafe impl AsBytes for RegModifyPayload {}
 /// Wrapper for GSP sequencer register poll payload.
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct RegPollPayload(bindings::GSP_SEQ_BUF_PAYLOAD_REG_POLL);
+pub(crate) struct RegPollPayload(r570::GSP_SEQ_BUF_PAYLOAD_REG_POLL);
 
 impl RegPollPayload {
     /// Returns the register address.
@@ -483,7 +464,7 @@ unsafe impl AsBytes for RegPollPayload {}
 /// Wrapper for GSP sequencer delay payload.
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct DelayUsPayload(bindings::GSP_SEQ_BUF_PAYLOAD_DELAY_US);
+pub(crate) struct DelayUsPayload(r570::GSP_SEQ_BUF_PAYLOAD_DELAY_US);
 
 impl DelayUsPayload {
     /// Returns the delay value in microseconds.
@@ -501,7 +482,7 @@ unsafe impl AsBytes for DelayUsPayload {}
 /// Wrapper for GSP sequencer register store payload.
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct RegStorePayload(bindings::GSP_SEQ_BUF_PAYLOAD_REG_STORE);
+pub(crate) struct RegStorePayload(r570::GSP_SEQ_BUF_PAYLOAD_REG_STORE);
 
 impl RegStorePayload {
     /// Returns the register address.
@@ -524,7 +505,7 @@ unsafe impl AsBytes for RegStorePayload {}
 
 /// Wrapper for GSP sequencer buffer command.
 #[repr(transparent)]
-pub(crate) struct SequencerBufferCmd(bindings::GSP_SEQUENCER_BUFFER_CMD);
+pub(crate) struct SequencerBufferCmd(r570::GSP_SEQUENCER_BUFFER_CMD);
 
 impl SequencerBufferCmd {
     /// Returns the opcode as a `SeqBufOpcode` enum, or error if invalid.
@@ -596,7 +577,7 @@ unsafe impl AsBytes for SequencerBufferCmd {}
 
 /// Wrapper for GSP run CPU sequencer RPC.
 #[repr(transparent)]
-pub(crate) struct RunCpuSequencer(bindings::rpc_run_cpu_sequencer_v17_00);
+pub(crate) struct RunCpuSequencer(r570::rpc_run_cpu_sequencer_v17_00);
 
 impl RunCpuSequencer {
     /// Returns the command index.
@@ -627,7 +608,7 @@ unsafe impl AsBytes for RunCpuSequencer {}
 /// init_done RPC.
 #[repr(transparent)]
 pub(crate) struct LibosMemoryRegionInitArgument {
-    inner: bindings::LibosMemoryRegionInitArgument,
+    inner: r570::LibosMemoryRegionInitArgument,
 }
 
 // SAFETY: Padding is explicit and does not contain uninitialized data.
@@ -653,16 +634,17 @@ impl LibosMemoryRegionInitArgument {
             u64::from_ne_bytes(bytes)
         }
 
-        let init_inner = init!(bindings::LibosMemoryRegionInitArgument {
+        let init_inner = init!(r570::LibosMemoryRegionInitArgument {
             id8: id8(name),
             pa: obj.dma_handle(),
             size: num::usize_as_u64(obj.size()),
             kind: num::u32_into_u8::<
-                { bindings::LibosMemoryRegionKind_LIBOS_MEMORY_REGION_CONTIGUOUS },
+                {
+                    r570::LibosMemoryRegionKind_LIBOS_MEMORY_REGION_CONTIGUOUS //
+                },
             >(),
-            loc: num::u32_into_u8::<
-                { bindings::LibosMemoryRegionLoc_LIBOS_MEMORY_REGION_LOC_SYSMEM },
-            >(),
+            loc: num::u32_into_u8::<{ r570::LibosMemoryRegionLoc_LIBOS_MEMORY_REGION_LOC_SYSMEM }>(
+            ),
             ..Zeroable::init_zeroed()
         });
 
@@ -674,7 +656,7 @@ impl LibosMemoryRegionInitArgument {
 
 /// TX header for setting up a message queue with the GSP.
 #[repr(transparent)]
-pub(crate) struct MsgqTxHeader(bindings::msgqTxHeader);
+pub(crate) struct MsgqTxHeader(r570::msgqTxHeader);
 
 impl MsgqTxHeader {
     /// Create a new TX queue header.
@@ -687,7 +669,7 @@ impl MsgqTxHeader {
     /// * `msg_count` - Number of messages that can be sent, i.e. the number of memory pages
     ///   allocated for the message queue in the message queue structure.
     pub(crate) fn new(msgq_size: u32, rx_hdr_offset: u32, msg_count: u32) -> Self {
-        Self(bindings::msgqTxHeader {
+        Self(r570::msgqTxHeader {
             version: 0,
             size: msgq_size,
             msgSize: num::usize_into_u32::<GSP_PAGE_SIZE>(),
@@ -715,7 +697,7 @@ unsafe impl AsBytes for MsgqTxHeader {}
 
 /// RX header for setting up a message queue with the GSP.
 #[repr(transparent)]
-pub(crate) struct MsgqRxHeader(bindings::msgqRxHeader);
+pub(crate) struct MsgqRxHeader(r570::msgqRxHeader);
 
 /// Header for the message RX queue.
 impl MsgqRxHeader {
@@ -756,13 +738,13 @@ impl MsgHeaderVersion {
     }
 }
 
-impl bindings::rpc_message_header_v {
+impl r570::rpc_message_header_v {
     fn init(cmd_size: usize, function: MsgFunction, sequence: u32) -> impl Init<Self, Error> {
-        type RpcMessageHeader = bindings::rpc_message_header_v;
+        type RpcMessageHeader = r570::rpc_message_header_v;
 
         try_init!(RpcMessageHeader {
             header_version: MsgHeaderVersion::new().into(),
-            signature: bindings::NV_VGPU_MSG_SIGNATURE_VALID,
+            signature: r570::NV_VGPU_MSG_SIGNATURE_VALID,
             function: function.into(),
             length: size_of::<Self>()
                 .checked_add(cmd_size)
@@ -781,7 +763,7 @@ impl bindings::rpc_message_header_v {
 /// This is essentially a message header expected to be followed by the message data.
 #[repr(transparent)]
 pub(crate) struct GspMsgElement {
-    inner: bindings::GSP_MSG_QUEUE_ELEMENT,
+    inner: r570::GSP_MSG_QUEUE_ELEMENT,
 }
 
 impl GspMsgElement {
@@ -802,8 +784,8 @@ impl GspMsgElement {
         cmd_size: usize,
         function: MsgFunction,
     ) -> impl Init<Self, Error> {
-        type RpcMessageHeader = bindings::rpc_message_header_v;
-        type InnerGspMsgElement = bindings::GSP_MSG_QUEUE_ELEMENT;
+        type RpcMessageHeader = r570::rpc_message_header_v;
+        type InnerGspMsgElement = r570::GSP_MSG_QUEUE_ELEMENT;
         let init_inner = try_init!(InnerGspMsgElement {
             seqNum: transport_seq,
             elemCount: size_of::<Self>()
@@ -833,7 +815,7 @@ impl GspMsgElement {
     pub(crate) fn payload_length(&self) -> usize {
         // `rpc.length` includes the length of the RPC message header.
         num::u32_as_usize(self.inner.rpc.length)
-            .saturating_sub(size_of::<bindings::rpc_message_header_v>())
+            .saturating_sub(size_of::<r570::rpc_message_header_v>())
     }
 
     /// Returns the total length of the message, message and RPC headers included.
@@ -873,13 +855,13 @@ unsafe impl FromBytes for GspMsgElement {}
 #[repr(transparent)]
 #[derive(Zeroable)]
 pub(crate) struct GspArgumentsCached {
-    inner: bindings::GSP_ARGUMENTS_CACHED,
+    inner: r570::GSP_ARGUMENTS_CACHED,
 }
 
 impl GspArgumentsCached {
     /// Creates the arguments for starting the GSP up using `cmdq` as its command queue.
     pub(crate) fn new(cmdq: &Cmdq) -> impl Init<Self> + '_ {
-        let init_inner = init!(bindings::GSP_ARGUMENTS_CACHED {
+        let init_inner = init!(r570::GSP_ARGUMENTS_CACHED {
             messageQueueInitArguments <- MessageQueueInitArguments::new(cmdq),
             bDmemStack: 1,
             ..Zeroable::init_zeroed()
@@ -901,7 +883,7 @@ unsafe impl AsBytes for GspArgumentsCached {}
 #[derive(Zeroable)]
 pub(crate) struct GspArgumentsPadded {
     pub(crate) inner: GspArgumentsCached,
-    _padding: [u8; GSP_PAGE_SIZE - core::mem::size_of::<bindings::GSP_ARGUMENTS_CACHED>()],
+    _padding: [u8; GSP_PAGE_SIZE - core::mem::size_of::<r570::GSP_ARGUMENTS_CACHED>()],
 }
 
 impl GspArgumentsPadded {
@@ -921,7 +903,7 @@ unsafe impl AsBytes for GspArgumentsPadded {}
 unsafe impl FromBytes for GspArgumentsPadded {}
 
 /// Init arguments for the message queue.
-type MessageQueueInitArguments = bindings::MESSAGE_QUEUE_INIT_ARGUMENTS;
+type MessageQueueInitArguments = r570::MESSAGE_QUEUE_INIT_ARGUMENTS;
 
 impl MessageQueueInitArguments {
     /// Creates a new init arguments structure for `cmdq`.
@@ -939,12 +921,12 @@ impl MessageQueueInitArguments {
 #[repr(u32)]
 pub(crate) enum GspDmaTarget {
     #[expect(dead_code)]
-    LocalFb = bindings::GSP_DMA_TARGET_GSP_DMA_TARGET_LOCAL_FB,
-    CoherentSystem = bindings::GSP_DMA_TARGET_GSP_DMA_TARGET_COHERENT_SYSTEM,
-    NoncoherentSystem = bindings::GSP_DMA_TARGET_GSP_DMA_TARGET_NONCOHERENT_SYSTEM,
+    LocalFb = r570::GSP_DMA_TARGET_GSP_DMA_TARGET_LOCAL_FB,
+    CoherentSystem = r570::GSP_DMA_TARGET_GSP_DMA_TARGET_COHERENT_SYSTEM,
+    NoncoherentSystem = r570::GSP_DMA_TARGET_GSP_DMA_TARGET_NONCOHERENT_SYSTEM,
 }
 
-type GspAcrBootGspRmParams = bindings::GSP_ACR_BOOT_GSP_RM_PARAMS;
+type GspAcrBootGspRmParams = r570::GSP_ACR_BOOT_GSP_RM_PARAMS;
 
 impl GspAcrBootGspRmParams {
     fn new(target: GspDmaTarget, wpr_meta_addr: u64) -> impl Init<Self> {
@@ -962,7 +944,7 @@ impl GspAcrBootGspRmParams {
     }
 }
 
-type GspRmParams = bindings::GSP_RM_PARAMS;
+type GspRmParams = r570::GSP_RM_PARAMS;
 
 impl GspRmParams {
     fn new(target: GspDmaTarget, libos_addr: u64) -> impl Init<Self> {
@@ -976,7 +958,7 @@ impl GspRmParams {
     }
 }
 
-pub(crate) type GspFmcBootParams = bindings::GSP_FMC_BOOT_PARAMS;
+pub(crate) type GspFmcBootParams = r570::GSP_FMC_BOOT_PARAMS;
 
 // SAFETY: Padding is explicit and will not contain uninitialized data.
 unsafe impl AsBytes for GspFmcBootParams {}

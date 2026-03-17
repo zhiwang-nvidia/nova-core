@@ -19,12 +19,12 @@ use crate::{
     num::IntoSafeCast, //
 };
 
-use super::bindings;
+use super::r570;
 
 /// Payload of the `GspSetSystemInfo` command.
 #[repr(transparent)]
 pub(crate) struct GspSetSystemInfo {
-    inner: bindings::GspSystemInfo,
+    inner: r570::GspSystemInfo,
 }
 static_assert!(size_of::<GspSetSystemInfo>() < GSP_PAGE_SIZE);
 
@@ -34,7 +34,7 @@ impl GspSetSystemInfo {
         dev: &'a pci::Device<device::Bound>,
         chipset: Chipset,
     ) -> impl Init<Self, Error> + 'a {
-        type InnerGspSystemInfo = bindings::GspSystemInfo;
+        type InnerGspSystemInfo = r570::GspSystemInfo;
         let pci_config_mirror_range = chipset.pci_config_mirror_range();
         let init_inner = try_init!(InnerGspSystemInfo {
             gpuPhysAddr: dev.resource_start(0)?,
@@ -72,17 +72,17 @@ unsafe impl AsBytes for GspSetSystemInfo {}
 unsafe impl FromBytes for GspSetSystemInfo {}
 
 #[repr(transparent)]
-pub(crate) struct PackedRegistryEntry(bindings::PACKED_REGISTRY_ENTRY);
+pub(crate) struct PackedRegistryEntry(r570::PACKED_REGISTRY_ENTRY);
 
 impl PackedRegistryEntry {
     pub(crate) fn new(offset: u32, value: u32) -> Self {
         Self({
-            bindings::PACKED_REGISTRY_ENTRY {
+            r570::PACKED_REGISTRY_ENTRY {
                 nameOffset: offset,
 
                 // We only support DWORD types for now. Support for other types
                 // will come later if required.
-                type_: bindings::REGISTRY_TABLE_ENTRY_TYPE_DWORD as u8,
+                type_: r570::REGISTRY_TABLE_ENTRY_TYPE_DWORD as u8,
                 __bindgen_padding_0: Default::default(),
                 data: value,
                 length: 0,
@@ -97,12 +97,12 @@ unsafe impl AsBytes for PackedRegistryEntry {}
 /// Payload of the `SetRegistry` command.
 #[repr(transparent)]
 pub(crate) struct PackedRegistryTable {
-    inner: bindings::PACKED_REGISTRY_TABLE,
+    inner: r570::PACKED_REGISTRY_TABLE,
 }
 
 impl PackedRegistryTable {
     pub(crate) fn init(num_entries: u32, size: u32) -> impl Init<Self> {
-        type InnerPackedRegistryTable = bindings::PACKED_REGISTRY_TABLE;
+        type InnerPackedRegistryTable = r570::PACKED_REGISTRY_TABLE;
         let init_inner = init!(InnerPackedRegistryTable {
             numEntries: num_entries,
             size,
@@ -123,7 +123,7 @@ unsafe impl FromBytes for PackedRegistryTable {}
 /// Payload of the `GetGspStaticInfo` command and message.
 #[repr(transparent)]
 #[derive(Zeroable)]
-pub(crate) struct GspStaticConfigInfo(bindings::GspStaticConfigInfo_t);
+pub(crate) struct GspStaticConfigInfo(r570::GspStaticConfigInfo_t);
 
 impl GspStaticConfigInfo {
     /// Returns a bytes array containing the (hopefully) zero-terminated name of this GPU.
@@ -134,7 +134,7 @@ impl GspStaticConfigInfo {
     /// Returns an iterator over valid FB regions from GSP firmware data.
     fn fb_regions(
         &self,
-    ) -> impl Iterator<Item = &bindings::NV2080_CTRL_CMD_FB_GET_FB_REGION_FB_REGION_INFO> {
+    ) -> impl Iterator<Item = &r570::NV2080_CTRL_CMD_FB_GET_FB_REGION_FB_REGION_INFO> {
         let fb_info = &self.0.fbRegionInfoParams;
         fb_info
             .fbRegion
@@ -180,11 +180,11 @@ unsafe impl FromBytes for GspStaticConfigInfo {}
 #[expect(unused)]
 pub(crate) enum PowerStateLevel {
     /// Full unload.
-    Level0 = bindings::NV2080_CTRL_GPU_SET_POWER_STATE_GPU_LEVEL_0,
+    Level0 = r570::NV2080_CTRL_GPU_SET_POWER_STATE_GPU_LEVEL_0,
     /// S3 (suspend to RAM).
-    Level3 = bindings::NV2080_CTRL_GPU_SET_POWER_STATE_GPU_LEVEL_3,
+    Level3 = r570::NV2080_CTRL_GPU_SET_POWER_STATE_GPU_LEVEL_3,
     /// Hibernate (suspend to disk).
-    Level7 = bindings::NV2080_CTRL_GPU_SET_POWER_STATE_GPU_LEVEL_7,
+    Level7 = r570::NV2080_CTRL_GPU_SET_POWER_STATE_GPU_LEVEL_7,
 }
 
 impl PowerStateLevel {
@@ -198,11 +198,11 @@ impl PowerStateLevel {
 /// Payload of the `UnloadingGuestDriver` command and message.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Zeroable)]
-pub(crate) struct UnloadingGuestDriver(bindings::rpc_unloading_guest_driver_v1F_07);
+pub(crate) struct UnloadingGuestDriver(r570::rpc_unloading_guest_driver_v1F_07);
 
 impl UnloadingGuestDriver {
     pub(crate) fn new(level: PowerStateLevel) -> Self {
-        Self(bindings::rpc_unloading_guest_driver_v1F_07 {
+        Self(r570::rpc_unloading_guest_driver_v1F_07 {
             bInPMTransition: u8::from(level.is_power_transition()),
             bGc6Entering: 0,
             newLevel: level as u32,
