@@ -10,11 +10,12 @@ use r000_00 as r000;
 use core::ops::Range;
 
 use kernel::{
-    dma::CoherentAllocation,
+    dma::Coherent,
     prelude::*,
     ptr::{
         Alignable,
-        Alignment, //
+        Alignment,
+        KnownSize, //
     },
     sizes::{
         SZ_128K,
@@ -44,69 +45,48 @@ use crate::{
     },
 };
 
-// TODO: Replace with `IoView` projections once available; the `unwrap()` calls go away once we
-// switch to the new `dma::Coherent` API.
 pub(super) mod gsp_mem {
     use core::sync::atomic::{
         fence,
         Ordering, //
     };
 
-    use kernel::{
-        dma::CoherentAllocation,
-        dma_read,
-        dma_write,
-        prelude::*, //
-    };
+    use kernel::dma::Coherent;
 
     use crate::gsp::cmdq::{
         GspMem,
         MSGQ_NUM_PAGES, //
     };
 
-    pub(in crate::gsp) fn gsp_write_ptr(qs: &CoherentAllocation<GspMem>) -> u32 {
-        // PANIC: A `dma::CoherentAllocation` always contains at least one element.
-        || -> Result<u32> { Ok(dma_read!(qs, [0]?.gspq.tx.0.writePtr) % MSGQ_NUM_PAGES) }().unwrap()
+    pub(in crate::gsp) fn gsp_write_ptr(qs: &Coherent<GspMem>) -> u32 {
+        kernel::io_read!(qs, .gspq.tx.0.writePtr) % MSGQ_NUM_PAGES
     }
 
-    pub(in crate::gsp) fn gsp_read_ptr(qs: &CoherentAllocation<GspMem>) -> u32 {
-        // PANIC: A `dma::CoherentAllocation` always contains at least one element.
-        || -> Result<u32> { Ok(dma_read!(qs, [0]?.gspq.rx.0.readPtr) % MSGQ_NUM_PAGES) }().unwrap()
+    pub(in crate::gsp) fn gsp_read_ptr(qs: &Coherent<GspMem>) -> u32 {
+        kernel::io_read!(qs, .gspq.rx.0.readPtr) % MSGQ_NUM_PAGES
     }
 
-    pub(in crate::gsp) fn cpu_read_ptr(qs: &CoherentAllocation<GspMem>) -> u32 {
-        // PANIC: A `dma::CoherentAllocation` always contains at least one element.
-        || -> Result<u32> { Ok(dma_read!(qs, [0]?.cpuq.rx.0.readPtr) % MSGQ_NUM_PAGES) }().unwrap()
+    pub(in crate::gsp) fn cpu_read_ptr(qs: &Coherent<GspMem>) -> u32 {
+        kernel::io_read!(qs, .cpuq.rx.0.readPtr) % MSGQ_NUM_PAGES
     }
 
-    pub(in crate::gsp) fn advance_cpu_read_ptr(qs: &CoherentAllocation<GspMem>, count: u32) {
+    pub(in crate::gsp) fn advance_cpu_read_ptr(qs: &Coherent<GspMem>, count: u32) {
         let rptr = cpu_read_ptr(qs).wrapping_add(count) % MSGQ_NUM_PAGES;
 
         // Ensure read pointer is properly ordered.
         fence(Ordering::SeqCst);
 
-        // PANIC: A `dma::CoherentAllocation` always contains at least one element.
-        || -> Result {
-            dma_write!(qs, [0]?.cpuq.rx.0.readPtr, rptr);
-            Ok(())
-        }()
-        .unwrap()
+        kernel::io_write!(qs, .cpuq.rx.0.readPtr, rptr);
     }
 
-    pub(in crate::gsp) fn cpu_write_ptr(qs: &CoherentAllocation<GspMem>) -> u32 {
-        // PANIC: A `dma::CoherentAllocation` always contains at least one element.
-        || -> Result<u32> { Ok(dma_read!(qs, [0]?.cpuq.tx.0.writePtr) % MSGQ_NUM_PAGES) }().unwrap()
+    pub(in crate::gsp) fn cpu_write_ptr(qs: &Coherent<GspMem>) -> u32 {
+        kernel::io_read!(qs, .cpuq.tx.0.writePtr) % MSGQ_NUM_PAGES
     }
 
-    pub(in crate::gsp) fn advance_cpu_write_ptr(qs: &CoherentAllocation<GspMem>, count: u32) {
+    pub(in crate::gsp) fn advance_cpu_write_ptr(qs: &Coherent<GspMem>, count: u32) {
         let wptr = cpu_write_ptr(qs).wrapping_add(count) % MSGQ_NUM_PAGES;
 
-        // PANIC: A `dma::CoherentAllocation` always contains at least one element.
-        || -> Result {
-            dma_write!(qs, [0]?.cpuq.tx.0.writePtr, wptr);
-            Ok(())
-        }()
-        .unwrap();
+        kernel::io_write!(qs, .cpuq.tx.0.writePtr, wptr);
 
         // Ensure all command data is visible before triggering the GSP read.
         fence(Ordering::SeqCst);
@@ -441,9 +421,9 @@ unsafe impl AsBytes for LibosMemoryRegionInitArgument {}
 unsafe impl FromBytes for LibosMemoryRegionInitArgument {}
 
 impl LibosMemoryRegionInitArgument {
-    pub(crate) fn new<A: AsBytes + FromBytes>(
+    pub(crate) fn new<A: AsBytes + FromBytes + KnownSize + ?Sized>(
         name: &'static str,
-        obj: &CoherentAllocation<A>,
+        obj: &Coherent<A>,
     ) -> Self {
         /// Generates the `ID8` identifier required for some GSP objects.
         fn id8(name: &str) -> u64 {
@@ -473,7 +453,7 @@ impl LibosMemoryRegionInitArgument {
 
 /// TX header for setting up a message queue with the GSP.
 #[repr(transparent)]
-pub(crate) struct MsgqTxHeader(r570::msgqTxHeader);
+pub(crate) struct MsgqTxHeader(pub(crate) r570::msgqTxHeader);
 
 impl MsgqTxHeader {
     /// Create a new TX queue header.
@@ -502,9 +482,12 @@ impl MsgqTxHeader {
 // SAFETY: Padding is explicit and does not contain uninitialized data.
 unsafe impl AsBytes for MsgqTxHeader {}
 
+// SAFETY: All bit-patterns are valid for this type.
+unsafe impl FromBytes for MsgqTxHeader {}
+
 /// RX header for setting up a message queue with the GSP.
 #[repr(transparent)]
-pub(crate) struct MsgqRxHeader(r570::msgqRxHeader);
+pub(crate) struct MsgqRxHeader(pub(crate) r570::msgqRxHeader);
 
 /// Header for the message RX queue.
 impl MsgqRxHeader {
@@ -516,6 +499,9 @@ impl MsgqRxHeader {
 
 // SAFETY: Padding is explicit and does not contain uninitialized data.
 unsafe impl AsBytes for MsgqRxHeader {}
+
+// SAFETY: All bit-patterns are valid for this type.
+unsafe impl FromBytes for MsgqRxHeader {}
 
 bitfield! {
     struct MsgHeaderVersion(u32) {
@@ -664,7 +650,7 @@ impl GspArgumentsCached {
     pub(crate) fn new(
         cmdq: &Cmdq,
         bindata: Option<&BindataArgs>,
-        state_monitor: &CoherentAllocation<u8>,
+        state_monitor: &Coherent<[u8]>,
     ) -> Self {
         let mut args = r000::GSP_ARGUMENTS_CACHED {
             messageQueueInitArguments: MessageQueueInitArguments::new(cmdq).0,
@@ -686,6 +672,9 @@ impl GspArgumentsCached {
 
 // SAFETY: Padding is explicit and will not contain uninitialized data.
 unsafe impl AsBytes for GspArgumentsCached {}
+
+// SAFETY: All bit patterns are valid for this type.
+unsafe impl FromBytes for GspArgumentsCached {}
 
 /// On Turing and GA100, the entries in the `LibosMemoryRegionInitArgument`
 /// must all be a multiple of GSP_PAGE_SIZE in size, so add padding to force it

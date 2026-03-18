@@ -8,7 +8,7 @@
 
 use kernel::{
     device,
-    dma::CoherentAllocation,
+    dma::Coherent,
     io::poll::read_poll_timeout,
     prelude::*,
     ptr::{
@@ -225,7 +225,7 @@ impl MessageToFsp for FspMessage {
 pub(crate) struct FmcBootArgs<'a> {
     chipset: crate::gpu::Chipset,
     fmc_image_fw: &'a crate::dma::DmaObject,
-    fmc_boot_params: kernel::dma::CoherentAllocation<GspFmcBootParams>,
+    fmc_boot_params: kernel::dma::Coherent<GspFmcBootParams>,
     resume: bool,
     signatures: &'a FmcSignatures,
 }
@@ -247,28 +247,24 @@ impl<'a> FmcBootArgs<'a> {
         const GSP_DMA_TARGET_COHERENT_SYSTEM: u32 = 1;
         const GSP_DMA_TARGET_NONCOHERENT_SYSTEM: u32 = 2;
 
-        let fmc_boot_params = CoherentAllocation::<GspFmcBootParams>::alloc_coherent(
-            dev,
-            1,
-            GFP_KERNEL | __GFP_ZERO,
-        )?;
+        let fmc_boot_params = Coherent::<GspFmcBootParams>::zeroed(dev, GFP_KERNEL)?;
 
-        kernel::dma_write!(
-            fmc_boot_params, [0].boot_gsp_rm_params.target, GSP_DMA_TARGET_COHERENT_SYSTEM
+        kernel::io_write!(
+            fmc_boot_params, .boot_gsp_rm_params.target, GSP_DMA_TARGET_COHERENT_SYSTEM
         );
-        kernel::dma_write!(
-            fmc_boot_params, [0].boot_gsp_rm_params.gsp_rm_desc_offset, wpr_meta_addr
+        kernel::io_write!(
+            fmc_boot_params, .boot_gsp_rm_params.gsp_rm_desc_offset, wpr_meta_addr
         );
-        kernel::dma_write!(fmc_boot_params, [0].boot_gsp_rm_params.gsp_rm_desc_size, wpr_meta_size);
+        kernel::io_write!(fmc_boot_params, .boot_gsp_rm_params.gsp_rm_desc_size, wpr_meta_size);
 
         // Blackwell FSP expects wpr_carveout_offset and wpr_carveout_size to be zero;
         // it obtains WPR info from other sources.
-        kernel::dma_write!(fmc_boot_params, [0].boot_gsp_rm_params.b_is_gsp_rm_boot, 1);
+        kernel::io_write!(fmc_boot_params, .boot_gsp_rm_params.b_is_gsp_rm_boot, 1);
 
-        kernel::dma_write!(
-            fmc_boot_params, [0].gsp_rm_params.target, GSP_DMA_TARGET_NONCOHERENT_SYSTEM
+        kernel::io_write!(
+            fmc_boot_params, .gsp_rm_params.target, GSP_DMA_TARGET_NONCOHERENT_SYSTEM
         );
-        kernel::dma_write!(fmc_boot_params, [0].gsp_rm_params.boot_args_offset, libos_addr);
+        kernel::io_write!(fmc_boot_params, .gsp_rm_params.boot_args_offset, libos_addr);
 
         Ok(Self {
             chipset,

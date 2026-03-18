@@ -2,8 +2,8 @@
 
 use kernel::{
     device,
-    dma::CoherentAllocation,
-    dma_write,
+    dma::Coherent,
+    io_write,
     io::poll::read_poll_timeout,
     pci,
     prelude::*,
@@ -200,7 +200,7 @@ impl super::Gsp {
         bar: &Bar0,
         chipset: Chipset,
         sec2_falcon: &Falcon<Sec2>,
-        wpr_meta: &CoherentAllocation<GspFwWprMeta>,
+        wpr_meta: &Coherent<GspFwWprMeta>,
     ) -> Result {
         let booter = BooterFirmware::new(
             dev,
@@ -226,8 +226,8 @@ impl super::Gsp {
         gsp_falcon: &Falcon<Gsp>,
         sec2_falcon: &Falcon<Sec2>,
         fb_layout: &FbLayout,
-        libos: &CoherentAllocation<LibosMemoryRegionInitArgument>,
-        wpr_meta: &CoherentAllocation<GspFwWprMeta>,
+        libos: &Coherent<[LibosMemoryRegionInitArgument]>,
+        wpr_meta: &Coherent<GspFwWprMeta>,
     ) -> Result {
         // Run FWSEC-FRTS to set up the WPR2 region
         let bios = Vbios::new(dev, bar)?;
@@ -260,8 +260,8 @@ impl super::Gsp {
         bar: &Bar0,
         chipset: Chipset,
         gsp_falcon: &Falcon<Gsp>,
-        wpr_meta: &CoherentAllocation<GspFwWprMeta>,
-        libos: &CoherentAllocation<LibosMemoryRegionInitArgument>,
+        wpr_meta: &Coherent<GspFwWprMeta>,
+        libos: &Coherent<[LibosMemoryRegionInitArgument]>,
     ) -> Result {
         let fsp_falcon = Falcon::<FspEngine>::new(dev, chipset)?;
 
@@ -367,8 +367,8 @@ impl super::Gsp {
         dev_dbg!(dev, "{:#x?}\n", fb_layout);
 
         let wpr_meta =
-            CoherentAllocation::<GspFwWprMeta>::alloc_coherent(dev, 1, GFP_KERNEL | __GFP_ZERO)?;
-        dma_write!(wpr_meta, [0]?, GspFwWprMeta::new(&gsp_fw, &fb_layout));
+            Coherent::<GspFwWprMeta>::zeroed(dev, GFP_KERNEL)?;
+        kernel::io_project!(wpr_meta,).write(GspFwWprMeta::new(&gsp_fw, &fb_layout));
 
         let this = self.as_mut().project();
 
@@ -377,7 +377,7 @@ impl super::Gsp {
             radix3: r.dma_handle(),
             size: r.size as u64,
         });
-        dma_write!(this.rmargs, [0]?.inner, fw::GspArgumentsCached::new(
+        io_write!(this.rmargs, .inner, fw::GspArgumentsCached::new(
             this.cmdq, bindata_opt.as_ref(), this.rm_state_monitor
         ));
 

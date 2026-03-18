@@ -8,7 +8,8 @@
 use kernel::{
     io::{
         Io,
-        IoCapable, //
+        IoCapable,
+        Region, //
     },
     prelude::*, //
 };
@@ -60,43 +61,40 @@ impl<'a> Emem<'a> {
     }
 }
 
-impl IoCapable<u32> for Emem<'_> {}
-
-impl Io for Emem<'_> {
-    fn addr(&self) -> usize {
-        0
-    }
-
-    fn maxsize(&self) -> usize {
-        EMEM_MAX_SIZE
-    }
-
-    fn try_read32(&self, offset: usize) -> Result<u32> {
-        // io_addr validates offset < EMEM_MAX_SIZE (2^24), so the u32 cast is safe.
-        let offset = self.io_addr::<u32>(offset)? as u32;
+impl IoCapable<u32> for Emem<'_> {
+    unsafe fn io_read(&self, address: *mut u32) -> u32 {
+        let offset = address as usize;
+        let offset_u32 = offset as u32;
 
         regs::NV_PFALCON_FALCON_EMEM_CTL::default()
             .set_rd_mode(true)
-            .set_offset(offset)
+            .set_offset(offset_u32)
             .write(self.bar, &Fsp::ID);
 
-        Ok(regs::NV_PFALCON_FALCON_EMEM_DATA::read(self.bar, &Fsp::ID).data())
+        regs::NV_PFALCON_FALCON_EMEM_DATA::read(self.bar, &Fsp::ID).data()
     }
 
-    fn try_write32(&self, value: u32, offset: usize) -> Result {
-        // io_addr validates offset < EMEM_MAX_SIZE (2^24), so the u32 cast is safe.
-        let offset = self.io_addr::<u32>(offset)? as u32;
+    unsafe fn io_write(&self, value: u32, address: *mut u32) {
+        let offset = address as usize;
+        let offset_u32 = offset as u32;
 
         regs::NV_PFALCON_FALCON_EMEM_CTL::default()
             .set_wr_mode(true)
-            .set_offset(offset)
+            .set_offset(offset_u32)
             .write(self.bar, &Fsp::ID);
 
         regs::NV_PFALCON_FALCON_EMEM_DATA::default()
             .set_data(value)
             .write(self.bar, &Fsp::ID);
+    }
+}
 
-        Ok(())
+impl Io for Emem<'_> {
+    type Type = Region<EMEM_MAX_SIZE>;
+
+    fn as_ptr(&self) -> *mut Self::Type {
+        core::ptr::slice_from_raw_parts_mut(core::ptr::null_mut::<u8>(), EMEM_MAX_SIZE)
+            as *mut Self::Type
     }
 }
 

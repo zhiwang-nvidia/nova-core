@@ -5,10 +5,10 @@ mod boot;
 use kernel::{
     device,
     dma::{
-        CoherentAllocation,
+        Coherent,
         DmaAddress, //
     },
-    dma_write,
+    io_write,
     pci,
     prelude::*,
     transmute::AsBytes, //
@@ -70,26 +70,24 @@ impl<const NUM_PAGES: usize> PteArray<NUM_PAGES> {
 /// then pp points to index into the buffer where the next logging entry will
 /// be written. Therefore, the logging data is valid if:
 ///   1 <= pp < sizeof(buffer)/sizeof(u64)
-struct LogBuffer(CoherentAllocation<u8>);
+struct LogBuffer(Coherent<[u8]>);
 
 impl LogBuffer {
     /// Creates a new `LogBuffer` of `NUM_PAGES` GSP pages, mapped on `dev`.
     fn with_pages<const NUM_PAGES: usize>(
         dev: &device::Device<device::Bound>,
     ) -> Result<Self> {
-        let mut obj = Self(CoherentAllocation::<u8>::alloc_coherent(
+        let obj = Self(Coherent::zeroed_slice(
             dev,
             NUM_PAGES * GSP_PAGE_SIZE,
-            GFP_KERNEL | __GFP_ZERO,
+            GFP_KERNEL,
         )?);
 
         let start_addr = obj.0.dma_handle();
 
         // SAFETY: `obj` has just been created and we are its sole user.
-        let pte_region = unsafe {
-            obj.0
-                .as_slice_mut(size_of::<u64>(), NUM_PAGES * size_of::<u64>())?
-        };
+        let data = unsafe { obj.0.as_mut() };
+        let pte_region = &mut data[size_of::<u64>()..][..NUM_PAGES * size_of::<u64>()];
 
         // Write values one by one to avoid an on-stack instance of `PteArray`.
         for (i, chunk) in pte_region.chunks_exact_mut(size_of::<u64>()).enumerate() {
@@ -136,15 +134,15 @@ struct LogBuffers {
 #[pin_data]
 pub(crate) struct Gsp {
     /// Libos arguments.
-    pub(crate) libos: CoherentAllocation<LibosMemoryRegionInitArgument>,
+    pub(crate) libos: Coherent<[LibosMemoryRegionInitArgument]>,
     /// Log buffers for all LIBOS3 tasks.
     logs: LogBuffers,
     /// Command queue.
     pub(crate) cmdq: Cmdq,
     /// RM arguments.
-    rmargs: CoherentAllocation<GspArgumentsPadded>,
+    rmargs: Coherent<GspArgumentsPadded>,
     /// RM state monitor buffer (4KB, required by r000+ GSP-RM for diagnostics).
-    rm_state_monitor: CoherentAllocation<u8>,
+    rm_state_monitor: Coherent<[u8]>,
 }
 
 impl Gsp {
@@ -161,21 +159,17 @@ impl Gsp {
             let logrmon = LogBuffer::new_small(dev)?;
 
             Ok(try_pin_init!(Self {
-                libos: CoherentAllocation::<LibosMemoryRegionInitArgument>::alloc_coherent(
+                libos: Coherent::zeroed_slice(
                     dev,
                     GSP_PAGE_SIZE / size_of::<LibosMemoryRegionInitArgument>(),
-                    GFP_KERNEL | __GFP_ZERO,
+                    GFP_KERNEL,
                 )?,
                 cmdq: Cmdq::new(dev)?,
-                rmargs: CoherentAllocation::<GspArgumentsPadded>::alloc_coherent(
-                    dev,
-                    1,
-                    GFP_KERNEL | __GFP_ZERO,
-                )?,
-                rm_state_monitor: CoherentAllocation::<u8>::alloc_coherent(
+                rmargs: Coherent::<GspArgumentsPadded>::zeroed(dev, GFP_KERNEL)?,
+                rm_state_monitor: Coherent::zeroed_slice(
                     dev,
                     GSP_PAGE_SIZE,
-                    GFP_KERNEL | __GFP_ZERO,
+                    GFP_KERNEL,
                 )?,
                 _: {
                     // Set up libos memory region entries for each LIBOS3 task log buffer,
@@ -183,26 +177,26 @@ impl Gsp {
                     // _kgspInitLibosLoggingStructures + kgspSetupLibosInitArgs_IMPL.
                     // LOGINIT must be first for early init logging.
                     // RMARGS must be last.
-                    dma_write!(
+                    io_write!(
                         libos, [0]?, LibosMemoryRegionInitArgument::new("LOGINIT", &loginit.0)
                     );
-                    dma_write!(
+                    io_write!(
                         libos, [1]?, LibosMemoryRegionInitArgument::new("LOGINTR", &logintr.0)
                     );
-                    dma_write!(libos, [2]?, LibosMemoryRegionInitArgument::new("LOGRM", &logrm.0));
-                    dma_write!(
+                    io_write!(libos, [2]?, LibosMemoryRegionInitArgument::new("LOGRM", &logrm.0));
+                    io_write!(
                         libos, [3]?, LibosMemoryRegionInitArgument::new("LOGMNOC", &logmnoc.0)
                     );
-                    dma_write!(
+                    io_write!(
                         libos, [4]?, LibosMemoryRegionInitArgument::new("LOGROOT", &logroot.0)
                     );
-                    dma_write!(
+                    io_write!(
                         libos, [5]?, LibosMemoryRegionInitArgument::new("LOGRMON", &logrmon.0)
                     );
-                    dma_write!(rmargs, [0]?.inner, fw::GspArgumentsCached::new(
-                        cmdq, None, &rm_state_monitor
+                    io_write!(rmargs, .inner, fw::GspArgumentsCached::new(
+                        &cmdq, None, &rm_state_monitor
                     ));
-                    dma_write!(libos, [6]?, LibosMemoryRegionInitArgument::new("RMARGS", rmargs));
+                    io_write!(libos, [6]?, LibosMemoryRegionInitArgument::new("RMARGS", rmargs));
                 },
                 logs: LogBuffers {
                     loginit,

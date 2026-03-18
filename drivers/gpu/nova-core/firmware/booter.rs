@@ -8,8 +8,9 @@ use core::marker::PhantomData;
 
 use kernel::{
     device,
-    dma::CoherentAllocation,
+    dma::Coherent,
     prelude::*,
+    ptr::KnownSize,
     transmute::{
         AsBytes,
         FromBytes, //
@@ -405,12 +406,12 @@ impl BooterFirmware {
     ///
     /// Resets SEC2, loads this firmware image, then boots with the WPR metadata
     /// address passed via the SEC2 mailboxes.
-    pub(crate) fn run<T: AsBytes + FromBytes>(
+    pub(crate) fn run<T: AsBytes + FromBytes + KnownSize + ?Sized>(
         &self,
         dev: &device::Device<device::Bound>,
         bar: &Bar0,
         sec2_falcon: &Falcon<Sec2>,
-        wpr_meta: &CoherentAllocation<T>,
+        wpr_meta: &Coherent<T>,
     ) -> Result {
         sec2_falcon.reset(bar)?;
         sec2_falcon.load(dev, bar, self)?;
