@@ -28,6 +28,7 @@ use crate::{
         GspBootContext, //
     },
     regs,
+    vgpu::Vgpu, //
 };
 
 macro_rules! define_chipset {
@@ -202,6 +203,11 @@ impl Architecture {
     pub(crate) const fn needs_gfw_boot(&self) -> bool {
         matches!(self, Self::Turing | Self::Ampere | Self::Ada)
     }
+
+    /// Returns true for architectures that support vGPU (Ada and later).
+    pub(crate) const fn supports_vgpu(&self) -> bool {
+        matches!(self, Self::Ada | Self::Blackwell)
+    }
 }
 
 impl TryFrom<u8> for Architecture {
@@ -316,7 +322,7 @@ impl fmt::Display for Spec {
 pub(crate) struct Gpu {
     spec: Spec,
     /// MMIO mapping of PCI BAR 0
-    bar: Arc<Devres<Bar0>>,
+    pub bar: Arc<Devres<Bar0>>,
     /// System memory page required for flushing all pending GPU-side memory writes done through
     /// PCIE into system memory, via sysmembar (A GPU-initiated HW memory-barrier operation).
     sysmem_flush: SysmemFlush,
@@ -324,9 +330,11 @@ pub(crate) struct Gpu {
     gsp_falcon: Falcon<GspFalcon>,
     /// SEC2 falcon instance, used for GSP boot up and cleanup.
     sec2_falcon: Falcon<Sec2Falcon>,
+    /// vGPU state (module param + SR-IOV / FSP PRC).
+    vgpu: Vgpu,
     /// GSP runtime data. Temporarily an empty placeholder.
     #[pin]
-    gsp: Gsp,
+    pub(crate) gsp: Gsp,
 }
 
 impl Gpu {
@@ -364,17 +372,22 @@ impl Gpu {
 
                 sec2_falcon: Falcon::new(pdev.as_ref(), chipset)?,
 
+                vgpu <- Vgpu::new(pdev, chipset)?,
+
                 gsp <- Gsp::new(pdev),
 
                 _: {
-                    let ctx = GspBootContext {
+                    let mut ctx = GspBootContext {
                         pdev,
                         bar,
                         chipset,
                         gsp_falcon,
                         sec2_falcon,
+                        fsp_falcon: None,
+                        vgpu_requested: vgpu.vgpu_requested,
                     };
-                    gsp.boot(&ctx)?
+                    gsp.boot(&mut ctx)?;
+                    vgpu.set_vgpu_enabled(ctx.vgpu_requested);
                 },
 
                 bar: devres_bar,
