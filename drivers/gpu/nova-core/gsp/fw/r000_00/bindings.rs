@@ -923,3 +923,8 @@ pub struct GSP_MSG_QUEUE_ELEMENT {
     pub seqNum: u32_,
     pub payload: __IncompleteArrayField<u8_>,
 }
+
+pub const GSP_FW_HEAP_SIZE_VGPU_DEFAULT: u32 = 581 << 20;
+pub const GSP_FW_HEAP_SIZE_VGPU_48VMS: u32 = 1370 << 20;
+pub const MAX_PARTITIONS_WITH_GFID: u8 = 48;
+pub const MAX_PARTITIONS_WITH_GFID_32VM: u8 = 32;

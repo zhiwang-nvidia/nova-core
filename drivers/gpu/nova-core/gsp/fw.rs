@@ -7,6 +7,14 @@ pub(crate) mod rm;
 
 use r570_144 as r570;
 use r000_00 as r000;
+
+pub(crate) use r000::{
+    GSP_FW_HEAP_SIZE_VGPU_48VMS,
+    GSP_FW_HEAP_SIZE_VGPU_DEFAULT,
+    MAX_PARTITIONS_WITH_GFID,
+    MAX_PARTITIONS_WITH_GFID_32VM, //
+};
+
 use core::ops::Range;
 
 use kernel::{

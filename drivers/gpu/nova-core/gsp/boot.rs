@@ -374,7 +374,7 @@ impl super::Gsp {
                 Err(e) => return Err(e),
             };
 
-        let fb_layout = FbLayout::new(ctx.chipset, ctx.bar, &gsp_fw)?;
+        let fb_layout = FbLayout::new(ctx.chipset, ctx.bar, &gsp_fw, ctx.vf_partition_count)?;
         dev_dbg!(dev, "{:#x?}\n", fb_layout);
 
         let wpr_meta =

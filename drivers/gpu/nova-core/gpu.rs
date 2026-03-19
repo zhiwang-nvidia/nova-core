@@ -25,7 +25,9 @@ use crate::{
     gfw,
     gsp::{
         Gsp,
-        GspBootContext, //
+        GspBootContext,
+        MAX_PARTITIONS_WITH_GFID,
+        MAX_PARTITIONS_WITH_GFID_32VM, //
     },
     regs,
     vgpu::Vgpu, //
@@ -385,6 +387,15 @@ impl Gpu {
                         sec2_falcon,
                         fsp_falcon: None,
                         vgpu_requested: vgpu.vgpu_requested,
+                        vf_partition_count: if vgpu.vgpu_requested {
+                            if vgpu.total_vfs > u16::from(MAX_PARTITIONS_WITH_GFID_32VM) {
+                                MAX_PARTITIONS_WITH_GFID
+                            } else {
+                                MAX_PARTITIONS_WITH_GFID_32VM
+                            }
+                        } else {
+                            0
+                        },
                     };
                     gsp.boot(&mut ctx)?;
                     vgpu.set_vgpu_enabled(ctx.vgpu_requested);

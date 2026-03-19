@@ -184,7 +184,15 @@ pub(crate) struct FbLayout {
 
 impl FbLayout {
     /// Computes the FB layout for `chipset` required to run the `gsp_fw` GSP firmware.
-    pub(crate) fn new(chipset: Chipset, bar: &Bar0, gsp_fw: &GspFirmware) -> Result<Self> {
+    ///
+    /// When `vf_partition_count` is non-zero, a larger WPR2 heap is reserved to support
+    /// vGPU virtual functions: 1370 MiB for 48 partitions, 581 MiB for 32 or fewer.
+    pub(crate) fn new(
+        chipset: Chipset,
+        bar: &Bar0,
+        gsp_fw: &GspFirmware,
+        vf_partition_count: u8,
+    ) -> Result<Self> {
         let hal = hal::fb_hal(chipset);
 
         let fb = {
@@ -246,8 +254,13 @@ impl FbLayout {
 
         let wpr2_heap = {
             const WPR2_HEAP_DOWN_ALIGN: Alignment = Alignment::new::<SZ_1M>();
-            let wpr2_heap_size =
-                gsp::LibosParams::from_chipset(chipset).wpr_heap_size(chipset, fb.end)?;
+            let wpr2_heap_size = if vf_partition_count == 0 {
+                gsp::LibosParams::from_chipset(chipset).wpr_heap_size(chipset, fb.end)?
+            } else if vf_partition_count > gsp::MAX_PARTITIONS_WITH_GFID_32VM {
+                u64::from(gsp::GSP_FW_HEAP_SIZE_VGPU_48VMS)
+            } else {
+                u64::from(gsp::GSP_FW_HEAP_SIZE_VGPU_DEFAULT)
+            };
             let wpr2_heap_addr = (elf.start - wpr2_heap_size).align_down(WPR2_HEAP_DOWN_ALIGN);
 
             FbRange(wpr2_heap_addr..(elf.start).align_down(WPR2_HEAP_DOWN_ALIGN))
@@ -275,7 +288,7 @@ impl FbLayout {
             wpr2_heap,
             wpr2,
             heap,
-            vf_partition_count: 0,
+            vf_partition_count,
         })
     }
 }
