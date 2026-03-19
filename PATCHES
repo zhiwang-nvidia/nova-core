@@ -1,0 +1,82 @@
+base: john/nova-core-blackwell-v6 (linux 7.0.0-rc1)
+https://github.com/johnhubbard/linux/tree/nova-core-blackwell-v6-with-v000-firmware
+
+Gary's io_projection branch:
+https://github.com/nbdd0121/linux/tree/io_projection
+
+2bdbbf9d4530 rust: io: generalize `MmioRaw` to pointer to arbitrary type
+9a6ab714f7a7 rust: dma: add generalize container for types other than slices
+2c038a699deb rust: dma: add zeroed constructor to `Coherent`
+8f1f28c5d0fa rust: io: macro_export io_define_read!() and io_define_write!()
+6d5b228777d3 rust: io: turn IoCapable into a functional trait
+dd4ea793cb90 rust: io: mem: use non-relaxed I/O ops in examples
+ce3dd23d9ab0 rust: io: provide Mmio relaxed ops through a wrapper type
+8f86309b31cc rust: io: remove legacy relaxed accessors of Mmio
+a0dc84211adb rust: pci: io: remove overloaded Io methods of ConfigSpace
+ee3959c85ea7 rust: io: remove overloaded Io methods of Mmio
+1ed650904760 rust: io: generalize `Mmio` to arbitrary type
+d8b05a990701 rust: io: use pointer types instead of address
+6e7cf3bb034c rust: io: add view type
+1556797a6aeb rust: dma: add methods to unsafely create reference from subview
+633601fe004d rust: dma: remove legacy API
+04fcf138c7c6 rust: dma: remove dma_{read,write} macro
+
+d40c892a75f6 gpu: nova-core: convert to new dma Coherent and I/O projection API
+
+[PATCH v4 0/5] gpu: nova-core: gsp: add locking to Cmdq
+https://lore.kernel.org/nouveau/20260310-cmdq-locking-v4-0-4e5c4753c408@nvidia.com/
+eedbe57ce4fc gpu: nova-core: gsp: add `RECEIVE_TIMEOUT` constant for command queue
+4b0b9216179d gpu: nova-core: gsp: add reply/no-reply info to `CommandToGsp`
+a0875e154fb2 gpu: nova-core: gsp: make `Cmdq` a pinned type
+90443422fec7 gpu: nova-core: gsp: add mutex locking to Cmdq
+
+[PATCH 0/9] gpu: nova-core: gsp: add RM control command infrastructure
+https://lore.kernel.org/nouveau/20260227-rmcontrol-v1-0-86648e4869f9@nvidia.com/
+1c01de389da5 gpu: nova-core: gsp: add NV_STATUS error code bindings
+5fd81efb9feb gpu: nova-core: gsp: add NvStatus enum for RM control errors
+0bf36f766751 gpu: nova-core: gsp: expose GSP-RM internal client and subdevice handles
+0786a756c0ce gpu: nova-core: gsp: add RM control RPC structure binding
+4b33b90e3ee3 gpu: nova-core: gsp: add types for RM control RPCs
+af11473bed9c gpu: nova-core: generalize `flush_into_kvec` to `flush_into_vec`
+c77550a71b2e gpu: nova-core: gsp: add RM control command infrastructure
+fe89ec10c6b2 gpu: nova-core: gsp: add CE fault method buffer size bindings
+b86abd36a732 gpu: nova-core: gsp: add CeGetFaultMethodBufferSize RM control command
+
+[PATCH v8 0/7] gpu: nova-core: expose the logging buffers via debugfs
+https://lore.kernel.org/nouveau/20260310220000.1897166-1-ttabi@nvidia.com/
+416777682474 rust: device: add device name method
+ffc2c8995661 rust: uaccess: add write_dma() for copying from DMA buffers to userspace
+44bb778f140c rust: dma: implement BinaryWriter for CoherentAllocation<u8>
+e3ec72c9b496 gpu: nova-core: Replace module_pci_driver! with explicit module init
+(SKIPPED) gpu: nova-core: use pin projection in method boot()
+b9865a982c8a gpu: nova-core: create debugfs root in module init
+65d9a70a905d gpu: nova-core: create GSP-RM logging buffers debugfs entries
+
+d01eca11f555 rust: pci: expose sriov_get_totalvfs() helper
+
+[PATCH RFC v2 1/1] rust: pci: add extended capability and SR-IOV support
+https://lore.kernel.org/rust-for-linux/20260225180449.1813833-1-zhiw@nvidia.com/
+0e1340608b06 rust: pci: add extended capability and SR-IOV support
+
+[PATCH v2 0/5] gpu: nova-core: query vGPU mode value from FSP
+021f57aeb714 gpu: nova-core: use bitfield types for MCTP and NVDM headers
+6fb56fe59964 gpu: nova-core: factor out common FSP message header
+53586d59e11b gpu: nova-core: return FSP response buffer to caller
+91ba40e2cf46 gpu: nova-core: read vGPU mode from FSP via PRC protocol
+3a9ee1299b73 gpu: nova-core: add FSP and PRC protocol documentation
+
+vGPU staging M1:
+4b1ca4d37129 gpu: nova-core: introduce vgpu_support module param
+f2e78574cce3 gpu: nova-core: populate GSP_VF_INFO when vGPU is enabled
+f0b11fd99311 gpu: nova-core: set RMSetSriovMode when NVIDIA vGPU is enabled
+4782cb1ea63e gpu: nova-core: reserve a larger GSP WPR2 heap when vGPU is enabled
+8f775b0c4e6a gpu: nova-core: load the scrubber ucode when vGPU support is enabled
+
+[PATCH v3 0/1] rust: introduce abstractions for fwctl
+https://lore.kernel.org/rust-for-linux/20260217204909.211793-1-zhiw@nvidia.com/
+890c5b2e8202 rust: introduce abstractions for fwctl
+
+[PATCH 0/2] gpu: nova-core: add fwctl driver
+https://lore.kernel.org/rust-for-linux/20260305190936.398590-1-zhiw@nvidia.com/
+feed53fe3539 fwctl: use subsys_initcall for built-in configuration
+11ee305d645f gpu: nova-core: add fwctl driver for firmware control interface
