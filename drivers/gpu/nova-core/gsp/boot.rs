@@ -359,6 +359,7 @@ impl super::Gsp {
     /// structures that the GSP will use at runtime.
     ///
     /// Upon return, the GSP is up and running, and its runtime object given as return value.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn boot(
         self: Pin<&mut Self>,
         pdev: &pci::Device<device::Bound>,
@@ -366,6 +367,8 @@ impl super::Gsp {
         chipset: Chipset,
         gsp_falcon: &Falcon<Gsp>,
         sec2_falcon: &Falcon<Sec2>,
+        gsp_firmware: &kernel::firmware::Firmware,
+        gsp_fw_path: kernel::str::CString,
     ) -> Result {
         let dev = pdev.as_ref();
         let uses_sec2 = matches!(
@@ -373,7 +376,10 @@ impl super::Gsp {
             Architecture::Turing | Architecture::Ampere | Architecture::Ada
         );
 
-        let gsp_fw = KBox::pin_init(GspFirmware::new(dev, chipset, FIRMWARE_VERSION), GFP_KERNEL)?;
+        let gsp_fw = KBox::pin_init(
+            GspFirmware::new(dev, chipset, FIRMWARE_VERSION, gsp_firmware, gsp_fw_path),
+            GFP_KERNEL,
+        )?;
 
         dev_info!(
             dev,
