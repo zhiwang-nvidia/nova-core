@@ -12,13 +12,15 @@ use kernel::{
         CoherentView,
         DmaAddress, //
     },
+    fs::file,
     io::{
         io_project,
         io_write,
         Io, //
     },
     pci,
-    prelude::*, //
+    prelude::*,
+    uaccess::UserSliceWriter, //
 };
 
 pub(crate) mod cmdq;
@@ -41,6 +43,13 @@ use crate::{
         gsp::Gsp as GspFalcon,
         sec2::Sec2 as Sec2Falcon,
         Falcon, //
+    },
+    firmware::{
+        tlv::{
+            request_tlv,
+            Tlv, //
+        },
+        BuildId, //
     },
     fsp::Fsp,
     gpu::Chipset,
@@ -101,6 +110,50 @@ impl<const NUM_PAGES: usize> PteArray<NUM_PAGES> {
     }
 }
 
+/// Size of the header prepended to debugfs log buffer dumps.
+///
+/// This header makes each dump self-describing so that decoding tools can
+/// identify the firmware build, GPU architecture, and metadata format without
+/// out-of-band information.
+const LOG_BUFFER_HEADER_SIZE: usize = 0x48;
+
+/// Build a log buffer header from GPU and firmware metadata.
+///
+/// Layout (all little-endian):
+///   0x00  gpuArch (u32)
+///   0x04  gpuImpl (u32)
+///   0x08  version (u32) = 2
+///   0x0C  buildIdLength (u32)
+///   0x10  taskPrefix[8]
+///   0x18  localToGlobalTimerDelta (u64) = 0
+///   0x20  buildId[32]
+///   0x40  flags (u32) = 1 (packed metadata)
+///   0x44  reserved (u32) = 0
+fn build_log_buffer_header(
+    chipset: Chipset,
+    build_id: &BuildId,
+    task_prefix: &str,
+) -> [u8; LOG_BUFFER_HEADER_SIZE] {
+    let mut h = [0u8; LOG_BUFFER_HEADER_SIZE];
+    let chipset_val = chipset as u32;
+
+    h[0x00..0x04].copy_from_slice(&(chipset_val >> 4).to_le_bytes());
+    h[0x04..0x08].copy_from_slice(&(chipset_val & 0xF).to_le_bytes());
+    h[0x08..0x0C].copy_from_slice(&2u32.to_le_bytes());
+
+    let bid = build_id.as_bytes();
+    h[0x0C..0x10].copy_from_slice(&(bid.len() as u32).to_le_bytes());
+
+    let prefix = task_prefix.as_bytes();
+    let prefix_len = prefix.len().min(8);
+    h[0x10..0x10 + prefix_len].copy_from_slice(&prefix[..prefix_len]);
+
+    h[0x20..0x20 + bid.len()].copy_from_slice(bid);
+    h[0x40..0x44].copy_from_slice(&1u32.to_le_bytes());
+
+    h
+}
+
 /// The logging buffers are byte queues that contain encoded printf-like
 /// messages from GSP-RM.  They need to be decoded by a special application
 /// that can parse the buffers.
@@ -115,23 +168,90 @@ impl<const NUM_PAGES: usize> PteArray<NUM_PAGES> {
 /// then pp points to index into the buffer where the next logging entry will
 /// be written. Therefore, the logging data is valid if:
 ///   1 <= pp < sizeof(buffer)/sizeof(u64)
-struct LogBuffer(Coherent<[u8; LOG_BUFFER_SIZE]>);
+///
+/// When a build ID is available, the debugfs file for this buffer prepends
+/// a header so the dump is self-describing.
+struct LogBuffer {
+    header: [u8; LOG_BUFFER_HEADER_SIZE],
+    header_len: usize,
+    buffer: Coherent<[u8; LOG_BUFFER_SIZE]>,
+}
 
 impl LogBuffer {
     /// Creates a new `LogBuffer` mapped on `dev`.
-    fn new(dev: &device::Device<device::Bound>) -> Result<Self> {
-        let obj = Self(Coherent::zeroed(dev, GFP_KERNEL)?);
+    fn new(
+        dev: &device::Device<device::Bound>,
+        chipset: Chipset,
+        build_id: Option<&BuildId>,
+        task_prefix: &str,
+    ) -> Result<Self> {
+        let buffer = Coherent::zeroed(dev, GFP_KERNEL)?;
 
-        let start_addr = obj.0.dma_handle();
+        let start_addr = buffer.dma_handle();
 
         let pte_view = io_project!(
-            obj.0,
+            buffer,
             [build: size_of::<u64>()..][build: ..RM_LOG_BUFFER_NUM_PAGES * size_of::<u64>()]
         )
         .try_cast::<PteArray<RM_LOG_BUFFER_NUM_PAGES>>()?;
         PteArray::init(pte_view, start_addr)?;
 
-        Ok(obj)
+        let (header, header_len) = match build_id {
+            Some(bid) => (
+                build_log_buffer_header(chipset, bid, task_prefix),
+                LOG_BUFFER_HEADER_SIZE,
+            ),
+            None => ([0u8; LOG_BUFFER_HEADER_SIZE], 0),
+        };
+
+        Ok(Self {
+            header,
+            header_len,
+            buffer,
+        })
+    }
+}
+
+impl debugfs::BinaryWriter for LogBuffer {
+    fn write_to_slice(
+        &self,
+        writer: &mut UserSliceWriter,
+        offset: &mut file::Offset,
+    ) -> Result<usize> {
+        if offset.is_negative() {
+            return Err(EINVAL);
+        }
+
+        let offset_val: usize = (*offset).try_into().map_err(|_| EINVAL)?;
+        let total_len = self.header_len + self.buffer.size();
+
+        if offset_val >= total_len {
+            return Ok(0);
+        }
+
+        let count = (total_len - offset_val).min(writer.len());
+        if count == 0 {
+            return Ok(0);
+        }
+
+        let mut written = 0;
+
+        if offset_val < self.header_len {
+            let hdr_start = offset_val;
+            let hdr_count = (self.header_len - hdr_start).min(count);
+            writer.write_slice(&self.header[hdr_start..hdr_start + hdr_count])?;
+            written += hdr_count;
+        }
+
+        if written < count {
+            let buf_start = offset_val.saturating_sub(self.header_len);
+            let buf_count = count - written;
+            writer.write_dma(&self.buffer, buf_start, buf_count)?;
+            written += buf_count;
+        }
+
+        *offset += written as i64;
+        Ok(written)
     }
 }
 
@@ -157,9 +277,11 @@ struct LogBuffers {
 /// GSP runtime data.
 #[pin_data]
 pub(crate) struct Gsp {
+    /// Preloaded GSP firmware TLV metadata used during boot.
+    gsp_tlv: kernel::firmware::Firmware,
     /// Libos arguments.
     pub(crate) libos: Coherent<[LibosMemoryRegionInitArgument]>,
-    /// Log buffers, optionally exposed via debugfs.
+    /// Log buffers for all LIBOS3 tasks, exposed via debugfs.
     #[pin]
     logs: debugfs::Scope<LogBuffers>,
     /// Command queue.
@@ -173,18 +295,32 @@ pub(crate) struct Gsp {
 
 impl Gsp {
     // Creates an in-place initializer for a `Gsp` manager for `pdev`.
-    pub(crate) fn new(pdev: &pci::Device<device::Bound>) -> impl PinInit<Self, Error> + '_ {
+    pub(crate) fn new(
+        pdev: &pci::Device<device::Bound>,
+        chipset: Chipset,
+    ) -> impl PinInit<Self, Error> + '_ {
         pin_init::pin_init_scope(move || {
             let dev = pdev.as_ref();
 
-            let loginit = LogBuffer::new(dev)?;
-            let logintr = LogBuffer::new(dev)?;
-            let logrm = LogBuffer::new(dev)?;
-            let logmnoc = LogBuffer::new(dev)?;
-            let logroot = LogBuffer::new(dev)?;
-            let logrmon = LogBuffer::new(dev)?;
+            let gsp_tlv = request_tlv(dev, chipset, "gsp")?;
+            let tlv = Tlv::new(gsp_tlv.data())?;
+            let build_id = tlv.get_bytes(b"BLID").ok().and_then(BuildId::from_raw);
+            if build_id.is_none() {
+                dev_warn!(
+                    pdev,
+                    "GSP firmware build ID not found, log buffer headers omitted\n"
+                );
+            }
+
+            let loginit = LogBuffer::new(dev, chipset, build_id.as_ref(), "INIT")?;
+            let logintr = LogBuffer::new(dev, chipset, build_id.as_ref(), "INTR")?;
+            let logrm = LogBuffer::new(dev, chipset, build_id.as_ref(), "RM")?;
+            let logmnoc = LogBuffer::new(dev, chipset, build_id.as_ref(), "MNOC")?;
+            let logroot = LogBuffer::new(dev, chipset, build_id.as_ref(), "ROOT")?;
+            let logrmon = LogBuffer::new(dev, chipset, build_id.as_ref(), "RMON")?;
 
             Ok(try_pin_init!(Self {
+                gsp_tlv,
                 cmdq <- Cmdq::new(dev),
                 rm_state_monitor: Coherent::zeroed(dev, GFP_KERNEL)?,
                 rmargs: Coherent::init(
@@ -199,12 +335,30 @@ impl Gsp {
                         GFP_KERNEL,
                     )?;
 
-                    libos.init_at(0, LibosMemoryRegionInitArgument::new("LOGINIT", &loginit.0))?;
-                    libos.init_at(1, LibosMemoryRegionInitArgument::new("LOGINTR", &logintr.0))?;
-                    libos.init_at(2, LibosMemoryRegionInitArgument::new("LOGRM", &logrm.0))?;
-                    libos.init_at(3, LibosMemoryRegionInitArgument::new("LOGMNOC", &logmnoc.0))?;
-                    libos.init_at(4, LibosMemoryRegionInitArgument::new("LOGROOT", &logroot.0))?;
-                    libos.init_at(5, LibosMemoryRegionInitArgument::new("LOGRMON", &logrmon.0))?;
+                    libos.init_at(
+                        0,
+                        LibosMemoryRegionInitArgument::new("LOGINIT", &loginit.buffer),
+                    )?;
+                    libos.init_at(
+                        1,
+                        LibosMemoryRegionInitArgument::new("LOGINTR", &logintr.buffer),
+                    )?;
+                    libos.init_at(
+                        2,
+                        LibosMemoryRegionInitArgument::new("LOGRM", &logrm.buffer),
+                    )?;
+                    libos.init_at(
+                        3,
+                        LibosMemoryRegionInitArgument::new("LOGMNOC", &logmnoc.buffer),
+                    )?;
+                    libos.init_at(
+                        4,
+                        LibosMemoryRegionInitArgument::new("LOGROOT", &logroot.buffer),
+                    )?;
+                    libos.init_at(
+                        5,
+                        LibosMemoryRegionInitArgument::new("LOGRMON", &logrmon.buffer),
+                    )?;
                     libos.init_at(6, LibosMemoryRegionInitArgument::new("RMARGS", rmargs))?;
 
                     libos.into()
@@ -230,12 +384,12 @@ impl Gsp {
                         .expect("DEBUGFS_ROOT not initialized");
 
                     log_parent.scope(log_buffers, dev.name(), |logs, dir| {
-                        dir.read_binary_file(c"loginit", &logs.loginit.0);
-                        dir.read_binary_file(c"logintr", &logs.logintr.0);
-                        dir.read_binary_file(c"logrm", &logs.logrm.0);
-                        dir.read_binary_file(c"logmnoc", &logs.logmnoc.0);
-                        dir.read_binary_file(c"logroot", &logs.logroot.0);
-                        dir.read_binary_file(c"logrmon", &logs.logrmon.0);
+                        dir.read_binary_file(c"loginit", &logs.loginit);
+                        dir.read_binary_file(c"logintr", &logs.logintr);
+                        dir.read_binary_file(c"logrm", &logs.logrm);
+                        dir.read_binary_file(c"logmnoc", &logs.logmnoc);
+                        dir.read_binary_file(c"logroot", &logs.logroot);
+                        dir.read_binary_file(c"logrmon", &logs.logrmon);
                     })
                 },
             }))
