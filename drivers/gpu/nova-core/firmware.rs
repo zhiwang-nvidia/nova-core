@@ -36,6 +36,40 @@ pub(crate) mod riscv;
 
 pub(crate) const FIRMWARE_VERSION: &str = "000";
 
+/// Maximum length of a build ID, matching Open RM's `BUILD_ID_MAX_LENGTH`.
+const BUILD_ID_MAX_LENGTH: usize = 32;
+
+/// Build ID extracted from firmware, used to correlate debugfs log buffer dumps
+/// with the correct firmware symbols.
+pub(crate) struct BuildId {
+    bytes: [u8; BUILD_ID_MAX_LENGTH],
+    len: u8,
+}
+
+impl BuildId {
+    /// Constructs a [`BuildId`] from raw descriptor bytes.
+    ///
+    /// Returns `None` if `data` is empty or exceeds [`BUILD_ID_MAX_LENGTH`].
+    pub(crate) fn from_raw(data: &[u8]) -> Option<Self> {
+        if data.is_empty() || data.len() > BUILD_ID_MAX_LENGTH {
+            return None;
+        }
+
+        let mut bytes = [0u8; BUILD_ID_MAX_LENGTH];
+        bytes[..data.len()].copy_from_slice(data);
+
+        Some(Self {
+            bytes,
+            len: data.len() as u8,
+        })
+    }
+
+    /// Returns the build ID bytes.
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+}
+
 /// Requests the GPU firmware `name` suitable for `chipset`, with version `ver`.
 ///
 /// Returns the firmware path and the loaded firmware.
@@ -692,5 +726,38 @@ mod elf {
             2 => elf64_section(elf, name),
             _ => None,
         }
+    }
+
+    /// ELF note type for GNU build IDs (`NT_GNU_BUILD_ID`).
+    const NT_GNU_BUILD_ID: u32 = 3;
+
+    /// Extract the build ID from the `.note.gnu.build-id` section of an ELF image.
+    ///
+    /// Parses the standard ELF note format (namesz, descsz, type, name, descriptor)
+    /// and returns the descriptor bytes as a [`super::BuildId`]. Returns `None` if
+    /// the section is missing, malformed, or the note type is not
+    /// `NT_GNU_BUILD_ID`.
+    pub(crate) fn elf_build_id(elf: &[u8]) -> Option<super::BuildId> {
+        let note = elf_section(elf, ".note.gnu.build-id")?;
+
+        if note.len() < 12 {
+            return None;
+        }
+
+        let namesz = u32::from_le_bytes(note[0..4].try_into().ok()?) as usize;
+        let descsz = u32::from_le_bytes(note[4..8].try_into().ok()?) as usize;
+        let note_type = u32::from_le_bytes(note[8..12].try_into().ok()?);
+
+        if note_type != NT_GNU_BUILD_ID {
+            return None;
+        }
+
+        // Name field is padded to 4-byte alignment.
+        let name_padded = (namesz + 3) & !3;
+        let desc_offset = 12 + name_padded;
+        let desc_end = desc_offset.checked_add(descsz)?;
+        let desc = note.get(desc_offset..desc_end)?;
+
+        super::BuildId::from_raw(desc)
     }
 }

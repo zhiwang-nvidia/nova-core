@@ -24,6 +24,7 @@ use crate::{
         Falcon, //
     },
     fb::SysmemFlush,
+    firmware,
     fsp::FspCotVersion,
     gsp::Gsp,
     regs,
@@ -301,36 +302,61 @@ impl Gpu {
         devres_bar: Arc<Devres<Bar0>>,
         bar: &'a Bar0,
     ) -> impl PinInit<Self, Error> + 'a {
-        try_pin_init!(Self {
-            spec: Spec::new(pdev.as_ref(), bar).inspect(|spec| {
+        pin_init::pin_init_scope(move || {
+            let spec = Spec::new(pdev.as_ref(), bar).inspect(|spec| {
                 dev_info!(pdev, "NVIDIA ({})\n", spec);
-            })?,
+            })?;
+            let chipset = spec.chipset();
 
-            // We must wait for GFW_BOOT completion before doing any significant setup on the GPU.
-            _: {
-                // SAFETY: `Gpu` owns all DMA allocations for this device, and we are
-                // still constructing it, so no concurrent DMA allocations can exist.
-                unsafe { pdev.dma_set_mask_and_coherent(spec.chipset().arch().dma_mask())? };
+            // SAFETY: `Gpu` owns all DMA allocations for this device, and we are
+            // still constructing it, so no concurrent DMA allocations can exist.
+            unsafe { pdev.dma_set_mask_and_coherent(chipset.arch().dma_mask())? };
 
-                hal::gpu_hal(spec.chipset()).wait_gfw_boot_completion(bar)
-                    .inspect_err(|_| dev_err!(pdev, "GFW boot did not complete\n"))?;
-            },
-
-            sysmem_flush: SysmemFlush::register(pdev.as_ref(), bar, spec.chipset())?,
-
-            gsp_falcon: Falcon::new(
+            let (gsp_fw_path, gsp_fw_blob) = firmware::request_firmware(
                 pdev.as_ref(),
-                spec.chipset(),
+                chipset,
+                "gsp",
+                firmware::FIRMWARE_VERSION,
+            )?;
+            let build_id = firmware::request_firmware(
+                pdev.as_ref(),
+                chipset,
+                "gsp-buildid",
+                firmware::FIRMWARE_VERSION,
             )
-            .inspect(|falcon| falcon.clear_swgen0_intr(bar))?,
+            .ok()
+            .and_then(|(_, fw)| firmware::BuildId::from_raw(fw.data()));
+            if build_id.is_none() {
+                dev_warn!(
+                    pdev,
+                    "GSP firmware build ID not found, log buffer headers omitted\n"
+                );
+            }
 
-            sec2_falcon: Falcon::new(pdev.as_ref(), spec.chipset())?,
+            Ok(try_pin_init!(Self {
+                _: {
+                    hal::gpu_hal(chipset).wait_gfw_boot_completion(bar)
+                        .inspect_err(|_| dev_err!(pdev, "GFW boot did not complete\n"))?;
+                },
 
-            gsp <- Gsp::new(pdev),
+                sysmem_flush: SysmemFlush::register(pdev.as_ref(), bar, chipset)?,
 
-            _: { gsp.boot(pdev, bar, spec.chipset(), gsp_falcon, sec2_falcon)? },
+                gsp_falcon: Falcon::new(
+                    pdev.as_ref(),
+                    chipset,
+                )
+                .inspect(|falcon| falcon.clear_swgen0_intr(bar))?,
 
-            bar: devres_bar,
+                sec2_falcon: Falcon::new(pdev.as_ref(), chipset)?,
+
+                gsp <- Gsp::new(pdev, chipset, build_id.as_ref()),
+
+                _: { gsp.boot(pdev, bar, chipset, gsp_falcon, sec2_falcon,
+                              &gsp_fw_blob, gsp_fw_path)? },
+
+                bar: devres_bar,
+                spec,
+            }))
         })
     }
 
