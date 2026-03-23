@@ -12,8 +12,13 @@ use kernel::{
         DmaAddress, //
     },
     fs::file,
+    io::{
+        self,
+        io_project, //
+    },
     pci,
     prelude::*,
+    ptr::KnownSize,
     transmute::{
         AsBytes,
         FromBytes, //
@@ -59,12 +64,20 @@ unsafe impl<const NUM_ENTRIES: usize> FromBytes for PteArray<NUM_ENTRIES> {}
 unsafe impl<const NUM_ENTRIES: usize> AsBytes for PteArray<NUM_ENTRIES> {}
 
 impl<const NUM_PAGES: usize> PteArray<NUM_PAGES> {
-    /// Returns the page table entry for `index`, for a mapping starting at `start`.
-    // TODO: Replace with `IoView` projection once available.
-    fn entry(start: DmaAddress, index: usize) -> Result<u64> {
-        start
-            .checked_add(num::usize_as_u64(index) << GSP_PAGE_SHIFT)
-            .ok_or(EOVERFLOW)
+    /// Initialize a new page table array mapping `NUM_PAGES` GSP pages starting at address `start`.
+    fn init<T: FromBytes + AsBytes + KnownSize + ?Sized>(
+        view: io::View<'_, Coherent<T>, Self>,
+        start: DmaAddress,
+    ) -> Result<()> {
+        for i in 0..NUM_PAGES {
+            io_project!(view, .0[i]).write_val(
+                start
+                    .checked_add(num::usize_as_u64(i) << GSP_PAGE_SHIFT)
+                    .ok_or(EOVERFLOW)?,
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -146,18 +159,12 @@ impl LogBuffer {
         let buffer: Coherent<[u8; LOG_BUFFER_SIZE]> = Coherent::zeroed(dev, GFP_KERNEL)?;
 
         let start_addr = buffer.dma_handle();
-
-        // SAFETY: `buffer` has just been created and we are its sole user.
-        let pte_region = unsafe {
-            &mut buffer.as_mut()[size_of::<u64>()..][..RM_LOG_BUFFER_NUM_PAGES * size_of::<u64>()]
-        };
-
-        // Write values one by one to avoid an on-stack instance of `PteArray`.
-        for (i, chunk) in pte_region.chunks_exact_mut(size_of::<u64>()).enumerate() {
-            let pte_value = PteArray::<0>::entry(start_addr, i)?;
-
-            chunk.copy_from_slice(&pte_value.to_ne_bytes());
-        }
+        let pte_view = io_project!(
+            buffer,
+            [size_of::<u64>()..]?[..RM_LOG_BUFFER_NUM_PAGES * size_of::<u64>()]?
+        )
+        .try_cast::<PteArray<RM_LOG_BUFFER_NUM_PAGES>>()?;
+        PteArray::init(pte_view, start_addr)?;
 
         let (header, header_len) = match build_id {
             Some(bid) => (
@@ -207,11 +214,7 @@ impl debugfs::BinaryWriter for LogBuffer {
         }
 
         if written < count {
-            let buf_start = if offset_val > self.header_len {
-                offset_val - self.header_len
-            } else {
-                0
-            };
+            let buf_start = offset_val.saturating_sub(self.header_len);
             let buf_count = count - written;
             writer.write_dma(&self.buffer, buf_start, buf_count)?;
             written += buf_count;
