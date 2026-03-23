@@ -12,7 +12,8 @@ use kernel::{
             WithBase, //
         },
         Io,
-        IoCapable, //
+        IoCapable,
+        Region, //
     },
     num::Bounded,
     prelude::*,
@@ -62,7 +63,8 @@ impl<'a> Emem<'a> {
 }
 
 impl IoCapable<u32> for Emem<'_> {
-    unsafe fn io_read(&self, address: usize) -> u32 {
+    unsafe fn io_read(&self, address: *mut u32) -> u32 {
+        let address = address as usize;
         // PANIC: Per the `io_read` SAFETY comment, `address` is within the I/O bounds of `Self` and
         // thus less than `EMEM_MAX_SIZE`, meaning the `else` block is never taken.
         let Some(offset) =
@@ -83,7 +85,8 @@ impl IoCapable<u32> for Emem<'_> {
             .data()
     }
 
-    unsafe fn io_write(&self, value: u32, address: usize) {
+    unsafe fn io_write(&self, value: u32, address: *mut u32) {
+        let address = address as usize;
         // PANIC: Per the `io_write` SAFETY comment, `address` is within the I/O bounds of `Self` and
         // thus less than `EMEM_MAX_SIZE`, meaning the `else` block is never taken.
         let Some(offset) =
@@ -107,12 +110,13 @@ impl IoCapable<u32> for Emem<'_> {
 }
 
 impl Io for Emem<'_> {
-    fn addr(&self) -> usize {
-        0
-    }
+    type Type = Region<0>;
 
-    fn maxsize(&self) -> usize {
-        EMEM_MAX_SIZE.as_usize()
+    fn as_ptr(&self) -> *mut Self::Type {
+        core::ptr::slice_from_raw_parts_mut::<u8>(
+            core::ptr::without_provenance_mut(0),
+            EMEM_MAX_SIZE.as_usize(),
+        ) as *mut Self::Type
     }
 }
 
