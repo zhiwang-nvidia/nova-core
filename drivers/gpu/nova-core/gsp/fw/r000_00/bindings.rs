@@ -928,3 +928,18 @@ pub const GSP_FW_HEAP_SIZE_VGPU_DEFAULT: u32 = 581 << 20;
 pub const GSP_FW_HEAP_SIZE_VGPU_48VMS: u32 = 1370 << 20;
 pub const MAX_PARTITIONS_WITH_GFID: u8 = 48;
 pub const MAX_PARTITIONS_WITH_GFID_32VM: u8 = 32;
+
+#[repr(C)]
+#[derive(Debug, Default, MaybeZeroable)]
+pub struct rpc_gsp_rm_control_v03_00 {
+    pub hClient: u32_,
+    pub hObject: u32_,
+    pub cmd: u32_,
+    pub status: u32_,
+    pub paramsSize: u32_,
+    pub rmapiRpcFlags: u32_,
+    pub rmctrlFlags: u32_,
+    pub rmctrlAccessRight: u32_,
+    pub reserved0: u64_,
+    pub params: __IncompleteArrayField<u8_>,
+}

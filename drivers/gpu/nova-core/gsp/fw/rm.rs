@@ -9,6 +9,7 @@ use kernel::{
 };
 
 use super::{
+    r000_00 as r000,
     r570_144 as r570,
     NvStatus, //
 };
@@ -51,7 +52,7 @@ impl From<RmControlMsgFunction> for u32 {
 #[derive(Zeroable)]
 #[repr(transparent)]
 pub(crate) struct GspRmControl {
-    inner: r570::rpc_gsp_rm_control_v03_00,
+    inner: r000::rpc_gsp_rm_control_v03_00,
 }
 
 #[allow(dead_code)] // new/status are public API for RM control RPCs.
@@ -64,13 +65,16 @@ impl GspRmControl {
         params_size: u32,
     ) -> Self {
         Self {
-            inner: r570::rpc_gsp_rm_control_v03_00 {
+            inner: r000::rpc_gsp_rm_control_v03_00 {
                 hClient: h_client,
                 hObject: h_object,
                 cmd: u32::from(cmd),
                 status: 0,
                 paramsSize: params_size,
-                flags: 0,
+                rmapiRpcFlags: 0,
+                rmctrlFlags: 0,
+                rmctrlAccessRight: 0,
+                reserved0: 0,
                 params: Default::default(),
             },
         }
