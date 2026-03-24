@@ -538,9 +538,11 @@ impl Gpu {
         let mm = proj.mm.as_ref().get_ref();
         let total_vram = mm.buddy().size();
 
-        proj.vgpu.upload_vgpu_type(
+        if let Err(_) = proj.vgpu.upload_vgpu_type(
             &gsp.cmdq, bar0, gsp.h_client(), gsp.h_subdevice(),
-        ).inspect_err(|_| dev_err!(pdev, "failed to upload vGPU type to GSP\n"))?;
+        ) {
+            dev_err!(pdev, "failed to upload vGPU type to GSP (continuing)\n");
+        }
 
         proj.vgpu.init_post_gsp_boot(
             &gsp.cmdq, bar0, gsp.h_client(), gsp.h_subdevice(), total_vram,
@@ -558,6 +560,10 @@ impl Gpu {
             .inspect_err(|_| dev_err!(pdev, "vGPU plugin bootload timed out\n"))?;
 
         dev_info!(pdev, "vGPU plugin bootloaded successfully (magic {:#x})\n", 0x4E65_4A6Fu32);
+
+        proj.vgpu.setup_plugin_rpc(
+            instance, proj.bar_user, mm, bar0, bar1, gsp.h_client(),
+        ).inspect_err(|e| dev_err!(pdev, "vGPU plugin RPC setup failed: {:?}\n", e))?;
 
         Ok(())
     }
