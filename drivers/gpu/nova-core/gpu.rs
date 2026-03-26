@@ -159,6 +159,7 @@ bounded_enum! {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct Revision {
     major: Bounded<u8, 4>,
     minor: Bounded<u8, 4>,
@@ -180,6 +181,7 @@ impl fmt::Display for Revision {
 }
 
 /// Structure holding a basic description of the GPU: `Chipset` and `Revision`.
+#[derive(Clone, Copy)]
 pub(crate) struct Spec {
     chipset: Chipset,
     revision: Revision,
@@ -215,6 +217,12 @@ impl Spec {
         Spec::try_from(boot42).inspect_err(|_| {
             dev_err!(dev, "Unsupported chipset: {}\n", boot42);
         })
+    }
+
+    /// Returns this GPU's chipset.
+    #[expect(dead_code)]
+    pub(crate) fn chipset(self) -> Chipset {
+        self.chipset
     }
 }
 
