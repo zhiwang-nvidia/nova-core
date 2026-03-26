@@ -17,7 +17,7 @@ use crate::{
 #[expect(dead_code)]
 pub(crate) struct FspFirmware {
     /// FMC firmware image data (only the "image" ELF section).
-    fmc_image: Coherent<[u8]>,
+    pub(crate) fmc_image: Coherent<[u8]>,
     /// Full FMC ELF for signature extraction.
     pub(crate) fmc_elf: Firmware,
 }
