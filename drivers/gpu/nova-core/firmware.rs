@@ -512,71 +512,17 @@ mod elf {
         transmute::FromBytes, //
     };
 
-    /// Trait to abstract over ELF header differences.
-    trait ElfHeader: FromBytes {
-        fn shnum(&self) -> u16;
-        fn shoff(&self) -> u64;
-        fn shstrndx(&self) -> u16;
-    }
-
-    /// Trait to abstract over ELF section-header differences.
-    trait ElfSectionHeader: FromBytes {
-        fn name(&self) -> u32;
-        fn offset(&self) -> u64;
-        fn size(&self) -> u64;
-    }
-
-    /// Trait describing a matching ELF header and section-header format.
-    trait ElfFormat {
-        type Header: ElfHeader;
-        type SectionHeader: ElfSectionHeader;
-    }
-
-    /// Newtype to provide a [`FromBytes`] implementation.
+    /// Newtype to provide a [`FromBytes`] implementation for ELF64 headers.
     #[repr(transparent)]
     struct Elf64Hdr(bindings::elf64_hdr);
     // SAFETY: all bit patterns are valid for this type, and it doesn't use interior mutability.
     unsafe impl FromBytes for Elf64Hdr {}
 
-    impl ElfHeader for Elf64Hdr {
-        fn shnum(&self) -> u16 {
-            self.0.e_shnum
-        }
-
-        fn shoff(&self) -> u64 {
-            self.0.e_shoff
-        }
-
-        fn shstrndx(&self) -> u16 {
-            self.0.e_shstrndx
-        }
-    }
-
+    /// Newtype to provide a [`FromBytes`] implementation for ELF64 section headers.
     #[repr(transparent)]
     struct Elf64SHdr(bindings::elf64_shdr);
     // SAFETY: all bit patterns are valid for this type, and it doesn't use interior mutability.
     unsafe impl FromBytes for Elf64SHdr {}
-
-    impl ElfSectionHeader for Elf64SHdr {
-        fn name(&self) -> u32 {
-            self.0.sh_name
-        }
-
-        fn offset(&self) -> u64 {
-            self.0.sh_offset
-        }
-
-        fn size(&self) -> u64 {
-            self.0.sh_size
-        }
-    }
-
-    struct Elf64Format;
-
-    impl ElfFormat for Elf64Format {
-        type Header = Elf64Hdr;
-        type SectionHeader = Elf64SHdr;
-    }
 
     /// Returns a NULL-terminated string from the ELF image at `offset`.
     fn elf_str(elf: &[u8], offset: u64) -> Option<&str> {
@@ -585,50 +531,43 @@ mod elf {
         CStr::from_bytes_until_nul(bytes).ok()?.to_str().ok()
     }
 
-    fn elf_section_generic<'a, F>(elf: &'a [u8], name: &str) -> Option<&'a [u8]>
-    where
-        F: ElfFormat,
-    {
-        let hdr = F::Header::from_bytes(elf.get(0..size_of::<F::Header>())?)?;
+    /// Extract the section with name `name` from the ELF64 image `elf`.
+    fn elf64_section<'a>(elf: &'a [u8], name: &str) -> Option<&'a [u8]> {
+        let hdr = Elf64Hdr::from_bytes(elf.get(0..size_of::<Elf64Hdr>())?)?;
 
-        let shdr_num = usize::from(hdr.shnum());
-        let shdr_start = usize::try_from(hdr.shoff()).ok()?;
+        let shdr_num = usize::from(hdr.0.e_shnum);
+        let shdr_start = usize::try_from(hdr.0.e_shoff).ok()?;
         let shdr_end = shdr_num
-            .checked_mul(size_of::<F::SectionHeader>())
+            .checked_mul(size_of::<Elf64SHdr>())
             .and_then(|v| v.checked_add(shdr_start))?;
 
         // Get all the section headers as an iterator over byte chunks.
         let shdr_bytes = elf.get(shdr_start..shdr_end)?;
-        let mut shdr_iter = shdr_bytes.chunks_exact(size_of::<F::SectionHeader>());
+        let mut shdr_iter = shdr_bytes.chunks_exact(size_of::<Elf64SHdr>());
 
         // Get the strings table.
         let strhdr = shdr_iter
             .clone()
-            .nth(usize::from(hdr.shstrndx()))
-            .and_then(F::SectionHeader::from_bytes)?;
+            .nth(usize::from(hdr.0.e_shstrndx))
+            .and_then(Elf64SHdr::from_bytes)?;
 
         // Find the section which name matches `name` and return it.
         shdr_iter.find_map(|sh_bytes| {
-            let sh = F::SectionHeader::from_bytes(sh_bytes)?;
-            let name_offset = strhdr.offset().checked_add(u64::from(sh.name()))?;
+            let sh = Elf64SHdr::from_bytes(sh_bytes)?;
+            let name_offset = strhdr.0.sh_offset.checked_add(u64::from(sh.0.sh_name))?;
             let section_name = elf_str(elf, name_offset)?;
 
             if section_name != name {
                 return None;
             }
 
-            let start = usize::try_from(sh.offset()).ok()?;
-            let end = usize::try_from(sh.size())
+            let start = usize::try_from(sh.0.sh_offset).ok()?;
+            let end = usize::try_from(sh.0.sh_size)
                 .ok()
                 .and_then(|sz| start.checked_add(sz))?;
 
             elf.get(start..end)
         })
-    }
-
-    /// Extract the section with name `name` from the ELF64 image `elf`.
-    fn elf64_section<'a>(elf: &'a [u8], name: &str) -> Option<&'a [u8]> {
-        elf_section_generic::<Elf64Format>(elf, name)
     }
 
     /// Extract the named section from an ELF64 image.
