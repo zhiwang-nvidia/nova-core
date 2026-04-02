@@ -319,7 +319,7 @@ impl Fsp {
 
     /// Extract FMC firmware signatures for Chain of Trust verification.
     ///
-    /// Extracts real cryptographic signatures from FMC ELF32 firmware sections.
+    /// Extracts real cryptographic signatures from FMC ELF firmware sections.
     /// Returns signatures in a heap-allocated structure to prevent stack overflow.
     pub(crate) fn extract_fmc_signatures(
         dev: &device::Device<device::Bound>,
