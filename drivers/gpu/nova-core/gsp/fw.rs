@@ -667,7 +667,6 @@ static_assert!(
         == core::mem::offset_of!(GspMsgElement, reserved)
 );
 
-#[expect(dead_code)]
 impl GspGmcMsgElement {
     /// Creates a new GMC message element.
     ///
