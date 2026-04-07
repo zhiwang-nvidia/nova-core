@@ -131,16 +131,10 @@ unsafe impl AsBytes for PackedRegistryTable {}
 unsafe impl FromBytes for PackedRegistryTable {}
 
 /// Payload of the `GetGspStaticInfo` command and message.
+#[expect(dead_code)]
 #[repr(transparent)]
 #[derive(Zeroable)]
 pub(crate) struct GspStaticConfigInfo(r000::GspStaticConfigInfo_t);
-
-impl GspStaticConfigInfo {
-    /// Returns a bytes array containing the (hopefully) zero-terminated name of this GPU.
-    pub(crate) fn gpu_name_str(&self) -> [u8; 64] {
-        self.0.gpuNameString
-    }
-}
 
 // SAFETY: Padding is explicit and will not contain uninitialized data.
 unsafe impl AsBytes for GspStaticConfigInfo {}

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use core::{
-    array,
     convert::Infallible,
     ffi::FromBytesUntilNulError,
     str::Utf8Error, //
@@ -21,13 +20,13 @@ use crate::{
         cmdq::{
             Cmdq,
             CommandToGsp,
-            MessageFromGsp,
             NoReply, //
         },
         fw::{
             commands::*,
             MsgFunction, //
         },
+        nvkv, //
     },
     sbuffer::SBufferIter,
 };
@@ -145,38 +144,15 @@ impl CommandToGsp for SetRegistry {
     }
 }
 
-/// The `GetGspStaticInfo` command.
-struct GetGspStaticInfo;
+/// GMC command ID for `GSP_GET_STATIC_INFO`.
+const GMC_CMD_GSP_GET_STATIC_INFO: u32 = 0x0001_0001;
 
-impl CommandToGsp for GetGspStaticInfo {
-    const FUNCTION: MsgFunction = MsgFunction::GetGspStaticInfo;
-    type Command = GspStaticConfigInfo;
-    type Reply = GetGspStaticInfoReply;
-    type InitError = Infallible;
+/// Maximum response size for `GSP_GET_STATIC_INFO`.
+const GSP_GET_STATIC_INFO_MAX_RESPONSE: u32 = 8192;
 
-    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
-        GspStaticConfigInfo::init_zeroed()
-    }
-}
-
-/// The reply from the GSP to the [`GetGspInfo`] command.
+/// The reply from the GSP to the `GSP_GET_STATIC_INFO` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
-}
-
-impl MessageFromGsp for GetGspStaticInfoReply {
-    const FUNCTION: MsgFunction = MsgFunction::GetGspStaticInfo;
-    type Message = GspStaticConfigInfo;
-    type InitError = Infallible;
-
-    fn read(
-        msg: &Self::Message,
-        _sbuffer: &mut SBufferIter<array::IntoIter<&[u8], 2>>,
-    ) -> Result<Self, Self::InitError> {
-        Ok(GetGspStaticInfoReply {
-            gpu_name: msg.gpu_name_str(),
-        })
-    }
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -203,7 +179,26 @@ impl GetGspStaticInfoReply {
     }
 }
 
-/// Send the [`GetGspInfo`] command and awaits for its reply.
+/// Sends `GSP_GET_STATIC_INFO` via GMC and parses the NVKV response.
 pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: &Bar0) -> Result<GetGspStaticInfoReply> {
-    cmdq.send_command(bar, GetGspStaticInfo)
+    let response = cmdq.send_gmc_and_receive(
+        bar,
+        GMC_CMD_GSP_GET_STATIC_INFO,
+        &[],
+        GSP_GET_STATIC_INFO_MAX_RESPONSE,
+    )?;
+
+    if response.status != 0 {
+        return Err(EIO);
+    }
+
+    let mut gpu_name = [0u8; 64];
+    if let Some(name_bytes) =
+        nvkv::find_array8(&response.payload, nvkv::gsp_config_key::GPU_NAME_STRING)?
+    {
+        let len = name_bytes.len().min(gpu_name.len());
+        gpu_name[..len].copy_from_slice(&name_bytes[..len]);
+    }
+
+    Ok(GetGspStaticInfoReply { gpu_name })
 }

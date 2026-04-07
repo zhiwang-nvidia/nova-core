@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 mod boot;
+mod nvkv;
 
 use kernel::{
     debugfs,
