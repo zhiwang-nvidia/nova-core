@@ -30,6 +30,8 @@ bounded_enum! {
         FspResponse = 0x15,
         /// GSP-RM RPC message.
         RmRpc = 0x25,
+        /// GMC API message (GSP command queue).
+        GmcApi = 0x26,
     }
 }
 
