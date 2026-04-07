@@ -398,7 +398,7 @@ impl Gsp {
 
     /// Query the GSP for the static GPU information.
     pub(crate) fn get_static_info(&self, bar: Bar0<'_>) -> Result<commands::GetGspStaticInfoReply> {
-        self.cmdq.send_command(bar, commands::GetGspStaticInfo)
+        commands::get_gsp_info(&self.cmdq, bar)
     }
 }
 

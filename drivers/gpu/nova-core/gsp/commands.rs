@@ -17,9 +17,11 @@ use kernel::{
 };
 
 use crate::{
+    driver::Bar0,
     gpu::Chipset,
     gsp::{
         cmdq::{
+            Cmdq,
             CommandToGsp,
             MessageFromGsp,
             NoReply, //
@@ -28,6 +30,7 @@ use crate::{
             self,
             MsgFunction, //
         },
+        nvkv, //
     },
     sbuffer::SBufferIter,
     vgpu::VgpuState, //
@@ -167,46 +170,17 @@ impl CommandToGsp for SetRegistry {
     }
 }
 
-/// The `GetGspStaticInfo` command.
-pub(crate) struct GetGspStaticInfo;
+/// GMC command ID for `GSP_GET_STATIC_INFO`.
+const GMC_CMD_GSP_GET_STATIC_INFO: u32 = 0x0001_0001;
 
-impl CommandToGsp for GetGspStaticInfo {
-    const FUNCTION: MsgFunction = MsgFunction::GetGspStaticInfo;
-    type Command = fw::commands::GspStaticConfigInfo;
-    type Reply = GetGspStaticInfoReply;
-    type InitError = Infallible;
+/// Maximum response size for `GSP_GET_STATIC_INFO`.
+const GSP_GET_STATIC_INFO_MAX_RESPONSE: u32 = 8192;
 
-    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
-        Self::Command::init_zeroed()
-    }
-}
-
-/// The reply from the GSP to the [`GetGspStaticInfo`] command.
+/// The reply from the GSP to the `GSP_GET_STATIC_INFO` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
     /// Usable FB (VRAM) regions for driver memory allocation.
     pub(crate) usable_fb_regions: KVec<Range<u64>>,
-}
-
-impl MessageFromGsp for GetGspStaticInfoReply {
-    const FUNCTION: MsgFunction = MsgFunction::GetGspStaticInfo;
-    type Message = fw::commands::GspStaticConfigInfo;
-    type InitError = Error;
-
-    fn read(
-        msg: &Self::Message,
-        _sbuffer: &mut SBufferIter<array::IntoIter<&[u8], 2>>,
-    ) -> Result<Self, Self::InitError> {
-        let mut usable_fb_regions = KVec::new();
-        for region in msg.usable_fb_regions() {
-            usable_fb_regions.push(region, GFP_KERNEL)?;
-        }
-
-        Ok(GetGspStaticInfoReply {
-            gpu_name: msg.gpu_name_str(),
-            usable_fb_regions,
-        })
-    }
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -231,6 +205,40 @@ impl GetGspStaticInfoReply {
             .to_str()
             .map_err(GpuNameError::InvalidUtf8)
     }
+}
+
+/// Sends `GSP_GET_STATIC_INFO` via GMC and parses the NVKV response.
+pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: Bar0<'_>) -> Result<GetGspStaticInfoReply> {
+    let response = cmdq.send_gmc_and_receive(
+        bar,
+        GMC_CMD_GSP_GET_STATIC_INFO,
+        &[],
+        GSP_GET_STATIC_INFO_MAX_RESPONSE,
+    )?;
+
+    if response.status != 0 {
+        return Err(EIO);
+    }
+
+    let decoder = nvkv::Decoder::new(&response.payload, nvkv::UnknownKeyPolicy::Ignore)?;
+    let decoded = KBox::try_init(
+        decoder.decode(nvkv::GspInitResponseSchema::default())?,
+        GFP_KERNEL,
+    )?;
+
+    let mut gpu_name = [0u8; 64];
+    let name = decoded.gpu_name();
+    gpu_name[..name.len()].copy_from_slice(name);
+
+    let mut usable_fb_regions = KVec::new();
+    for region in decoded.usable_fb_regions() {
+        usable_fb_regions.push(region, GFP_KERNEL)?;
+    }
+
+    Ok(GetGspStaticInfoReply {
+        gpu_name,
+        usable_fb_regions,
+    })
 }
 
 pub(crate) use fw::commands::PowerStateLevel;

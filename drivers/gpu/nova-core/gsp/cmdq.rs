@@ -660,7 +660,6 @@ impl Cmdq {
     /// - `EMSGSIZE` if the command exceeds the maximum queue element size.
     /// - `ETIMEDOUT` if space is not available or the response is not received in time.
     /// - `ENOMEM` if the response payload buffer cannot be allocated.
-    #[expect(dead_code)]
     pub(crate) fn send_gmc_and_receive(
         &self,
         bar: Bar0<'_>,

@@ -405,7 +405,7 @@ impl PluginSetBmeRequest {
 // Should decode with UnknownKeyPolicy::Ignore.
 nvkv_decode! {
     #[derive(Default)]
-    struct GspInitResponseSchema => GspInitResponse {
+    pub(super) struct GspInitResponseSchema => GspInitResponse {
         gpu_name:
             Array<u8, { GspInitResponse::MAX_GPU_NAME_LEN }, { Self::GPU_NAME_STRING_KEY }>,
         fb_regions: Accumulated<FbRegionSchema>,
@@ -425,7 +425,7 @@ impl GspInitResponseSchema {
     const ENGINE_MASK_KEY: KeyId = 0x1100;
 }
 
-struct GspInitResponse {
+pub(super) struct GspInitResponse {
     gpu_name: ArrayVec<u8, { Self::MAX_GPU_NAME_LEN }>,
     fb_regions: KVVec<FbRegion>,
     bar1_pde_base: u64,
@@ -436,6 +436,27 @@ struct GspInitResponse {
 impl GspInitResponse {
     const MAX_GPU_NAME_LEN: usize = 64;
     const NVGMC_ENGINE_TYPE_COUNT: usize = 20;
+    const FB_REGION_TAG_NONE: u32 = 0;
+
+    pub(super) fn gpu_name(&self) -> &[u8] {
+        self.gpu_name.as_slice()
+    }
+
+    /// Iterates over FB regions that the driver may use for memory allocation.
+    pub(super) fn usable_fb_regions(&self) -> impl Iterator<Item = core::ops::Range<u64>> + '_ {
+        self.fb_regions.iter().filter_map(|region| {
+            if region.limit >= region.base
+                && region.tag == Self::FB_REGION_TAG_NONE
+                && !region.flags.protected()
+                && region.flags.support_compressed()
+                && region.flags.support_iso()
+            {
+                region.limit.checked_add(1).map(|end| region.base..end)
+            } else {
+                None
+            }
+        })
+    }
 }
 
 nvkv_decode! {
