@@ -52,6 +52,7 @@ use crate::{
             MsgFunction,
             MsgqRxHeader,
             MsgqTxHeader,
+            GMCAPI_COMMAND_ID_MASK,
             GSP_MSG_QUEUE_ELEMENT_SIZE_MAX, //
         },
         PteArray,
@@ -486,13 +487,37 @@ struct GspCommand<'a, H = GspMsgElement> {
 
 /// A message ready to be processed from the message queue.
 ///
-/// This is the type returned by [`Cmdq::wait_for_msg`].
+/// This is the type returned by [`CmdqInner::wait_for_msg`].
 struct GspMessage<'a> {
     // Reference to the header of the message.
     header: &'a GspMsgElement,
     // Slices to the contents of the message. The second slice is zero unless the message loops
     // over the message queue.
     contents: (&'a [u8], &'a [u8]),
+}
+
+/// A GMC message ready to be processed from the message queue.
+///
+/// This is the type returned by [`CmdqInner::wait_for_gmc_msg`].
+struct GmcMessage<'a> {
+    // Reference to the header of the message.
+    header: &'a GspGmcMsgElement,
+    // Slices to the contents of the message (after the GmcApiHeader). The second slice is zero
+    // unless the message loops over the message queue.
+    contents: (&'a [u8], &'a [u8]),
+}
+
+/// Response from a GMC API command.
+///
+/// Returned by [`Cmdq::send_gmc_and_receive`].
+#[expect(dead_code)]
+pub(crate) struct GmcResponse {
+    /// The GMC command identifier from the response.
+    pub(crate) command_id: u32,
+    /// Response status (`NV_STATUS` code). Zero means success.
+    pub(crate) status: u32,
+    /// Response payload (copied from the message queue).
+    pub(crate) payload: KVec<u8>,
 }
 
 /// GSP command queue.
@@ -626,20 +651,26 @@ impl Cmdq {
         self.inner.lock().receive_and_dispatch(timeout, handler)
     }
 
-    /// Sends a GMC API command to the GSP.
+    /// Sends a GMC API command to the GSP and waits for the response.
     ///
-    /// See [`CmdqInner::send_gmc`] for details.
+    /// The queue is locked for the entire send+receive cycle.
+    ///
+    /// # Errors
+    ///
+    /// - `EMSGSIZE` if the command exceeds the maximum queue element size.
+    /// - `ETIMEDOUT` if space is not available or the response is not received in time.
+    /// - `ENOMEM` if the response payload buffer cannot be allocated.
     #[expect(dead_code)]
-    pub(crate) fn send_gmc(
+    pub(crate) fn send_gmc_and_receive(
         &self,
         bar: Bar0<'_>,
         command_id: u32,
         payload: &[u8],
         max_response_size: u32,
-    ) -> Result {
-        self.inner
-            .lock()
-            .send_gmc(bar, command_id, payload, max_response_size)
+    ) -> Result<GmcResponse> {
+        let mut inner = self.inner.lock();
+        inner.send_gmc(bar, command_id, payload, max_response_size)?;
+        inner.receive_gmc(Self::RECEIVE_TIMEOUT)
     }
 }
 
@@ -773,10 +804,10 @@ impl CmdqInner {
     /// Sends a GMC API command to the GSP.
     ///
     /// `command_id` is the GMC command identifier (from `GMCAPI_COMMANDS`).
-    /// `payload` is the command-specific data following the [`GmcapiHeader`].
+    /// `payload` is the command-specific data following the [`GmcApiHeader`].
     /// `max_response_size` is the maximum expected response payload size.
     ///
-    /// [`GmcapiHeader`]: super::fw::GmcapiHeader
+    /// [`GmcApiHeader`]: super::fw::GmcApiHeader
     ///
     /// # Errors
     ///
@@ -1013,5 +1044,86 @@ impl CmdqInner {
         )?);
 
         Ok(result)
+    }
+
+    /// Wait for a GMC message to become available on the message queue.
+    ///
+    /// This is the GMC counterpart to [`CmdqInner::wait_for_msg`]. It parses a
+    /// [`GspGmcMsgElement`] instead of a [`GspMsgElement`].
+    fn wait_for_gmc_msg(&self, timeout: Delta) -> Result<GmcMessage<'_>> {
+        let (slice_1, slice_2) = read_poll_timeout(
+            || Ok(self.gsp_mem.driver_read_area()),
+            |driver_area| !driver_area.0.is_empty(),
+            Delta::from_millis(1),
+            timeout,
+        )
+        .map(|(slice_1, slice_2)| (slice_1.as_flattened(), slice_2.as_flattened()))?;
+
+        let (header, slice_1) = GspGmcMsgElement::from_bytes_prefix(slice_1).ok_or(EIO)?;
+
+        let payload_length = header.payload_length();
+
+        if slice_1.len() + slice_2.len() < payload_length {
+            return Err(EIO);
+        }
+
+        let (slice_1, slice_2) = if slice_1.len() > payload_length {
+            (slice_1.split_at(payload_length).0, &slice_2[0..0])
+        } else {
+            (slice_1, slice_2.split_at(payload_length - slice_1.len()).0)
+        };
+
+        if !header.has_valid_magic() {
+            dev_err!(
+                &self.dev,
+                "GSP GMC: receive: seq {} - bad MCTP magic\n",
+                header.gmc.sequence
+            );
+            return Err(EIO);
+        }
+
+        Ok(GmcMessage {
+            header,
+            contents: (slice_1, slice_2),
+        })
+    }
+
+    /// Receive a GMC response from the GSP.
+    ///
+    /// Copies the response payload out of the message queue and advances the read pointer.
+    ///
+    /// # Errors
+    ///
+    /// - `ETIMEDOUT` if `timeout` elapses before a message arrives.
+    /// - `EIO` if the message queue is inconsistent or the MCTP magic is invalid.
+    /// - `ENOMEM` if the payload buffer cannot be allocated.
+    fn receive_gmc(&mut self, timeout: Delta) -> Result<GmcResponse> {
+        let message = self.wait_for_gmc_msg(timeout)?;
+
+        dev_dbg!(
+            &self.dev,
+            "GSP GMC: response received: seq {}, command_id=0x{:x}, status=0x{:x}, length=0x{:x}\n",
+            message.header.gmc.sequence,
+            message.header.gmc.command & GMCAPI_COMMAND_ID_MASK,
+            message.header.gmc.max_resp_or_status,
+            message.header.length(),
+        );
+
+        let total_len = message.contents.0.len() + message.contents.1.len();
+        let mut payload = KVec::with_capacity(total_len, GFP_KERNEL)?;
+        payload.extend_from_slice(message.contents.0, GFP_KERNEL)?;
+        payload.extend_from_slice(message.contents.1, GFP_KERNEL)?;
+
+        let response = GmcResponse {
+            command_id: message.header.gmc.command & GMCAPI_COMMAND_ID_MASK,
+            status: message.header.gmc.max_resp_or_status,
+            payload,
+        };
+
+        self.gsp_mem.advance_cpu_read_ptr(u32::try_from(
+            message.header.length().div_ceil(GSP_PAGE_SIZE),
+        )?);
+
+        Ok(response)
     }
 }
