@@ -18,6 +18,7 @@ mod falcon;
 mod fb;
 mod firmware;
 mod fsp;
+mod fwctl;
 mod gpu;
 mod gsp;
 mod mctp;
@@ -74,6 +75,7 @@ module! {
     description: "Nova Core GPU driver",
     license: "GPL v2",
     firmware: [],
+    imports_ns: ["FWCTL"],
 }
 
 kernel::module_firmware!(firmware::ModInfoBuilder);

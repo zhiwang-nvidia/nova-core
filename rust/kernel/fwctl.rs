@@ -263,6 +263,29 @@ impl<T: Operations> Registration<T> {
             Ok(Devres::new(parent, Self { dev: dev.into() }))
         })
     }
+
+    /// Register a previously allocated fwctl device (owned variant).
+    ///
+    /// Takes an owned [`ARef`] instead of a reference, avoiding lifetime
+    /// constraints when the [`Device`] is a local that cannot outlive the
+    /// returned initializer.
+    pub fn new_owned<'a>(
+        parent: &'a device::Device<device::Bound>,
+        dev: ARef<Device<T>>,
+    ) -> impl PinInit<Devres<Self>, Error> + 'a
+    where
+        T: 'a,
+    {
+        pin_init::pin_init_scope(move || {
+            // SAFETY: `dev` is a valid fwctl_device backed by an ARef.
+            let ret = unsafe { bindings::fwctl_register(dev.as_raw()) };
+            if ret != 0 {
+                return Err(Error::from_errno(ret));
+            }
+
+            Ok(Devres::new(parent, Self { dev }))
+        })
+    }
 }
 
 impl<T: Operations> Drop for Registration<T> {

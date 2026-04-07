@@ -8,6 +8,7 @@ use kernel::{
         DmaMask, //
     },
     fmt,
+    fwctl,
     io::Io,
     num::Bounded,
     pci,
@@ -294,6 +295,9 @@ pub(crate) struct Gpu {
     /// GSP runtime data. Temporarily an empty placeholder.
     #[pin]
     gsp: Gsp,
+    /// fwctl device registration for GMC API pass-through.
+    #[pin]
+    _fwctl_reg: Devres<fwctl::Registration<crate::fwctl::NovaCoreFwCtl>>,
 }
 
 impl Gpu {
@@ -322,6 +326,8 @@ impl Gpu {
                 );
             }
 
+            let cmdq_cell = core::cell::Cell::new(core::ptr::null::<crate::gsp::cmdq::Cmdq>());
+
             Ok(try_pin_init!(Self {
                 _: {
                     hal::gpu_hal(chipset).wait_gfw_boot_completion(bar)
@@ -340,7 +346,41 @@ impl Gpu {
 
                 gsp <- Gsp::new(pdev, chipset, build_id.as_ref()),
 
-                _: { gsp.boot(pdev, bar, chipset, gsp_falcon, sec2_falcon)? },
+                _: {
+                    // SAFETY: `gsp.cmdq` is pinned inside `Gsp` which is owned by
+                    // this `Gpu`, and the fwctl `Devres` registration is torn down
+                    // before `Gsp` is dropped. Use `get_unchecked_mut` + `addr_of!`
+                    // to extract the pointer without consuming the pin-init field
+                    // reference. Store it in `cmdq_cell` because pin-init blocks
+                    // capture by move and cannot share mutable locals.
+                    // SAFETY: We do not move the pinned `Gsp`; `addr_of!` only
+                    // computes the address.
+                    cmdq_cell.set(core::ptr::addr_of!(gsp.as_ref().get_ref().cmdq));
+                    gsp.boot(pdev, bar, chipset, gsp_falcon, sec2_falcon)?;
+                },
+
+                _fwctl_reg <- {
+                    let fwctl_data = unsafe {
+                        crate::fwctl::NovaCoreFwCtlData::new(
+                            devres_bar.clone(),
+                            cmdq_cell.get(),
+                        )
+                    };
+                    let fwctl_dev = fwctl::Device::<crate::fwctl::NovaCoreFwCtl>::new(
+                        pdev.as_ref(),
+                        // SAFETY: The closure writes a fully initialized
+                        // `NovaCoreFwCtlData`.
+                        unsafe {
+                            pin_init::pin_init_from_closure(
+                                move |slot: *mut crate::fwctl::NovaCoreFwCtlData| {
+                                    slot.write(fwctl_data);
+                                    Ok(())
+                                },
+                            )
+                        },
+                    )?;
+                    fwctl::Registration::new_owned(pdev.as_ref(), fwctl_dev)
+                },
 
                 bar: devres_bar,
                 spec,
