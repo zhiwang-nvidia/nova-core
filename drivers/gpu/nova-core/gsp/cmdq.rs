@@ -47,6 +47,7 @@ use crate::{
     driver::Bar0,
     gsp::{
         fw::{
+            GspGmcMsgElement,
             GspMsgElement,
             MsgFunction,
             MsgqRxHeader,
@@ -624,6 +625,22 @@ impl Cmdq {
     ) -> Result<R> {
         self.inner.lock().receive_and_dispatch(timeout, handler)
     }
+
+    /// Sends a GMC API command to the GSP.
+    ///
+    /// See [`CmdqInner::send_gmc`] for details.
+    #[expect(dead_code)]
+    pub(crate) fn send_gmc(
+        &self,
+        bar: Bar0<'_>,
+        command_id: u32,
+        payload: &[u8],
+        max_response_size: u32,
+    ) -> Result {
+        self.inner
+            .lock()
+            .send_gmc(bar, command_id, payload, max_response_size)
+    }
 }
 
 /// Inner mutex protected state of [`Cmdq`].
@@ -751,6 +768,62 @@ impl CmdqInner {
                 Ok(())
             }
         }
+    }
+
+    /// Sends a GMC API command to the GSP.
+    ///
+    /// `command_id` is the GMC command identifier (from `GMCAPI_COMMANDS`).
+    /// `payload` is the command-specific data following the [`GmcapiHeader`].
+    /// `max_response_size` is the maximum expected response payload size.
+    ///
+    /// [`GmcapiHeader`]: super::fw::GmcapiHeader
+    ///
+    /// # Errors
+    ///
+    /// - `EMSGSIZE` if the command exceeds the maximum queue element size.
+    /// - `ETIMEDOUT` if space does not become available within the timeout.
+    fn send_gmc(
+        &mut self,
+        bar: Bar0<'_>,
+        command_id: u32,
+        payload: &[u8],
+        max_response_size: u32,
+    ) -> Result {
+        let dst = self
+            .gsp_mem
+            .allocate_command::<GspGmcMsgElement>(payload.len(), Self::ALLOCATE_TIMEOUT)?;
+
+        let msg_element = GspGmcMsgElement::init(
+            command_id,
+            u64::from(self.seq),
+            payload.len(),
+            max_response_size,
+        );
+        // SAFETY: `dst.header` points to a valid, writable `GspGmcMsgElement` region.
+        unsafe {
+            msg_element.__init(core::ptr::from_mut(dst.header))?;
+        }
+
+        // Copy the payload into the command buffer.
+        let mut sbuffer =
+            SBufferIter::new_writer([&mut dst.contents.0[..], &mut dst.contents.1[..]]);
+        sbuffer.write_all(payload)?;
+        drop(sbuffer);
+
+        dev_dbg!(
+            &self.dev,
+            "GSP GMC: send: seq# {}, command_id=0x{:x}, length=0x{:x}\n",
+            self.seq,
+            command_id,
+            dst.header.length(),
+        );
+
+        let elem_count = dst.header.element_count();
+        self.seq += 1;
+        self.gsp_mem.advance_cpu_write_ptr(elem_count);
+        Cmdq::notify_gsp(bar);
+
+        Ok(())
     }
 
     /// Wait for a message to become available on the message queue.
