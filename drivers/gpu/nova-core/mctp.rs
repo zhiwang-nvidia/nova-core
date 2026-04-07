@@ -103,4 +103,6 @@ pub(crate) mod nvdm_type {
     pub(crate) const FSP_RESPONSE: u8 = 0x15;
     /// RM RPC message (GSP command queue).
     pub(crate) const RM_RPC: u8 = 0x25;
+    /// GMC API message (GSP command queue).
+    pub(crate) const GMCAPI: u8 = 0x26;
 }

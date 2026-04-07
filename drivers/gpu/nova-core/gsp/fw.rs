@@ -635,6 +635,134 @@ unsafe impl AsBytes for GspMsgElement {}
 // SAFETY: All fields are integer types for which all bit patterns are valid.
 unsafe impl FromBytes for GspMsgElement {}
 
+/// GMC API message header.
+///
+/// Matches the `GMCAPI_HEADER` struct from Open RM (`gmcapi_base.h`). The two
+/// middle `u32` fields form a union in C: for requests they carry `size` and
+/// `max_response_size`, for responses they carry `status` and `size`.
+///
+/// Open RM reference: `interface/gmcapi/gmcapi_base.h`
+#[repr(C)]
+#[derive(Zeroable)]
+pub(crate) struct GmcapiHeader {
+    /// GMC command identifier (from `GMCAPI_COMMANDS`).
+    pub(crate) command_id: u32,
+    reserved1: u32,
+    /// Sequence number for matching requests to responses.
+    pub(crate) sequence: u64,
+    /// Request: payload size in bytes. Response: `NV_STATUS` code.
+    pub(crate) size_or_status: u32,
+    /// Request: maximum response size. Response: actual response size.
+    pub(crate) max_resp_or_resp_size: u32,
+    reserved2: u64,
+}
+
+static_assert!(size_of::<GmcapiHeader>() == 32);
+static_assert!(core::mem::offset_of!(GmcapiHeader, command_id) == 0);
+static_assert!(core::mem::offset_of!(GmcapiHeader, sequence) == 8);
+static_assert!(core::mem::offset_of!(GmcapiHeader, size_or_status) == 16);
+static_assert!(core::mem::offset_of!(GmcapiHeader, max_resp_or_resp_size) == 20);
+static_assert!(core::mem::offset_of!(GmcapiHeader, reserved2) == 24);
+
+// SAFETY: All fields are integer types with no uninitialized padding bytes.
+unsafe impl AsBytes for GmcapiHeader {}
+
+// SAFETY: All fields are integer types for which all bit patterns are valid.
+unsafe impl FromBytes for GmcapiHeader {}
+
+/// GSP GMC Message Element (r000 MCTP/NVDM format).
+///
+/// Same transport prefix as [`GspMsgElement`] but with a [`GmcapiHeader`]
+/// instead of `rpc_message_header_v`. The `nvdm_header` DWORD carries
+/// `nvdm_type::GMCAPI` (`0x26`) to route the message through the GSP GMC
+/// dispatch path.
+#[repr(C)]
+pub(crate) struct GspGmcMsgElement {
+    mctp_magic: u32,
+    mctp_payload_size: u32,
+    mctp_header: u32,
+    nvdm_header: u32,
+    nvdm_payload_size: u32,
+    reserved: u32,
+    pub(crate) gmc: GmcapiHeader,
+}
+
+static_assert!(
+    core::mem::offset_of!(GspGmcMsgElement, mctp_magic)
+        == core::mem::offset_of!(GspMsgElement, mctp_magic)
+);
+static_assert!(
+    core::mem::offset_of!(GspGmcMsgElement, mctp_payload_size)
+        == core::mem::offset_of!(GspMsgElement, mctp_payload_size)
+);
+static_assert!(
+    core::mem::offset_of!(GspGmcMsgElement, mctp_header)
+        == core::mem::offset_of!(GspMsgElement, mctp_header)
+);
+static_assert!(
+    core::mem::offset_of!(GspGmcMsgElement, nvdm_header)
+        == core::mem::offset_of!(GspMsgElement, nvdm_header)
+);
+static_assert!(
+    core::mem::offset_of!(GspGmcMsgElement, nvdm_payload_size)
+        == core::mem::offset_of!(GspMsgElement, nvdm_payload_size)
+);
+static_assert!(
+    core::mem::offset_of!(GspGmcMsgElement, reserved)
+        == core::mem::offset_of!(GspMsgElement, reserved)
+);
+
+#[expect(dead_code)]
+impl GspGmcMsgElement {
+    /// Creates a new GMC message element.
+    ///
+    /// `payload_size` is the size of the command payload following this header.
+    /// `command_id` is the GMC command identifier.
+    /// `sequence` is the sequence number for request/response matching.
+    /// `max_response_size` is the maximum expected response payload size.
+    pub(crate) fn init(
+        command_id: u32,
+        sequence: u64,
+        payload_size: usize,
+        max_response_size: u32,
+    ) -> impl Init<Self, Error> {
+        use crate::mctp;
+
+        try_init!(GspGmcMsgElement {
+            mctp_magic: MCTP_MAGIC,
+            mctp_payload_size: (size_of::<Self>() - 8 + payload_size) as u32,
+            mctp_header: mctp::TransportHeader::new(true, true, 0, 0, 0).into(),
+            nvdm_header: mctp::NvdmHeader::new(mctp::nvdm_type::GMCAPI).into(),
+            nvdm_payload_size: (size_of::<GmcapiHeader>() + payload_size) as u32,
+            reserved: 0u32,
+            gmc: GmcapiHeader {
+                command_id,
+                reserved1: 0,
+                sequence,
+                size_or_status: payload_size as u32,
+                max_resp_or_resp_size: max_response_size,
+                reserved2: 0,
+            },
+        })
+    }
+
+    /// Returns the total length of the message, transport and GMC headers included.
+    pub(crate) fn length(&self) -> usize {
+        8 + num::u32_as_usize(self.mctp_payload_size)
+    }
+
+    /// Returns the number of elements (i.e. memory pages) used by this message.
+    pub(crate) fn element_count(&self) -> u32 {
+        self.length().div_ceil(GSP_PAGE_SIZE) as u32
+    }
+}
+
+// SAFETY: All fields are integer types with no uninitialized padding bytes.
+unsafe impl AsBytes for GspGmcMsgElement {}
+
+// SAFETY: All fields are integer types for which all bit patterns are valid.
+unsafe impl FromBytes for GspGmcMsgElement {}
+
 /// Optional bindata (ucodes) firmware info for GSP startup arguments.
 pub(crate) struct BindataArgs {
     /// DMA address of the radix3 level 0 page table for the bindata firmware.
