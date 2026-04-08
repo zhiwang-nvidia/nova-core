@@ -4,20 +4,30 @@
 
 use kernel::{
     device,
+    io::poll::read_poll_timeout,
     pci,
-    prelude::*, //
+    prelude::*,
+    time::Delta, //
 };
 
 use crate::{
-    driver::Bar0,
+    driver::{
+        Bar0,
+        Bar1, //
+    },
     gpu::Chipset,
     gsp::cmdq::Cmdq,
     mm::{
         self,
+        bar_user::BarUser,
         GpuMm,
-        VramBlock, //
+        Pfn,
+        VramAddress,
+        VramBlock,
+        PAGE_SIZE, //
     },
-    module_parameters, //
+    module_parameters,
+    num::IntoSafeCast, //
 };
 
 /// Send a vGPU command to GSP via GMC and check the response status.
@@ -59,6 +69,15 @@ const CMD_VGPU_SHUTDOWN: u32 = 0x2080_4002;
 
 /// NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_CLEANUP_GSP_VGPU_PLUGIN_TASK
 const CMD_VGPU_CLEANUP: u32 = 0x2080_4008;
+
+/// Magic value GSP writes to ctrl buffer on successful plugin bootload.
+const GSP_PLUGIN_BOOTLOADED: u32 = 0x4E65_4A6F;
+
+/// Byte offset of message_seq_num within VGPU_CPU_GSP_CTRL_BUFF_REGION.
+const CTRL_BUF_MSG_SEQ_NUM_OFFSET: usize = 8;
+
+const PLUGIN_BOOT_TIMEOUT: Delta = Delta::from_secs(10);
+const PLUGIN_POLL_INTERVAL: Delta = Delta::from_millis(1);
 
 const VGPU_GSP_CTRL_REGION_SIZE: u64 = 4096;
 const VGPU_GSP_RESPONSE_REGION_SIZE: u64 = 4096;
@@ -447,6 +466,43 @@ impl Vgpu {
         self.build_engine_bitmap(cmdq, bar)?;
         self.init_comm_layout();
         self.init_chid_allocator();
+        Ok(())
+    }
+
+    /// Wait for the GSP vGPU plugin to finish bootloading.
+    ///
+    /// Maps the management heap ctrl buffer via BAR1 and polls
+    /// `message_seq_num` until GSP writes [`GSP_PLUGIN_BOOTLOADED`].
+    pub(crate) fn wait_plugin_ready(
+        instance: &VgpuInstance,
+        bar_user: &mut BarUser,
+        mm: &GpuMm,
+        bar1: &Bar1,
+        comm_size: u64,
+    ) -> Result {
+        let mgmt = instance.mgmt_heap.as_ref().ok_or(EINVAL)?;
+        let base = mgmt.addr();
+        let page_size: u64 = PAGE_SIZE.into_safe_cast();
+        let num_pages = comm_size.div_ceil(page_size) as usize;
+
+        let mut pfns = KVec::new();
+        for i in 0..num_pages {
+            let i_u64: u64 = i.into_safe_cast();
+            pfns.push(
+                Pfn::from(VramAddress::new(base + i_u64 * page_size)),
+                GFP_KERNEL,
+            )?;
+        }
+
+        let access = bar_user.map(mm, bar1, &pfns, false)?;
+
+        read_poll_timeout(
+            || access.try_read32(CTRL_BUF_MSG_SEQ_NUM_OFFSET),
+            |val| *val == GSP_PLUGIN_BOOTLOADED,
+            PLUGIN_POLL_INTERVAL,
+            PLUGIN_BOOT_TIMEOUT,
+        )?;
+
         Ok(())
     }
 
