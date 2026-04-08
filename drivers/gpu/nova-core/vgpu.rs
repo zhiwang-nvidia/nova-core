@@ -56,6 +56,15 @@ const CMD_VGPU_SHUTDOWN: u32 = 0x2080_4002;
 /// NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_CLEANUP_GSP_VGPU_PLUGIN_TASK
 const CMD_VGPU_CLEANUP: u32 = 0x2080_4008;
 
+const VGPU_GSP_CTRL_REGION_SIZE: u64 = 4096;
+const VGPU_GSP_RESPONSE_REGION_SIZE: u64 = 4096;
+const VGPU_GSP_MESSAGE_REGION_SIZE: u64 = 4096;
+const VGPU_GSP_MIGRATION_REGION_SIZE: u64 = 2 * 1024 * 1024;
+const VGPU_GSP_ERROR_REGION_SIZE: u64 = 4096;
+const VGPU_GSP_INIT_TASK_LOG_SIZE: u64 = 128 * 1024;
+const VGPU_GSP_VGPU_TASK_LOG_SIZE: u64 = 256 * 1024;
+const VGPU_GSP_KERNEL_LOG_SIZE: u64 = 64 * 1024;
+
 /// Maximum number of NV2080 engine types (NV2080_ENGINE_TYPE_LAST).
 pub(crate) const NV2080_GPU_MAX_ENGINES: usize = 0x54;
 
@@ -328,6 +337,45 @@ impl Vgpu {
         if count > 0 {
             self.chid_alloc.free(offset, count);
         }
+    }
+
+    /// Initialize GSP communication buffer layout from fixed region sizes.
+    pub(crate) fn init_comm_layout(&mut self) {
+        self.comm_layout.total_size = VGPU_GSP_CTRL_REGION_SIZE
+            + VGPU_GSP_RESPONSE_REGION_SIZE
+            + VGPU_GSP_MESSAGE_REGION_SIZE
+            + VGPU_GSP_MIGRATION_REGION_SIZE
+            + VGPU_GSP_ERROR_REGION_SIZE
+            + VGPU_GSP_INIT_TASK_LOG_SIZE
+            + VGPU_GSP_VGPU_TASK_LOG_SIZE
+            + VGPU_GSP_KERNEL_LOG_SIZE;
+        self.comm_layout.init_task_log_offset = VGPU_GSP_CTRL_REGION_SIZE
+            + VGPU_GSP_RESPONSE_REGION_SIZE
+            + VGPU_GSP_MESSAGE_REGION_SIZE
+            + VGPU_GSP_MIGRATION_REGION_SIZE
+            + VGPU_GSP_ERROR_REGION_SIZE;
+        self.comm_layout.init_task_log_size = VGPU_GSP_INIT_TASK_LOG_SIZE;
+        self.comm_layout.vgpu_task_log_size = VGPU_GSP_VGPU_TASK_LOG_SIZE;
+        self.comm_layout.kernel_log_size = VGPU_GSP_KERNEL_LOG_SIZE;
+    }
+
+    /// Initialize post-boot vGPU state.
+    ///
+    /// Must be called after GSP boot completes. Queries hardware parameters,
+    /// builds the engine bitmap, and sets up allocators.
+    pub(crate) fn init_post_gsp_boot(
+        &mut self,
+        cmdq: &Cmdq,
+        bar: &Bar0,
+        total_vram: u64,
+    ) -> Result {
+        self.gsp_config.total_fbmem_size = total_vram;
+        // TODO: query actual available CHIDs from GSP instead of hardcoding.
+        self.gsp_config.total_avail_chids = 2048;
+        self.build_engine_bitmap(cmdq, bar)?;
+        self.init_comm_layout();
+        self.init_chid_allocator();
+        Ok(())
     }
 
     /// Build the engine bitmap by querying GSP via the device info table.
