@@ -211,3 +211,19 @@ pub unsafe extern "C" fn nova_vgpu_get_vfio_ops(
 ) -> *const NovaVgpuVfioOps {
     &NOVA_VFIO_OPS
 }
+
+// Export `nova_vgpu_get_vfio_ops` so that other modules (e.g. the VFIO
+// variant driver) can resolve it at load time.  Rust cannot emit
+// EXPORT_SYMBOL directly, so we replicate the linker-section entry that
+// the C macro `EXPORT_SYMBOL_GPL()` generates.
+core::arch::global_asm!(
+    r#"
+    .section ".export_symbol","a"
+    __export_symbol_nova_vgpu_get_vfio_ops:
+    .asciz "GPL"
+    .ascii "\0"
+    .balign 4
+    .long nova_vgpu_get_vfio_ops
+    .previous
+    "#,
+);
