@@ -101,4 +101,15 @@ impl pci::Driver for NovaCore {
     fn unbind(pdev: &pci::Device<Core>, this: Pin<&Self>) {
         this.gpu.unbind(pdev.as_ref());
     }
+
+    #[cfg(CONFIG_PCI_IOV)]
+    fn sriov_configure(pdev: &pci::Device<Core>, nr_virtfn: i32) -> Result<i32> {
+        if nr_virtfn > 0 {
+            pdev.enable_sriov(nr_virtfn)?;
+            Ok(nr_virtfn)
+        } else {
+            pdev.disable_sriov();
+            Ok(0)
+        }
+    }
 }
