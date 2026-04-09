@@ -323,17 +323,17 @@ pub(crate) struct Gpu {
     sec2_falcon: Falcon<Sec2Falcon>,
     /// GPU memory manager owning memory management resources.
     #[pin]
-    mm: GpuMm,
+    pub(crate) mm: GpuMm,
     /// GSP runtime data. Temporarily an empty placeholder.
     #[pin]
     pub(crate) gsp: Gsp,
-    vgpu: Vgpu,
+    pub(crate) vgpu: Vgpu,
     /// Static GPU information from GSP.
     gsp_static_info: GetGspStaticInfoReply,
     /// MMIO mapping of PCI BAR 1
     pub(crate) bar1: Arc<Devres<Bar1>>,
     /// BAR1 user interface for CPU access to GPU virtual memory.
-    bar_user: Option<BarUser>,
+    pub(crate) bar_user: Option<BarUser>,
     /// fwctl device registration for GMC API pass-through.
     #[pin]
     _fwctl_reg: Devres<fwctl::Registration<crate::fwctl::NovaCoreFwCtl>>,

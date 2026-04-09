@@ -642,6 +642,24 @@ impl Vgpu {
         self.send_gfid_command(cmdq, bar, CMD_VGPU_CLEANUP, gfid)
     }
 
+    /// Hot-reset a running vGPU instance via the host RPC channel.
+    ///
+    /// Sends `RpcMsg::Reset` to the GSP plugin, which resets the plugin's
+    /// internal state without tearing down allocated resources.
+    pub(crate) fn rpc_reset(
+        &self,
+        instance: &VgpuInstance,
+        bar_user: &mut BarUser,
+        mm_gpu: &GpuMm,
+        bar0: &Bar0,
+        bar1: &Bar1,
+        comm_size: u64,
+    ) -> Result {
+        let mut rpc = PluginRpc::new(instance, bar_user, mm_gpu, bar1, comm_size)?;
+        rpc.call(bar0, instance.gfid, RpcMsg::Reset, &mut [])?;
+        Ok(())
+    }
+
     /// Build the engine bitmap by querying GSP via the device info table.
     pub(crate) fn build_engine_bitmap(&mut self, cmdq: &Cmdq, bar: &Bar0) -> Result {
         let mut base_index: u32 = 0;
