@@ -834,8 +834,9 @@ enum RpcMsg {
 /// Doorbell register offset within BAR0 for the vGPU plugin.
 const DOORBELL_BASE: usize = 0xb8_0000 + 0x2200;
 
-/// ctrl_buff->version: version 1 with STABLE_RPC capability flag.
-const VGPU_CPU_GSP_CTRL_BUFF_VERSION: u32 = 0x8000_0001;
+/// ctrl_buff->version: version 2 with STABLE_RPC capability flag.
+/// chips_a GSP plugin requires version >= 2.
+const VGPU_CPU_GSP_CTRL_BUFF_VERSION: u32 = 0x8000_0002;
 
 /// RPC response timeout and poll interval.
 const RPC_TIMEOUT: kernel::time::Delta = kernel::time::Delta::from_secs(120);
