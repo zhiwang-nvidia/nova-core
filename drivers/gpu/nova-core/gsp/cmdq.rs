@@ -810,9 +810,8 @@ impl CmdqInner {
         };
 
         // Advance the read pointer past this message.
-        self.gsp_mem.advance_cpu_read_ptr(u32::try_from(
-            message.header.length().div_ceil(GSP_PAGE_SIZE),
-        )?);
+        self.gsp_mem
+            .advance_cpu_read_ptr(message.header.element_count());
 
         // Deferred past message consumption to satisfy the borrow checker: message
         // holds a reference into self.gsp_mem, so we can't mutate self until it's dropped.
@@ -861,9 +860,8 @@ impl CmdqInner {
 
         let result = handler(function, message.contents.0, message.contents.1);
 
-        self.gsp_mem.advance_cpu_read_ptr(u32::try_from(
-            message.header.length().div_ceil(GSP_PAGE_SIZE),
-        )?);
+        self.gsp_mem
+            .advance_cpu_read_ptr(message.header.element_count());
 
         if is_event {
             self.rx_event_seq += 1;

@@ -1028,9 +1028,14 @@ impl GspMsgElement {
         self.rpc.function.try_into().map_err(|_| self.rpc.function)
     }
 
-    // Returns the number of elements (i.e. memory pages) used by this message.
+    /// Returns the number of queue slots (memory pages) occupied by this message.
+    ///
+    /// The GSP computes slot count from `mctp_payload_size` alone (the 8-byte
+    /// mctp_magic + mctp_payload_size prefix is folded into the first slot),
+    /// so we must match that: `ceil(mctp_payload_size / GSP_PAGE_SIZE)`.
     pub(crate) fn element_count(&self) -> u32 {
-        self.length().div_ceil(GSP_PAGE_SIZE) as u32
+        num::u32_as_usize(self.mctp_payload_size)
+            .div_ceil(GSP_PAGE_SIZE) as u32
     }
 }
 
