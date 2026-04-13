@@ -954,16 +954,21 @@ impl r000::rpc_message_header_v {
     }
 }
 
+/// MCTP magic value identifying valid GSP message queue elements.
+pub(super) const MCTP_MAGIC: u32 = 0x4D43_5450;
+
 /// GSP Message Element (r000 MCTP/NVDM format).
 ///
 /// This is the transport-layer header for messages exchanged with GSP-RM.
 /// r000 firmware uses MCTP/NVDM framing instead of the r570 `GSP_MSG_QUEUE_ELEMENT`.
 #[repr(C)]
 pub(crate) struct GspMsgElement {
+    mctp_magic: u32,
+    mctp_payload_size: u32,
     mctp_header: u32,
     nvdm_header: u32,
-    check_sum: u32,
-    seq_num: u32,
+    nvdm_payload_size: u32,
+    reserved: u32,
     rpc: r000::rpc_message_header_v,
 }
 
@@ -972,15 +977,12 @@ impl GspMsgElement {
     ///
     /// # Arguments
     ///
-    /// * `transport_seq` - Transport-level sequence number for the outer message header.
-    ///   Must be unique per message.
-    /// * `rpc_seq` - RPC-level sequence number for the inner RPC header
-    ///   (`rpc_message_header_v.sequence`). Set to 0 for async (fire-and-forget) commands,
-    ///   or to the sync counter for command/response pairs.
+    /// * `rpc_seq` - RPC-level sequence number for `rpc_message_header_v.sequence`.
+    ///   Set to 0 for async (fire-and-forget) commands, or to the sequence counter
+    ///   for command/response pairs.
     /// * `cmd_size` - Size of the command (not including the message element), in bytes.
     /// * `function` - Function of the message.
     pub(crate) fn init(
-        transport_seq: u32,
         rpc_seq: u32,
         cmd_size: usize,
         function: MsgFunction,
@@ -989,32 +991,30 @@ impl GspMsgElement {
         type RpcMessageHeader = r000::rpc_message_header_v;
 
         try_init!(GspMsgElement {
+            mctp_magic: MCTP_MAGIC,
+            mctp_payload_size: (size_of::<Self>() - 8 + cmd_size) as u32,
             mctp_header: mctp::TransportHeader::new(true, true, 0, 0, 0).into(),
             nvdm_header: mctp::NvdmHeader::new(mctp::nvdm_type::RM_RPC).into(),
-            check_sum: 0u32,
-            seq_num: transport_seq,
+            nvdm_payload_size: (size_of::<RpcMessageHeader>() + cmd_size) as u32,
+            reserved: 0u32,
             rpc <- RpcMessageHeader::init(cmd_size, function, rpc_seq),
         })
     }
 
-    /// Sets the checksum of this message.
-    ///
-    /// Since the header is also part of the checksum, this is usually called after the whole
-    /// message has been written to the shared memory area.
-    pub(crate) fn set_checksum(&mut self, checksum: u32) {
-        self.check_sum = checksum;
-    }
-
     /// Returns the length of the message's payload (command data after the RPC header).
     pub(crate) fn payload_length(&self) -> usize {
-        // `rpc.length` includes the length of the RPC message header.
-        num::u32_as_usize(self.rpc.length)
+        num::u32_as_usize(self.nvdm_payload_size)
             .saturating_sub(size_of::<r000::rpc_message_header_v>())
     }
 
     /// Returns the total length of the message, transport and RPC headers included.
     pub(crate) fn length(&self) -> usize {
-        size_of::<Self>() + self.payload_length()
+        8 + num::u32_as_usize(self.mctp_payload_size)
+    }
+
+    /// Returns `true` if the MCTP magic field contains the expected value.
+    pub(crate) fn has_valid_magic(&self) -> bool {
+        self.mctp_magic == MCTP_MAGIC
     }
 
     // Returns the sequence number of the message.
@@ -1049,6 +1049,12 @@ pub(crate) struct BindataArgs {
     pub(crate) size: u64,
 }
 
+/// Magic value for the `GSP_ARGUMENTS_CACHED` header.
+const GSP_ARGUMENTS_MAGIC_VALUE: u32 = 0x2050_5347;
+
+/// Flag indicating the GSP stack should be placed in DMEM.
+const GSP_ARGUMENTS_FLAG_STACK_IN_DMEM: u64 = 0x02;
+
 /// Arguments for GSP startup.
 #[repr(transparent)]
 pub(crate) struct GspArgumentsCached(r000::GSP_ARGUMENTS_CACHED);
@@ -1066,8 +1072,10 @@ impl GspArgumentsCached {
         state_monitor: &Coherent<[u8]>,
     ) -> Self {
         let mut args = r000::GSP_ARGUMENTS_CACHED {
+            magic: GSP_ARGUMENTS_MAGIC_VALUE,
+            size: size_of::<r000::GSP_ARGUMENTS_CACHED>() as u16,
+            flags: GSP_ARGUMENTS_FLAG_STACK_IN_DMEM,
             messageQueueInitArguments: MessageQueueInitArguments::new(cmdq).0,
-            bDmemStack: 1,
             ..Default::default()
         };
 
@@ -1119,10 +1127,10 @@ impl MessageQueueInitArguments {
             cmdQueueOffset: num::usize_as_u64(Cmdq::CMDQ_OFFSET),
             statQueueOffset: num::usize_as_u64(Cmdq::STATQ_OFFSET),
 
-            queueElementHdrSize: core::mem::offset_of!(r000::GSP_MSG_QUEUE_ELEMENT, payload)
-                as u64,
-            queueElementSizeMin: GSP_PAGE_SIZE as u64,
-            queueElementSizeMax: (GSP_PAGE_SIZE * 16) as u64,
+            queueElementHdrSize: (size_of::<GspMsgElement>()
+                - size_of::<r000::rpc_message_header_v>()) as u32,
+            queueElementSizeMin: GSP_PAGE_SIZE as u32,
+            queueElementSizeMax: (GSP_PAGE_SIZE * 16) as u32,
             queueHeaderAlign: 4,
             queueElementAlign: GSP_PAGE_SHIFT as u32,
 

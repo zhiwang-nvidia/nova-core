@@ -30,7 +30,51 @@ impl<T> ::core::fmt::Debug for __IncompleteArrayField<T> {
         fmt.write_str("__IncompleteArrayField")
     }
 }
+#[repr(C)]
+pub struct __BindgenUnionField<T>(::core::marker::PhantomData<T>);
+impl<T> __BindgenUnionField<T> {
+    #[inline]
+    pub const fn new() -> Self {
+        __BindgenUnionField(::core::marker::PhantomData)
+    }
+    #[inline]
+    pub unsafe fn as_ref(&self) -> &T {
+        ::core::mem::transmute(self)
+    }
+    #[inline]
+    pub unsafe fn as_mut(&mut self) -> &mut T {
+        ::core::mem::transmute(self)
+    }
+}
+impl<T> ::core::default::Default for __BindgenUnionField<T> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl<T> ::core::clone::Clone for __BindgenUnionField<T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> ::core::marker::Copy for __BindgenUnionField<T> {}
+impl<T> ::core::fmt::Debug for __BindgenUnionField<T> {
+    fn fmt(&self, fmt: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        fmt.write_str("__BindgenUnionField")
+    }
+}
+impl<T> ::core::hash::Hash for __BindgenUnionField<T> {
+    fn hash<H: ::core::hash::Hasher>(&self, _state: &mut H) {}
+}
+impl<T> ::core::cmp::PartialEq for __BindgenUnionField<T> {
+    fn eq(&self, _other: &__BindgenUnionField<T>) -> bool {
+        true
+    }
+}
+impl<T> ::core::cmp::Eq for __BindgenUnionField<T> {}
 pub const NV_VGPU_MSG_SIGNATURE_VALID: u32 = 1129337430;
+pub const REGISTRY_TABLE_ENTRY_TYPE_DWORD: u32 = 1;
 pub const GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS2: u32 = 0;
 pub const GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS3_BAREMETAL: u32 = 23068672;
 pub const GSP_FW_HEAP_PARAM_BASE_RM_SIZE_TU10X: u32 = 8388608;
@@ -41,7 +85,6 @@ pub const GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MIN_MB: u32 = 88;
 pub const GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MAX_MB: u32 = 280;
 pub const GSP_FW_WPR_META_REVISION: u32 = 1;
 pub const GSP_FW_WPR_META_MAGIC: i64 = -2577556379034558285;
-pub const REGISTRY_TABLE_ENTRY_TYPE_DWORD: u32 = 1;
 pub type __u8 = ffi::c_uchar;
 pub type __u16 = ffi::c_ushort;
 pub type __u32 = ffi::c_uint;
@@ -107,7 +150,7 @@ pub const NV_VGPU_MSG_FUNCTION_UPDATE_PDE_2: _bindgen_ty_2 = 53;
 pub const NV_VGPU_MSG_FUNCTION_SET_PAGE_DIRECTORY: _bindgen_ty_2 = 54;
 pub const NV_VGPU_MSG_FUNCTION_GET_STATIC_PSTATE_INFO: _bindgen_ty_2 = 55;
 pub const NV_VGPU_MSG_FUNCTION_TRANSLATE_GUEST_GPU_PTES: _bindgen_ty_2 = 56;
-pub const NV_VGPU_MSG_FUNCTION_RESERVED_57: _bindgen_ty_2 = 57;
+pub const NV_VGPU_MSG_FUNCTION_SET_LICENSE_INFO: _bindgen_ty_2 = 57;
 pub const NV_VGPU_MSG_FUNCTION_RESET_CURRENT_GR_CONTEXT: _bindgen_ty_2 = 58;
 pub const NV_VGPU_MSG_FUNCTION_SET_SEMA_MEM_VALIDATION_STATE: _bindgen_ty_2 = 59;
 pub const NV_VGPU_MSG_FUNCTION_GET_ENGINE_UTILIZATION: _bindgen_ty_2 = 60;
@@ -260,7 +303,7 @@ pub const NV_VGPU_MSG_FUNCTION_RM_API_CONTROL: _bindgen_ty_2 = 204;
 pub const NV_VGPU_MSG_FUNCTION_CTRL_CMD_INTERNAL_GPU_START_FABRIC_PROBE: _bindgen_ty_2 = 205;
 pub const NV_VGPU_MSG_FUNCTION_CTRL_NVLINK_GET_INBAND_RECEIVED_DATA: _bindgen_ty_2 = 206;
 pub const NV_VGPU_MSG_FUNCTION_GET_STATIC_DATA: _bindgen_ty_2 = 207;
-pub const NV_VGPU_MSG_FUNCTION_RESERVED_208: _bindgen_ty_2 = 208;
+pub const NV_VGPU_MSG_FUNCTION_GET_STATIC_DATA_UNPUBLISHED: _bindgen_ty_2 = 208;
 pub const NV_VGPU_MSG_FUNCTION_CTRL_GPU_GET_INFO_V2: _bindgen_ty_2 = 209;
 pub const NV_VGPU_MSG_FUNCTION_GET_BRAND_CAPS: _bindgen_ty_2 = 210;
 pub const NV_VGPU_MSG_FUNCTION_CTRL_CMD_NVLINK_INBAND_SEND_DATA: _bindgen_ty_2 = 211;
@@ -326,7 +369,8 @@ pub const NV_VGPU_MSG_EVENT_GSP_LOAD_EXEC_GENERIC_BOOTLOADER: _bindgen_ty_3 = 41
 pub const NV_VGPU_MSG_EVENT_GSP_LOAD_EXEC_HS_BINARY: _bindgen_ty_3 = 4135;
 pub const NV_VGPU_MSG_EVENT_UPDATE_GRID_DISPLAYLESS_PARAMS: _bindgen_ty_3 = 4136;
 pub const NV_VGPU_MSG_EVENT_PMU_HALTED: _bindgen_ty_3 = 4137;
-pub const NV_VGPU_MSG_EVENT_NUM_EVENTS: _bindgen_ty_3 = 4138;
+pub const NV_VGPU_MSG_EVENT_ECC_POSSIBLE_ERR_FAST_PATH: _bindgen_ty_3 = 4138;
+pub const NV_VGPU_MSG_EVENT_NUM_EVENTS: _bindgen_ty_3 = 4139;
 pub type _bindgen_ty_3 = ffi::c_uint;
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
@@ -477,6 +521,22 @@ pub struct ACPI_METHOD_DATA {
     pub muxMethodData: MUX_METHOD_DATA,
     pub capsMethodData: CAPS_METHOD_DATA,
 }
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
+pub struct PACKED_REGISTRY_ENTRY {
+    pub nameOffset: u32_,
+    pub type_: u8_,
+    pub __bindgen_padding_0: [u8; 3usize],
+    pub data: u32_,
+    pub length: u32_,
+}
+#[repr(C)]
+#[derive(Debug, Default, MaybeZeroable)]
+pub struct PACKED_REGISTRY_TABLE {
+    pub size: u32_,
+    pub numEntries: u32_,
+    pub entries: __IncompleteArrayField<PACKED_REGISTRY_ENTRY>,
+}
 pub type GspStaticConfigInfo = GspStaticConfigInfo_t;
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
@@ -578,7 +638,9 @@ pub struct GspStaticConfigInfo_t {
     pub ecidInfo: EcidManufacturingInfo,
     pub fwWprLayoutOffset: FW_WPR_LAYOUT_OFFSET,
     pub bBusResetRequired: u8_,
-    pub __bindgen_padding_7: [u8; 7usize],
+    pub bGppBrandingOverrideApplied: u8_,
+    pub __bindgen_padding_7: [u8; 2usize],
+    pub gppOverriddenPciDeviceId: u32_,
 }
 impl Default for GspStaticConfigInfo_t {
     fn default() -> Self {
@@ -655,38 +717,42 @@ pub struct GspSystemInfo {
     pub __bindgen_padding_5: [u8; 3usize],
     pub pf0DeviceControl2Reg: u32_,
     pub bIsCxlDevice: u8_,
-    pub __bindgen_padding_6: [u8; 7usize],
+    pub bReserveZeroFbAddressAsRegion: u8_,
+    pub __bindgen_padding_6: [u8; 6usize],
 }
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
 pub struct MESSAGE_QUEUE_INIT_ARGUMENTS {
+    pub flags: u64_,
     pub sharedMemPhysAddr: u64_,
-    pub pageTableEntryCount: u32_,
-    pub __bindgen_padding_0: [u8; 4usize],
     pub cmdQueueOffset: u64_,
     pub statQueueOffset: u64_,
-    pub queueElementHdrSize: u64_,
-    pub queueElementSizeMin: u64_,
-    pub queueElementSizeMax: u64_,
+    pub queueElementHdrSize: u32_,
+    pub queueElementSizeMin: u32_,
+    pub queueElementSizeMax: u32_,
     pub queueHeaderAlign: u32_,
     pub queueElementAlign: u32_,
+    pub pageTableEntryCount: u32_,
+    pub reserved: [u8_; 8usize],
 }
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
 pub struct GSP_SR_INIT_ARGUMENTS {
     pub oldLevel: u32_,
     pub flags: u32_,
-    pub bInPMTransition: u8_,
-    pub __bindgen_padding_0: [u8; 3usize],
+    pub reserved: [u8_; 8usize],
 }
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
 pub struct GSP_ARGUMENTS_CACHED {
+    pub magic: u32_,
+    pub size: u16_,
+    pub reserved: [u8_; 2usize],
+    pub flags: u64_,
     pub messageQueueInitArguments: MESSAGE_QUEUE_INIT_ARGUMENTS,
     pub srInitArguments: GSP_SR_INIT_ARGUMENTS,
+    pub reserved2: [u8_; 4usize],
     pub gpuInstance: u32_,
-    pub bDmemStack: u8_,
-    pub __bindgen_padding_0: [u8; 7usize],
     pub profilerArgs: GSP_ARGUMENTS_CACHED__bindgen_ty_1,
     pub sysmemHeapArgs: GSP_ARGUMENTS_CACHED__bindgen_ty_2,
     pub rmStateMonitorBufferArgs: GSP_ARGUMENTS_CACHED__bindgen_ty_3,
@@ -786,7 +852,7 @@ pub struct GspFwWprMeta {
     pub __bindgen_anon_2: GspFwWprMeta__bindgen_ty_2,
     pub gspFwHeapVfPartitionCount: u8_,
     pub flags: u8_,
-    pub padding: [u8_; 2usize],
+    pub pagingConfig: u16_,
     pub pmuReservedSize: u32_,
     pub verified: u64_,
 }
@@ -883,22 +949,6 @@ pub struct LibosMemoryRegionInitArgument {
 }
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
-pub struct PACKED_REGISTRY_ENTRY {
-    pub nameOffset: u32_,
-    pub type_: u8_,
-    pub __bindgen_padding_0: [u8; 3usize],
-    pub data: u32_,
-    pub length: u32_,
-}
-#[repr(C)]
-#[derive(Debug, Default, MaybeZeroable)]
-pub struct PACKED_REGISTRY_TABLE {
-    pub size: u32_,
-    pub numEntries: u32_,
-    pub entries: __IncompleteArrayField<PACKED_REGISTRY_ENTRY>,
-}
-#[repr(C)]
-#[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
 pub struct msgqTxHeader {
     pub version: u32_,
     pub size: u32_,
@@ -915,13 +965,58 @@ pub struct msgqRxHeader {
     pub readPtr: u32_,
 }
 #[repr(C)]
-#[derive(Debug, Default, MaybeZeroable)]
+#[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
+pub struct GSP_MSG_QUEUE_ENCRYPTION_TAG {
+    pub authTagBuffer: [u8_; 16usize],
+}
+#[repr(C)]
+#[derive(MaybeZeroable)]
 pub struct GSP_MSG_QUEUE_ELEMENT {
+    pub mctpMagic: u32_,
+    pub mctpPayloadSize: u32_,
     pub mctpHeader: u32_,
     pub nvdmHeader: u32_,
-    pub checkSum: u32_,
-    pub seqNum: u32_,
+    pub __bindgen_anon_1: GSP_MSG_QUEUE_ELEMENT__bindgen_ty_1,
+}
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct GSP_MSG_QUEUE_ELEMENT__bindgen_ty_1 {
+    pub withEncryption: __BindgenUnionField<GSP_MSG_QUEUE_ELEMENT__bindgen_ty_1__bindgen_ty_1>,
+    pub noEncryption: __BindgenUnionField<GSP_MSG_QUEUE_ELEMENT__bindgen_ty_1__bindgen_ty_2>,
+    pub bindgen_union_field: [u32; 6usize],
+}
+#[repr(C)]
+#[derive(Debug, Default, MaybeZeroable)]
+pub struct GSP_MSG_QUEUE_ELEMENT__bindgen_ty_1__bindgen_ty_1 {
+    pub encryptionTag: GSP_MSG_QUEUE_ENCRYPTION_TAG,
+    pub nvdmPayloadSize: u32_,
+    pub reserved: u32_,
     pub payload: __IncompleteArrayField<u8_>,
+}
+#[repr(C)]
+#[derive(Debug, Default, MaybeZeroable)]
+pub struct GSP_MSG_QUEUE_ELEMENT__bindgen_ty_1__bindgen_ty_2 {
+    pub nvdmPayloadSize: u32_,
+    pub reserved: u32_,
+    pub payload: __IncompleteArrayField<u8_>,
+}
+impl Default for GSP_MSG_QUEUE_ELEMENT__bindgen_ty_1 {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+impl Default for GSP_MSG_QUEUE_ELEMENT {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
 }
 
 pub const GSP_FW_HEAP_SIZE_VGPU_DEFAULT: u32 = 581 << 20;

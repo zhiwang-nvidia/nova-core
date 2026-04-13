@@ -562,19 +562,6 @@ impl Cmdq {
             .set_address(0)
             .write(bar);
     }
-
-    /// Computes the checksum for the message pointed to by `it`.
-    ///
-    /// A message is made of several parts, so `it` is an iterator over byte slices representing
-    /// these parts.
-    fn calculate_checksum<T: Iterator<Item = u8>>(it: T) -> u32 {
-        let sum64 = it
-            .enumerate()
-            .map(|(idx, byte)| (((idx % 8) * 8) as u32, byte))
-            .fold(0, |acc, (rol, byte)| acc ^ u64::from(byte).rotate_left(rol));
-
-        ((sum64 >> 32) as u32) ^ (sum64 as u32)
-    }
 }
 
 impl CmdqInner {
@@ -606,13 +593,12 @@ impl CmdqInner {
         // at `dst.contents.0` here.
         let (cmd, payload_1) = M::Command::from_bytes_mut_prefix(dst.contents.0).ok_or(EIO)?;
 
-        // The outer seqNum always increments (transport-level, unique per message).
-        // The inner rpc.sequence is 0 for async (fire-and-forget) commands, or the
-        // transport counter for command/response pairs, matching Open RM behavior.
+        // rpc.sequence is 0 for async (fire-and-forget) commands, or the
+        // sequence counter for command/response pairs, matching Open RM behavior.
         let rpc_seq = if M::IS_ASYNC { 0 } else { self.seq };
 
         // Fill the header and command in-place.
-        let msg_element = GspMsgElement::init(self.seq, rpc_seq, size_in_bytes, M::FUNCTION);
+        let msg_element = GspMsgElement::init(rpc_seq, size_in_bytes, M::FUNCTION);
         // SAFETY: `msg_header` and `cmd` are valid references, and not touched if the initializer
         // fails.
         unsafe {
@@ -628,14 +614,6 @@ impl CmdqInner {
             return Err(EIO);
         }
         drop(sbuffer);
-
-        // Compute checksum now that the whole message is ready.
-        dst.header
-            .set_checksum(Cmdq::calculate_checksum(SBufferIter::new_reader([
-                dst.header.as_bytes(),
-                dst.contents.0,
-                dst.contents.1,
-            ])));
 
         if M::IS_ASYNC {
             dev_dbg!(
@@ -750,16 +728,10 @@ impl CmdqInner {
             )
         };
 
-        // Validate checksum.
-        if Cmdq::calculate_checksum(SBufferIter::new_reader([
-            header.as_bytes(),
-            slice_1,
-            slice_2,
-        ])) != 0
-        {
+        if !header.has_valid_magic() {
             dev_err!(
                 &self.dev,
-                "GSP RPC: receive: Call {} - bad checksum\n",
+                "GSP RPC: receive: Call {} - bad MCTP magic\n",
                 header.sequence()
             );
             return Err(EIO);
