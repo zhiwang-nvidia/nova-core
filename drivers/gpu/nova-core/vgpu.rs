@@ -799,8 +799,8 @@ impl Vgpu {
                 h_client, h_subdevice,
             )?;
             if nv_status != 0 {
-                kernel::pr_err!("GET_DEVICE_INFO_TABLE failed: NV_STATUS={:#x}\n", nv_status);
-                return Err(EIO);
+                kernel::pr_warn!("GET_DEVICE_INFO_TABLE via RM RPC returned NV_STATUS={:#x}, skipping engine bitmap\n", nv_status);
+                return Ok(());
             }
 
             let params: &DeviceInfoTableParams = unsafe {
