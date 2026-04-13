@@ -174,6 +174,13 @@ impl GspStaticConfigInfo {
     /// - Are not protected (hardware-enforced access restrictions).
     /// - Support compression (can use GPU memory compression for bandwidth).
     /// - Support ISO (isochronous memory for display requiring guaranteed bandwidth).
+    /// Returns the engine capability bitmap from GSP static config.
+    ///
+    /// This is a 96-bit bitmap where bit N indicates that RM engine type N is present.
+    pub(crate) fn engine_caps(&self) -> [u32; 3] {
+        self.0.engineCaps
+    }
+
     pub(crate) fn first_usable_fb_region(&self) -> Option<(u64, u64)> {
         let fb_info = &self.0.fbRegionInfoParams;
         for i in 0..fb_info.numFBRegions.into_safe_cast() {

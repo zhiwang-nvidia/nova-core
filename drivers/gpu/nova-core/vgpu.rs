@@ -59,9 +59,6 @@ pub(crate) struct Dbdf(pub u32);
 /// NV2080_CTRL_CMD_GPU_GET_VMMU_SEGMENT_SIZE
 const CMD_GET_VMMU_SEGMENT_SIZE: u32 = 0x2080_017e;
 
-/// NV2080_CTRL_CMD_FIFO_GET_DEVICE_INFO_TABLE
-const CMD_GET_DEVICE_INFO_TABLE: u32 = 0x2080_1112;
-
 /// NV2080_CTRL_CMD_VGPU_MGR_INTERNAL_BOOTLOAD_GSP_VGPU_PLUGIN_TASK
 const CMD_VGPU_BOOTLOAD: u32 = 0x2080_4001;
 
@@ -139,33 +136,6 @@ pub(crate) const NV2080_GPU_MAX_ENGINES: usize = 0x54;
 
 /// Number of u64 words needed to store the engine bitmap.
 const ENGINE_BITMAP_WORDS: usize = (NV2080_GPU_MAX_ENGINES + 63) / 64;
-
-const ENGINE_DATA_TYPES: usize = 16;
-const ENGINE_INFO_TYPE_RM_ENGINE_TYPE: usize = 2;
-const DEVICE_INFO_TABLE_MAX_ENTRIES: usize = 32;
-const ENGINE_MAX_NAME_LEN: usize = 16;
-const ENGINE_MAX_PBDMA: usize = 2;
-
-/// Single device info table entry (NV2080_CTRL_FIFO_DEVICE_ENTRY).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct DeviceInfoEntry {
-    engine_data: [u32; ENGINE_DATA_TYPES],
-    pbdma_ids: [u32; ENGINE_MAX_PBDMA],
-    pbdma_fault_ids: [u32; ENGINE_MAX_PBDMA],
-    num_pbdmas: u32,
-    engine_name: [u8; ENGINE_MAX_NAME_LEN],
-}
-
-/// Response for GET_DEVICE_INFO_TABLE RM control.
-#[repr(C)]
-struct DeviceInfoTableParams {
-    base_index: u32,
-    num_entries: u32,
-    b_more: u8,
-    _pad: [u8; 3],
-    entries: [DeviceInfoEntry; DEVICE_INFO_TABLE_MAX_ENTRIES],
-}
 
 const VGPU_TYPE_NAME_MAX: usize = 32;
 
@@ -479,16 +449,13 @@ impl Vgpu {
     /// builds the engine bitmap, and sets up allocators.
     pub(crate) fn init_post_gsp_boot(
         &mut self,
-        cmdq: &Cmdq,
-        bar: &Bar0,
-        h_client: u32,
-        h_subdevice: u32,
         total_vram: u64,
+        engine_caps: &[u32; 3],
     ) -> Result {
         self.gsp_config.total_fbmem_size = total_vram;
         // TODO: query actual available CHIDs from GSP instead of hardcoding.
         self.gsp_config.total_avail_chids = 2048;
-        self.build_engine_bitmap(cmdq, bar, h_client, h_subdevice)?;
+        self.build_engine_bitmap_from_caps(engine_caps);
         self.init_comm_layout();
         self.init_chid_allocator();
         Ok(())
@@ -780,49 +747,14 @@ impl Vgpu {
         self.send_gfid_command(cmdq, bar, CMD_VGPU_CLEANUP, h_client, h_subdevice, gfid)
     }
 
-    /// Build the engine bitmap by querying GSP via the device info table.
-    pub(crate) fn build_engine_bitmap(
-        &mut self,
-        cmdq: &Cmdq,
-        bar: &Bar0,
-        h_client: u32,
-        h_subdevice: u32,
-    ) -> Result {
-        let mut base_index: u32 = 0;
-
-        loop {
-            let mut buf = [0u8; size_of::<DeviceInfoTableParams>()];
-            buf[0..4].copy_from_slice(&base_index.to_ne_bytes());
-
-            let nv_status = send_rmcontrol_with_reply(
-                cmdq, bar, CMD_GET_DEVICE_INFO_TABLE, &mut buf,
-                h_client, h_subdevice,
-            )?;
-            if nv_status != 0 {
-                kernel::pr_warn!("GET_DEVICE_INFO_TABLE via RM RPC returned NV_STATUS={:#x}, skipping engine bitmap\n", nv_status);
-                return Ok(());
-            }
-
-            let params: &DeviceInfoTableParams = unsafe {
-                &*(buf.as_ptr() as *const DeviceInfoTableParams)
-            };
-
-            let n = (params.num_entries as usize).min(DEVICE_INFO_TABLE_MAX_ENTRIES);
-            for i in 0..n {
-                let rm_engine_type = params.entries[i].engine_data[ENGINE_INFO_TYPE_RM_ENGINE_TYPE];
-                let eid = rm_engine_type as usize;
-                if eid > 0 && eid < NV2080_GPU_MAX_ENGINES {
-                    self.engine_bitmap[eid / 64] |= 1u64 << (eid % 64);
-                }
-            }
-
-            if params.b_more == 0 {
-                break;
-            }
-            base_index += params.num_entries;
+    /// Build the engine bitmap from GSP static config's `engineCaps`.
+    ///
+    /// `engineCaps` is a 96-bit bitmap where bit N indicates RM engine type N is present.
+    pub(crate) fn build_engine_bitmap_from_caps(&mut self, engine_caps: &[u32; 3]) {
+        self.engine_bitmap[0] = (engine_caps[1] as u64) << 32 | engine_caps[0] as u64;
+        if ENGINE_BITMAP_WORDS > 1 {
+            self.engine_bitmap[1] = engine_caps[2] as u64;
         }
-
-        Ok(())
     }
 
     /// Set up the CPU -> GSP plugin RPC channel and send initial configuration.

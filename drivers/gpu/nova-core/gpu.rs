@@ -545,7 +545,7 @@ impl Gpu {
         }
 
         proj.vgpu.init_post_gsp_boot(
-            &gsp.cmdq, bar0, gsp.h_client(), gsp.h_subdevice(), total_vram,
+            total_vram, &gsp.engine_caps(),
         ).inspect_err(|_| dev_err!(pdev, "vGPU post-boot init failed\n"))?;
 
         let comm_size = proj.vgpu.comm_layout.total_size;

@@ -204,6 +204,8 @@ pub(crate) struct GetGspStaticInfoReply {
     bar1_pde_base: u64,
     /// First usable FB region `(base, size)` for memory allocation.
     usable_fb_region: Option<(u64, u64)>,
+    /// Engine capability bitmap (96 bits, bit N = RM engine type N present).
+    engine_caps: [u32; 3],
 }
 
 impl MessageFromGsp for GetGspStaticInfoReply {
@@ -221,6 +223,7 @@ impl MessageFromGsp for GetGspStaticInfoReply {
             h_subdevice: msg.h_internal_subdevice(),
             bar1_pde_base: msg.bar1_pde_base(),
             usable_fb_region: msg.first_usable_fb_region(),
+            engine_caps: msg.engine_caps(),
         })
     }
 }
@@ -267,6 +270,11 @@ impl GetGspStaticInfoReply {
     /// already retrieved from the GSP.
     pub(crate) fn usable_fb_region(&self) -> Option<(u64, u64)> {
         self.usable_fb_region
+    }
+
+    /// Returns the engine capability bitmap from GSP static config.
+    pub(crate) fn engine_caps(&self) -> [u32; 3] {
+        self.engine_caps
     }
 }
 

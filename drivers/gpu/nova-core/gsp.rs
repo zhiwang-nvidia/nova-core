@@ -187,6 +187,8 @@ pub(crate) struct Gsp {
     h_client: Cell<u32>,
     /// Internal subdevice handle from GSP-RM (set after boot via [`Self::set_static_info`]).
     h_subdevice: Cell<u32>,
+    /// Engine capability bitmap from GSP static config (96 bits).
+    engine_caps: Cell<[u32; 3]>,
     /// fwctl registration for userspace RM control (e.g. vGPU type upload).
     #[pin]
     fwctl: Pin<KBox<Devres<fwctl::Registration<crate::fwctl::NovaCoreFwCtl>>>>,
@@ -220,6 +222,7 @@ impl Gsp {
                 )?,
                 h_client: Cell::new(0),
                 h_subdevice: Cell::new(0),
+                engine_caps: Cell::new([0; 3]),
                 fwctl <- {
                     let fwctl_dev =
                         fwctl::Device::<crate::fwctl::NovaCoreFwCtl>::new(pdev.as_ref(), Ok(()))?;
@@ -292,6 +295,7 @@ impl Gsp {
     pub(crate) fn set_static_info(&self, info: &commands::GetGspStaticInfoReply) {
         self.h_client.set(info.h_client());
         self.h_subdevice.set(info.h_subdevice());
+        self.engine_caps.set(info.engine_caps());
     }
 
     pub(crate) fn h_client(&self) -> u32 {
@@ -300,5 +304,9 @@ impl Gsp {
 
     pub(crate) fn h_subdevice(&self) -> u32 {
         self.h_subdevice.get()
+    }
+
+    pub(crate) fn engine_caps(&self) -> [u32; 3] {
+        self.engine_caps.get()
     }
 }
