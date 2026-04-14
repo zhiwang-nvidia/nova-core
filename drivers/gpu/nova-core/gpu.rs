@@ -486,7 +486,7 @@ impl Gpu {
                     let params = boot_params.get();
                     let pdb_addr = VramAddress::new(params.bar1_pde_base);
                     let mmu_version = MmuVersion::from(spec.chipset.arch());
-                    let bar1_size = pdev.resource_len(1)?;
+                    let bar1_size = pdev.resource_len(crate::driver::bar1_region(pdev)?)?;
                     BarUser::new(pdb_addr, mmu_version, bar1_size)?
                 },
 

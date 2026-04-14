@@ -26,6 +26,19 @@ use crate::gpu::Gpu;
 /// Counter for generating unique auxiliary device IDs.
 static AUXILIARY_ID_COUNTER: Atomic<u32> = Atomic::new(0);
 
+/// Find the PCI resource index for the GPU's second BAR (BAR1 aperture).
+///
+/// 64-bit BAR0 consumes two resource slots (0 + 1), pushing BAR1 to index 2.
+/// 32-bit BAR0 uses only slot 0, so BAR1 is at index 1.
+pub(crate) fn bar1_region(pdev: &pci::Device<Core>) -> Result<u32> {
+    for idx in 1u32..6 {
+        if pdev.resource_len(idx)? > 0 {
+            return Ok(idx);
+        }
+    }
+    Err(ENODEV)
+}
+
 #[pin_data]
 pub(crate) struct NovaCore {
     #[pin]
@@ -79,8 +92,9 @@ impl pci::Driver for NovaCore {
                 GFP_KERNEL,
             )?;
 
+            let bar1_idx = bar1_region(pdev)?;
             let bar1 = Arc::pin_init(
-                pdev.iomap_region(1, c"nova-core/bar1"),
+                pdev.iomap_region(bar1_idx, c"nova-core/bar1"),
                 GFP_KERNEL,
             )?;
 
