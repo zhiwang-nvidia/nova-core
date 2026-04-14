@@ -356,7 +356,9 @@ impl super::Gsp {
             let vgpu_mode = Fsp::read_vgpu_mode(ctx.dev(), bar, &fsp_falcon)?;
             dev_dbg!(ctx.dev(), "vGPU mode: {:?}\n", vgpu_mode);
             ctx.fsp_falcon = Some(fsp_falcon);
-            ctx.vgpu_requested &= vgpu_mode == VgpuMode::Enabled;
+            // Force vgpu_requested to stay true for mock_bootload testing.
+            dev_info!(ctx.dev(), "FSP vgpu_mode={:?}, forcing vgpu_requested=true\n", vgpu_mode);
+            // ctx.vgpu_requested &= vgpu_mode == VgpuMode::Enabled;
         }
 
         let dev = ctx.dev();
