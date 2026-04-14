@@ -137,7 +137,7 @@ pub(crate) const NV2080_GPU_MAX_ENGINES: usize = 0x54;
 /// Number of u64 words needed to store the engine bitmap.
 const ENGINE_BITMAP_WORDS: usize = (NV2080_GPU_MAX_ENGINES + 63) / 64;
 
-const VGPU_TYPE_NAME_MAX: usize = 32;
+const VGPU_TYPE_NAME_MAX: usize = 64;
 
 /// Configuration of a virtual GPU profile (e.g. L40-1Q).
 pub(crate) struct VgpuType {
@@ -554,7 +554,7 @@ impl Vgpu {
         )?;
 
         let mut name = [0u8; VGPU_TYPE_NAME_MAX];
-        let src = b"RTX Pro 6000 Blackwell DC-3Q";
+        let src = b"NVIDIA RTX Pro 6000 Blackwell DC-3Q";
         name[..src.len()].copy_from_slice(src);
 
         self.vgpu_types.push(
