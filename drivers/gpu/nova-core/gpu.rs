@@ -527,9 +527,10 @@ impl Gpu {
         mut self: Pin<&mut Self>,
         pdev: &pci::Device<device::Bound>,
     ) -> Result {
-        if !self.vgpu.vgpu_enabled {
-            return Ok(());
-        }
+        // Force mock_bootload to run regardless of vgpu_enabled.
+        // if !self.vgpu.vgpu_enabled {
+        //     return Ok(());
+        // }
 
         let proj = self.as_mut().project();
         let bar0 = proj.bar.access(pdev.as_ref())?;
