@@ -554,7 +554,7 @@ impl Vgpu {
         )?;
 
         let mut name = [0u8; VGPU_TYPE_NAME_MAX];
-        let src = b"NVIDIA RTX Pro 6000 Blackwell DC-3Q";
+        let src = b"RTX Pro 6000 Blackwell DC-3Q";
         name[..src.len()].copy_from_slice(src);
 
         self.vgpu_types.push(
