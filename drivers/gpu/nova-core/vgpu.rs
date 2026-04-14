@@ -477,6 +477,8 @@ impl Vgpu {
         let page_size: u64 = PAGE_SIZE.into_safe_cast();
         let num_pages = ((comm_size + page_size - 1) / page_size) as usize;
 
+        kernel::pr_info!("wait_plugin_ready: base={:#x} comm_size={:#x} num_pages={}\n", base, comm_size, num_pages);
+
         let mut pfns = KVec::new();
         for i in 0..num_pages {
             let i_u64: u64 = i.into_safe_cast();
@@ -486,7 +488,9 @@ impl Vgpu {
             )?;
         }
 
-        let access = bar_user.map(mm, bar1, &pfns, false)?;
+        let access = bar_user.map(mm, bar1, &pfns, false).inspect_err(|e| {
+            kernel::pr_err!("wait_plugin_ready: bar_user.map FAILED {:?}\n", e);
+        })?;
 
         kernel::io::poll::read_poll_timeout(
             || access.try_read32(CTRL_BUF_MSG_SEQ_NUM_OFFSET),

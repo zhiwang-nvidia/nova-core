@@ -141,11 +141,13 @@ impl Vmm {
         mmu_version: MmuVersion,
         va_size: u64,
     ) -> Result<Self> {
+        kernel::pr_info!("VMM::new va_size={:#x} mmu={:?}\n", va_size, mmu_version);
         let virt_buddy = GpuBuddy::new(GpuBuddyParams {
             base_offset: 0,
             physical_memory_size: va_size,
             chunk_size: SZ_4K.into_safe_cast(),
         })?;
+        kernel::pr_info!("VMM::new buddy ok\n");
 
         Ok(Self {
             pdb_addr,
@@ -226,7 +228,9 @@ impl Vmm {
             min_block_size: SZ_4K.into_safe_cast(),
             buddy_flags: BuddyFlags::empty(),
         };
-        let blocks = KBox::pin_init(mm.buddy().alloc_blocks(params), GFP_KERNEL)?;
+        let blocks = KBox::pin_init(mm.buddy().alloc_blocks(params), GFP_KERNEL).inspect_err(|_| {
+            kernel::pr_err!("VMM alloc_pt_page: buddy alloc FAILED level={:?}\n", level);
+        })?;
 
         // Get page's VRAM address from the allocation.
         let page_vram = VramAddress::new(blocks.iter().next().ok_or(ENOMEM)?.offset());
@@ -266,6 +270,8 @@ impl Vmm {
                 self.pt_pages
                     .get(&install_addr)
                     .and_then(|p| Some(VramAddress::new(p.alloc.iter().next()?.offset())))
+            }).inspect_err(|e| {
+                kernel::pr_err!("VMM ensure_pte_path: walk_pde_levels FAILED vfn={:#x} {:?}\n", vfn.raw(), e);
             })?;
 
             match result {
@@ -318,21 +324,24 @@ impl Vmm {
             return Err(EINVAL);
         }
 
-        // Pre-reserve so execute_map() can use push_within_capacity (no alloc in
-        // fence signalling critical path).
-        // Upper bound on page table pages needed for the full tree (PTE pages + PDE
-        // pages at all levels).
         let pt_upper_bound = self.mmu_version.pt_pages_upper_bound(num_pages);
-        self.page_table_allocs.reserve(pt_upper_bound, GFP_KERNEL)?;
+        kernel::pr_info!("VMM prepare_map: num_pages={} pt_upper_bound={}\n", num_pages, pt_upper_bound);
 
-        // Allocate contiguous VA range.
-        let (vfn_start, vfn_alloc) = self.alloc_vfn_range(num_pages, va_range)?;
+        self.page_table_allocs.reserve(pt_upper_bound, GFP_KERNEL).inspect_err(|_| {
+            kernel::pr_err!("VMM prepare_map: reserve({}) FAILED\n", pt_upper_bound);
+        })?;
 
-        // Walk the hierarchy per-VFN to prepare pages for all missing PDEs.
+        let (vfn_start, vfn_alloc) = self.alloc_vfn_range(num_pages, va_range).inspect_err(|_| {
+            kernel::pr_err!("VMM prepare_map: alloc_vfn_range FAILED\n");
+        })?;
+        kernel::pr_info!("VMM prepare_map: vfn_start={:#x}\n", vfn_start.raw());
+
         for i in 0..num_pages {
             let i_u64: u64 = i.into_safe_cast();
             let vfn = Vfn::new(vfn_start.raw() + i_u64);
-            self.ensure_pte_path(mm, vfn)?;
+            self.ensure_pte_path(mm, vfn).inspect_err(|e| {
+                kernel::pr_err!("VMM prepare_map: ensure_pte_path vfn={:#x} FAILED {:?}\n", vfn.raw(), e);
+            })?;
         }
 
         Ok(PreparedMapping {
