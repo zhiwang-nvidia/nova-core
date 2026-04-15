@@ -202,7 +202,7 @@ impl GspFwWprMeta {
             gspFwWprStart: fb_layout.wpr2.start,
             gspFwHeapOffset: fb_layout.wpr2_heap.start,
             gspFwHeapSize: fb_layout.wpr2_heap.end - fb_layout.wpr2_heap.start,
-            gspFwOffset: fb_layout.elf.start,
+            gspFwOffset: fb_layout.fw_image.start,
             bootBinOffset: fb_layout.boot.start,
             frtsOffset: fb_layout.frts.start,
             frtsSize: fb_layout.frts.end - fb_layout.frts.start,

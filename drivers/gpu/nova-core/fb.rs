@@ -159,7 +159,7 @@ pub(crate) struct FbLayout {
     /// Memory area containing the GSP bootloader image.
     pub(crate) boot: FbRange,
     /// Memory area containing the GSP firmware image.
-    pub(crate) elf: FbRange,
+    pub(crate) fw_image: FbRange,
     /// WPR2 heap.
     pub(crate) wpr2_heap: FbRange,
     /// WPR2 region range, starting with an instance of `GspFwWprMeta`.
@@ -232,12 +232,12 @@ impl FbLayout {
             FbRange(bootloader_base..bootloader_base + bootloader_size)
         };
 
-        let elf = {
-            const ELF_DOWN_ALIGN: Alignment = Alignment::new::<SZ_64K>();
-            let elf_size = u64::from_safe_cast(gsp_fw.size());
-            let elf_addr = (boot.start - elf_size).align_down(ELF_DOWN_ALIGN);
+        let fw_image = {
+            const FW_IMAGE_DOWN_ALIGN: Alignment = Alignment::new::<SZ_64K>();
+            let fw_image_size = u64::from_safe_cast(gsp_fw.size());
+            let fw_image_addr = (boot.start - fw_image_size).align_down(FW_IMAGE_DOWN_ALIGN);
 
-            FbRange(elf_addr..elf_addr + elf_size)
+            FbRange(fw_image_addr..fw_image_addr + fw_image_size)
         };
 
         let (vf_partition_count, wpr2_heap_size) = match vgpu_state {
@@ -253,13 +253,13 @@ impl FbLayout {
 
         let wpr2_heap = {
             const WPR2_HEAP_DOWN_ALIGN: Alignment = Alignment::new::<SZ_1M>();
-            let wpr2_heap_addr = elf
+            let wpr2_heap_addr = fw_image
                 .start
                 .checked_sub(wpr2_heap_size)
                 .ok_or(EOVERFLOW)?
                 .align_down(WPR2_HEAP_DOWN_ALIGN);
 
-            FbRange(wpr2_heap_addr..(elf.start).align_down(WPR2_HEAP_DOWN_ALIGN))
+            FbRange(wpr2_heap_addr..(fw_image.start).align_down(WPR2_HEAP_DOWN_ALIGN))
         };
 
         let wpr2 = {
@@ -280,7 +280,7 @@ impl FbLayout {
             vga_workspace,
             frts,
             boot,
-            elf,
+            fw_image,
             wpr2_heap,
             wpr2,
             heap,
