@@ -292,7 +292,6 @@ impl BooterFirmware {
         dev: &device::Device<device::Bound>,
         kind: BooterKind,
         chipset: Chipset,
-        ver: &str,
         falcon: &Falcon<<Self as FalconFirmware>::Target>,
         bar: &Bar0,
     ) -> Result<Self> {
@@ -300,7 +299,7 @@ impl BooterFirmware {
             BooterKind::Loader => "booter_load",
             BooterKind::Unloader => "booter_unload",
         };
-        let (_, fw) = super::request_firmware(dev, chipset, fw_name, ver)?;
+        let (_, fw) = super::request_firmware(dev, chipset, fw_name)?;
         let bin_fw = BinFirmware::new(&fw)?;
 
         // The binary firmware embeds a Heavy-Secured firmware.

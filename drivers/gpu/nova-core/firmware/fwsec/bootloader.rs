@@ -47,8 +47,7 @@ use crate::{
     firmware::{
         fwsec::FwsecFirmware,
         request_firmware,
-        BinHdr,
-        FIRMWARE_VERSION, //
+        BinHdr, //
     },
     gpu::Chipset,
     num::FromSafeCast,
@@ -150,7 +149,7 @@ impl FwsecFirmwareWithBl {
         dev: &Device<device::Bound>,
         chipset: Chipset,
     ) -> Result<Self> {
-        let (_, fw) = request_firmware(dev, chipset, "gen_bootloader", FIRMWARE_VERSION)?;
+        let (_, fw) = request_firmware(dev, chipset, "gen_bootloader")?;
         let hdr = fw
             .data()
             .get(0..size_of::<BinHdr>())

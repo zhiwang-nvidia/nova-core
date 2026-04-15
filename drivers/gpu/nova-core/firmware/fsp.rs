@@ -9,36 +9,33 @@ use kernel::{
     prelude::*, //
 };
 
-use crate::{
-    firmware::elf,
-    gpu::Chipset, //
-};
+use crate::gpu::Chipset;
 
+/// FMC firmware loaded for FSP.
+///
+/// The FMC image is allocated as DMA-coherent memory because the hardware reads it directly.
+/// The remaining blobs are accessed only by the driver.
 pub(crate) struct FspFirmware {
-    /// FMC firmware image data (only the "image" ELF section).
     pub(crate) fmc_image: Coherent<[u8]>,
-    /// Full FMC ELF for signature extraction.
-    pub(crate) fmc_elf: Firmware,
+    pub(crate) fmc_hash: Firmware,
+    pub(crate) fmc_publickey: Firmware,
+    pub(crate) fmc_signature: Firmware,
 }
 
 impl FspFirmware {
-    pub(crate) fn new(
-        dev: &device::Device<device::Bound>,
-        chipset: Chipset,
-        ver: &str,
-    ) -> Result<Self> {
-        let (_, fw) = super::request_firmware(dev, chipset, "fmc", ver)?;
+    pub(crate) fn new(dev: &device::Device<device::Bound>, chipset: Chipset) -> Result<Self> {
+        let (_, fmc_image_fw) = super::request_firmware(dev, chipset, "fmc-image")?;
+        let fmc_image = Coherent::from_slice(dev, fmc_image_fw.data(), GFP_KERNEL)?;
 
-        // FSP expects only the "image" section, not the entire ELF file.
-        let fmc_image_data = elf::elf_section(fw.data(), "image").ok_or_else(|| {
-            dev_err!(dev, "FMC ELF file missing 'image' section\n");
-            EINVAL
-        })?;
-        let fmc_image = Coherent::from_slice(dev, fmc_image_data, GFP_KERNEL)?;
+        let (_, fmc_hash) = super::request_firmware(dev, chipset, "fmc-hash")?;
+        let (_, fmc_publickey) = super::request_firmware(dev, chipset, "fmc-publickey")?;
+        let (_, fmc_signature) = super::request_firmware(dev, chipset, "fmc-signature")?;
 
         Ok(Self {
             fmc_image,
-            fmc_elf: fw,
+            fmc_hash,
+            fmc_publickey,
+            fmc_signature,
         })
     }
 }

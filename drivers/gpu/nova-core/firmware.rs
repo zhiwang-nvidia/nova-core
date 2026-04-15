@@ -26,15 +26,12 @@ use crate::{
     },
 };
 
-pub(crate) use elf::elf_section;
 pub(crate) mod booter;
 pub(crate) mod fsp;
 pub(crate) mod fwsec;
 pub(crate) mod gsp;
 pub(crate) mod radix3;
 pub(crate) mod riscv;
-
-pub(crate) const FIRMWARE_VERSION: &str = "000";
 
 /// Maximum length of a build ID, matching Open RM's `BUILD_ID_MAX_LENGTH`.
 const BUILD_ID_MAX_LENGTH: usize = 32;
@@ -70,32 +67,30 @@ impl BuildId {
     }
 }
 
-/// Requests the GPU firmware `name` suitable for `chipset`, with version `ver`.
+/// Requests the GPU firmware `name` suitable for `chipset`.
 ///
 /// Returns the firmware path and the loaded firmware.
 pub(crate) fn request_firmware(
     dev: &device::Device,
     chipset: gpu::Chipset,
     name: &str,
-    ver: &str,
 ) -> Result<(CString, firmware::Firmware)> {
     let chip_name = chipset.name();
 
-    let path = CString::try_from_fmt(fmt!("nvidia/{chip_name}/gsp/{name}-{ver}.bin"))?;
+    let path = CString::try_from_fmt(fmt!("nvidia/{chip_name}/gsp/{name}.bin"))?;
     let fw = firmware::Firmware::request(&path, dev)?;
     Ok((path, fw))
 }
 
 /// Requests the ucodes (bindata) firmware for GSP.
 ///
-/// Tries the chipset-specific name first (`ucodes-{ver}.bin`), then for Ampere (non-GA100) and
-/// Ada the shared ga10x name (`ucodes_ga10x-{ver}.bin`) so installer-provided firmware is found.
+/// Tries the chipset-specific name first (`ucodes.bin`), then for Ampere (non-GA100) and Ada the
+/// shared ga10x name (`ucodes_ga10x.bin`) so installer-provided firmware is found.
 pub(crate) fn request_ucodes_firmware(
     dev: &device::Device,
     chipset: gpu::Chipset,
-    ver: &str,
 ) -> Result<firmware::Firmware> {
-    let err = match request_firmware(dev, chipset, "ucodes", ver) {
+    let err = match request_firmware(dev, chipset, "ucodes") {
         Ok((_path, fw)) => return Ok(fw),
         Err(e) => e,
     };
@@ -106,7 +101,7 @@ pub(crate) fn request_ucodes_firmware(
     ) && chipset != gpu::Chipset::GA100;
 
     if try_ga10x {
-        if let Ok((_path, fw)) = request_firmware(dev, chipset, "ucodes_ga10x", ver) {
+        if let Ok((_path, fw)) = request_firmware(dev, chipset, "ucodes_ga10x") {
             return Ok(fw);
         }
     }
@@ -489,8 +484,6 @@ impl<const N: usize> ModInfoBuilder<N> {
                 .push(chipset)
                 .push("/gsp/")
                 .push(fw)
-                .push("-")
-                .push(FIRMWARE_VERSION)
                 .push(".bin"),
         )
     }
@@ -503,10 +496,22 @@ impl<const N: usize> ModInfoBuilder<N> {
             .make_entry_file(name, "booter_unload")
             .make_entry_file(name, "bootloader")
             .make_entry_file(name, "gsp")
+            .make_entry_file(name, "gsp-fwsig")
+            .make_entry_file(name, "gsp-version")
+            .make_entry_file(name, "gsp-buildid")
             .make_entry_file(name, "ucodes");
 
-        if chipset.needs_fwsec_bootloader() {
+        let this = if chipset.needs_fwsec_bootloader() {
             this.make_entry_file(name, "gen_bootloader")
+        } else {
+            this
+        };
+
+        if chipset.fsp_cot_version().is_some() {
+            this.make_entry_file(name, "fmc-image")
+                .make_entry_file(name, "fmc-hash")
+                .make_entry_file(name, "fmc-publickey")
+                .make_entry_file(name, "fmc-signature")
         } else {
             this
         }
@@ -524,240 +529,5 @@ impl<const N: usize> ModInfoBuilder<N> {
         }
 
         this.0
-    }
-}
-
-/// Ad-hoc and temporary module to extract sections from ELF images.
-///
-/// Some firmware images are currently packaged as ELF files, where sections names are used as keys
-/// to specific and related bits of data. Future firmware versions are scheduled to move away from
-/// that scheme before nova-core becomes stable, which means this module will eventually be
-/// removed.
-mod elf {
-    use core::mem::size_of;
-
-    use kernel::{
-        bindings,
-        str::CStr,
-        transmute::FromBytes, //
-    };
-
-    /// Trait to abstract over ELF header differences.
-    trait ElfHeader: FromBytes {
-        fn shnum(&self) -> u16;
-        fn shoff(&self) -> u64;
-        fn shstrndx(&self) -> u16;
-    }
-
-    /// Trait to abstract over ELF section-header differences.
-    trait ElfSectionHeader: FromBytes {
-        fn name(&self) -> u32;
-        fn offset(&self) -> u64;
-        fn size(&self) -> u64;
-    }
-
-    /// Trait describing a matching ELF header and section-header format.
-    trait ElfFormat {
-        type Header: ElfHeader;
-        type SectionHeader: ElfSectionHeader;
-    }
-
-    /// Newtype to provide a [`FromBytes`] implementation.
-    #[repr(transparent)]
-    struct Elf64Hdr(bindings::elf64_hdr);
-    // SAFETY: all bit patterns are valid for this type, and it doesn't use interior mutability.
-    unsafe impl FromBytes for Elf64Hdr {}
-
-    impl ElfHeader for Elf64Hdr {
-        fn shnum(&self) -> u16 {
-            self.0.e_shnum
-        }
-
-        fn shoff(&self) -> u64 {
-            self.0.e_shoff
-        }
-
-        fn shstrndx(&self) -> u16 {
-            self.0.e_shstrndx
-        }
-    }
-
-    #[repr(transparent)]
-    struct Elf64SHdr(bindings::elf64_shdr);
-    // SAFETY: all bit patterns are valid for this type, and it doesn't use interior mutability.
-    unsafe impl FromBytes for Elf64SHdr {}
-
-    impl ElfSectionHeader for Elf64SHdr {
-        fn name(&self) -> u32 {
-            self.0.sh_name
-        }
-
-        fn offset(&self) -> u64 {
-            self.0.sh_offset
-        }
-
-        fn size(&self) -> u64 {
-            self.0.sh_size
-        }
-    }
-
-    struct Elf64Format;
-
-    impl ElfFormat for Elf64Format {
-        type Header = Elf64Hdr;
-        type SectionHeader = Elf64SHdr;
-    }
-
-    /// Newtype to provide [`FromBytes`] and [`ElfHeader`] implementations for ELF32.
-    #[repr(transparent)]
-    struct Elf32Hdr(bindings::elf32_hdr);
-    // SAFETY: all bit patterns are valid for this type, and it doesn't use interior mutability.
-    unsafe impl FromBytes for Elf32Hdr {}
-
-    impl ElfHeader for Elf32Hdr {
-        fn shnum(&self) -> u16 {
-            self.0.e_shnum
-        }
-
-        fn shoff(&self) -> u64 {
-            u64::from(self.0.e_shoff)
-        }
-
-        fn shstrndx(&self) -> u16 {
-            self.0.e_shstrndx
-        }
-    }
-
-    /// Newtype to provide [`FromBytes`] and [`ElfSectionHeader`] implementations for ELF32.
-    #[repr(transparent)]
-    struct Elf32SHdr(bindings::elf32_shdr);
-    // SAFETY: all bit patterns are valid for this type, and it doesn't use interior mutability.
-    unsafe impl FromBytes for Elf32SHdr {}
-
-    impl ElfSectionHeader for Elf32SHdr {
-        fn name(&self) -> u32 {
-            self.0.sh_name
-        }
-
-        fn offset(&self) -> u64 {
-            u64::from(self.0.sh_offset)
-        }
-
-        fn size(&self) -> u64 {
-            u64::from(self.0.sh_size)
-        }
-    }
-
-    struct Elf32Format;
-
-    impl ElfFormat for Elf32Format {
-        type Header = Elf32Hdr;
-        type SectionHeader = Elf32SHdr;
-    }
-
-    /// Returns a NULL-terminated string from the ELF image at `offset`.
-    fn elf_str(elf: &[u8], offset: u64) -> Option<&str> {
-        let idx = usize::try_from(offset).ok()?;
-        let bytes = elf.get(idx..)?;
-        CStr::from_bytes_until_nul(bytes).ok()?.to_str().ok()
-    }
-
-    fn elf_section_generic<'a, F>(elf: &'a [u8], name: &str) -> Option<&'a [u8]>
-    where
-        F: ElfFormat,
-    {
-        let hdr = F::Header::from_bytes(elf.get(0..size_of::<F::Header>())?)?;
-
-        let shdr_num = usize::from(hdr.shnum());
-        let shdr_start = usize::try_from(hdr.shoff()).ok()?;
-        let shdr_end = shdr_num
-            .checked_mul(size_of::<F::SectionHeader>())
-            .and_then(|v| v.checked_add(shdr_start))?;
-
-        // Get all the section headers as an iterator over byte chunks.
-        let shdr_bytes = elf.get(shdr_start..shdr_end)?;
-        let mut shdr_iter = shdr_bytes.chunks_exact(size_of::<F::SectionHeader>());
-
-        // Get the strings table.
-        let strhdr = shdr_iter
-            .clone()
-            .nth(usize::from(hdr.shstrndx()))
-            .and_then(F::SectionHeader::from_bytes)?;
-
-        // Find the section which name matches `name` and return it.
-        shdr_iter.find_map(|sh_bytes| {
-            let sh = F::SectionHeader::from_bytes(sh_bytes)?;
-            let name_offset = strhdr.offset().checked_add(u64::from(sh.name()))?;
-            let section_name = elf_str(elf, name_offset)?;
-
-            if section_name != name {
-                return None;
-            }
-
-            let start = usize::try_from(sh.offset()).ok()?;
-            let end = usize::try_from(sh.size())
-                .ok()
-                .and_then(|sz| start.checked_add(sz))?;
-
-            elf.get(start..end)
-        })
-    }
-
-    /// Extract the section with name `name` from the ELF64 image `elf`.
-    fn elf64_section<'a>(elf: &'a [u8], name: &str) -> Option<&'a [u8]> {
-        elf_section_generic::<Elf64Format>(elf, name)
-    }
-
-    /// Extract the section with name `name` from the ELF32 image `elf`.
-    fn elf32_section<'a>(elf: &'a [u8], name: &str) -> Option<&'a [u8]> {
-        elf_section_generic::<Elf32Format>(elf, name)
-    }
-
-    /// Automatically detects ELF32 vs ELF64 based on the ELF header.
-    pub(crate) fn elf_section<'a>(elf: &'a [u8], name: &str) -> Option<&'a [u8]> {
-        // Check ELF magic.
-        if elf.len() < 5 || elf.get(0..4)? != b"\x7fELF" {
-            return None;
-        }
-
-        // Check ELF class: 1 = 32-bit, 2 = 64-bit.
-        match elf.get(4)? {
-            1 => elf32_section(elf, name),
-            2 => elf64_section(elf, name),
-            _ => None,
-        }
-    }
-
-    /// ELF note type for GNU build IDs (`NT_GNU_BUILD_ID`).
-    const NT_GNU_BUILD_ID: u32 = 3;
-
-    /// Extract the build ID from the `.note.gnu.build-id` section of an ELF image.
-    ///
-    /// Parses the standard ELF note format (namesz, descsz, type, name, descriptor)
-    /// and returns the descriptor bytes as a [`super::BuildId`]. Returns `None` if
-    /// the section is missing, malformed, or the note type is not
-    /// `NT_GNU_BUILD_ID`.
-    pub(crate) fn elf_build_id(elf: &[u8]) -> Option<super::BuildId> {
-        let note = elf_section(elf, ".note.gnu.build-id")?;
-
-        if note.len() < 12 {
-            return None;
-        }
-
-        let namesz = u32::from_le_bytes(note[0..4].try_into().ok()?) as usize;
-        let descsz = u32::from_le_bytes(note[4..8].try_into().ok()?) as usize;
-        let note_type = u32::from_le_bytes(note[8..12].try_into().ok()?);
-
-        if note_type != NT_GNU_BUILD_ID {
-            return None;
-        }
-
-        // Name field is padded to 4-byte alignment.
-        let name_padded = (namesz + 3) & !3;
-        let desc_offset = 12 + name_padded;
-        let desc_end = desc_offset.checked_add(descsz)?;
-        let desc = note.get(desc_offset..desc_end)?;
-
-        super::BuildId::from_raw(desc)
     }
 }

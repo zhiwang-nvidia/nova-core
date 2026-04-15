@@ -319,49 +319,39 @@ impl Fsp {
 
     /// Extract FMC firmware signatures for Chain of Trust verification.
     ///
-    /// Extracts real cryptographic signatures from FMC ELF32 firmware sections.
-    /// Returns signatures in a heap-allocated structure to prevent stack overflow.
+    /// Copies the pre-loaded hash, public key, and signature data into a
+    /// heap-allocated [`FmcSignatures`] structure to prevent stack overflow.
     pub(crate) fn extract_fmc_signatures(
         dev: &device::Device<device::Bound>,
-        fmc_fw_data: &[u8],
+        hash_data: &[u8],
+        pkey_data: &[u8],
+        sig_data: &[u8],
     ) -> Result<KBox<FmcSignatures>> {
-        let hash_section = crate::firmware::elf_section(fmc_fw_data, "hash")
-            .ok_or(EINVAL)
-            .inspect_err(|_| dev_err!(dev, "FMC firmware missing 'hash' section\n"))?;
-
-        let pkey_section = crate::firmware::elf_section(fmc_fw_data, "publickey")
-            .ok_or(EINVAL)
-            .inspect_err(|_| dev_err!(dev, "FMC firmware missing 'publickey' section\n"))?;
-
-        let sig_section = crate::firmware::elf_section(fmc_fw_data, "signature")
-            .ok_or(EINVAL)
-            .inspect_err(|_| dev_err!(dev, "FMC firmware missing 'signature' section\n"))?;
-
-        if hash_section.len() != FSP_HASH_SIZE {
+        if hash_data.len() != FSP_HASH_SIZE {
             dev_err!(
                 dev,
-                "FMC hash section size {} != expected {}\n",
-                hash_section.len(),
+                "FMC hash size {} != expected {}\n",
+                hash_data.len(),
                 FSP_HASH_SIZE
             );
             return Err(EINVAL);
         }
 
-        if pkey_section.len() > FSP_PKEY_SIZE {
+        if pkey_data.len() > FSP_PKEY_SIZE {
             dev_err!(
                 dev,
-                "FMC publickey section size {} > maximum {}\n",
-                pkey_section.len(),
+                "FMC publickey size {} > maximum {}\n",
+                pkey_data.len(),
                 FSP_PKEY_SIZE
             );
             return Err(EINVAL);
         }
 
-        if sig_section.len() > FSP_SIG_SIZE {
+        if sig_data.len() > FSP_SIG_SIZE {
             dev_err!(
                 dev,
-                "FMC signature section size {} > maximum {}\n",
-                sig_section.len(),
+                "FMC signature size {} > maximum {}\n",
+                sig_data.len(),
                 FSP_SIG_SIZE
             );
             return Err(EINVAL);
@@ -376,9 +366,9 @@ impl Fsp {
             GFP_KERNEL,
         )?;
 
-        signatures.hash384.copy_from_slice(hash_section);
-        signatures.public_key[..pkey_section.len()].copy_from_slice(pkey_section);
-        signatures.signature[..sig_section.len()].copy_from_slice(sig_section);
+        signatures.hash384.copy_from_slice(hash_data);
+        signatures.public_key[..pkey_data.len()].copy_from_slice(pkey_data);
+        signatures.signature[..sig_data.len()].copy_from_slice(sig_data);
 
         Ok(signatures)
     }

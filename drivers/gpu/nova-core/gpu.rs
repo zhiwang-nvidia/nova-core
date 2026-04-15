@@ -312,20 +312,9 @@ impl Gpu {
             // still constructing it, so no concurrent DMA allocations can exist.
             unsafe { pdev.dma_set_mask_and_coherent(chipset.arch().dma_mask())? };
 
-            let (gsp_fw_path, gsp_fw_blob) = firmware::request_firmware(
-                pdev.as_ref(),
-                chipset,
-                "gsp",
-                firmware::FIRMWARE_VERSION,
-            )?;
-            let build_id = firmware::request_firmware(
-                pdev.as_ref(),
-                chipset,
-                "gsp-buildid",
-                firmware::FIRMWARE_VERSION,
-            )
-            .ok()
-            .and_then(|(_, fw)| firmware::BuildId::from_raw(fw.data()));
+            let build_id = firmware::request_firmware(pdev.as_ref(), chipset, "gsp-buildid")
+                .ok()
+                .and_then(|(_, fw)| firmware::BuildId::from_raw(fw.data()));
             if build_id.is_none() {
                 dev_warn!(
                     pdev,
@@ -351,8 +340,7 @@ impl Gpu {
 
                 gsp <- Gsp::new(pdev, chipset, build_id.as_ref()),
 
-                _: { gsp.boot(pdev, bar, chipset, gsp_falcon, sec2_falcon,
-                              &gsp_fw_blob, gsp_fw_path)? },
+                _: { gsp.boot(pdev, bar, chipset, gsp_falcon, sec2_falcon)? },
 
                 bar: devres_bar,
                 spec,
