@@ -27,7 +27,8 @@ use crate::{
                 GspInitRequest,
                 GspInitResponse,
                 GspInitResponseSchema,
-                RegKey, //
+                RegKey,
+                VfInfo, //
             },
             GMCAPI_CMD_GSP_INIT,
             GMCAPI_CMD_GSP_SUSPEND, //
@@ -99,6 +100,9 @@ const REGISTRY_ENTRIES: &[(&[u8], u32)] = &[
 /// # Errors
 ///
 /// - `ENOMEM` if the registry list or the encoder buffer cannot be allocated.
+/// - `ENODEV` if vGPU mode is enabled but the SR-IOV capability is missing.
+///
+/// Errors reading the PCI configuration or decoding the VF BAR layout are propagated as-is.
 pub(crate) fn build_gsp_init_payload(
     pdev: &pci::Device<device::Bound>,
     chipset: Chipset,
@@ -112,10 +116,45 @@ pub(crate) fn build_gsp_init_payload(
         regkeys.push(RegKey::new(b"RMSetSriovMode\0", 1), GFP_KERNEL)?;
     }
 
+    let vf_info = build_vf_info(pdev, vgpu_state)?;
+
     let mut encoder = Encoder::new();
-    GspInitRequest::new(pdev, chipset, regkeys).encode(&mut encoder)?;
+    GspInitRequest::new(pdev, chipset, regkeys, vf_info).encode(&mut encoder)?;
 
     Ok(encoder.finish())
+}
+
+/// Builds the optional VF topology portion of the `GSP_INIT` request.
+fn build_vf_info(
+    pdev: &pci::Device<device::Bound>,
+    vgpu_state: VgpuState,
+) -> Result<Option<VfInfo>> {
+    let VgpuState::Enabled { total_vfs } = vgpu_state else {
+        return Ok(None);
+    };
+
+    let sriov = pdev
+        .config_space_extended()?
+        .find_ext_capability::<pci::ExtSriovRegs>()?
+        .ok_or(ENODEV)?;
+
+    let mut vf_bars = sriov.vf_bars()?;
+    let bar0 = vf_bars.next().ok_or(EINVAL)?;
+    let bar1 = vf_bars.next().ok_or(EINVAL)?;
+    let bar2 = vf_bars.next().ok_or(EINVAL)?;
+
+    let flags = u64::from(bar0.is_64bit)
+        | (u64::from(bar1.is_64bit) << 1)
+        | (u64::from(bar2.is_64bit) << 2);
+
+    Ok(Some(VfInfo::new(
+        u32::from(total_vfs.get()),
+        u32::from(sriov.first_vf_offset()),
+        flags,
+        bar0.address,
+        bar1.address,
+        bar2.address,
+    )))
 }
 
 /// Size of the buffer GSP-RM may fill with static configuration, matching the allocation Open RM
