@@ -26,6 +26,7 @@ use crate::{
         },
         fw::{
             commands::*,
+            GspVfInfo,
             MsgFunction, //
         },
         nvkv, //
@@ -38,12 +39,21 @@ use crate::{
 pub(crate) struct SetSystemInfo<'a> {
     pdev: &'a pci::Device<device::Bound>,
     chipset: Chipset,
+    vf_info: Option<GspVfInfo>,
 }
 
 impl<'a> SetSystemInfo<'a> {
     /// Creates a new `GspSetSystemInfo` command using the parameters of `pdev`.
-    pub(crate) fn new(pdev: &'a pci::Device<device::Bound>, chipset: Chipset) -> Self {
-        Self { pdev, chipset }
+    pub(crate) fn new(
+        pdev: &'a pci::Device<device::Bound>,
+        chipset: Chipset,
+        vf_info: Option<GspVfInfo>,
+    ) -> Self {
+        Self {
+            pdev,
+            chipset,
+            vf_info,
+        }
     }
 }
 
@@ -55,7 +65,7 @@ impl<'a> CommandToGsp for SetSystemInfo<'a> {
     type InitError = Error;
 
     fn init(&self) -> impl Init<Self::Command, Self::InitError> {
-        GspSetSystemInfo::init(self.pdev, self.chipset)
+        GspSetSystemInfo::init(self.pdev, self.chipset, self.vf_info.clone())
     }
 }
 
@@ -75,8 +85,9 @@ impl SetRegistry {
     const NUM_ENTRIES: usize = 3;
 
     /// Creates a new `SetRegistry` command, using a set of hardcoded entries.
-    pub(crate) fn new() -> Self {
-        Self {
+    /// When `vgpu_requested` is true, registry may include vGPU-related entries.
+    pub(crate) fn new(_vgpu_requested: bool) -> Result<Self> {
+        Ok(Self {
             entries: [
                 // RMSecBusResetEnable - enables PCI secondary bus reset
                 RegistryEntry {
@@ -96,7 +107,7 @@ impl SetRegistry {
                     value: 1,
                 },
             ],
-        }
+        })
     }
 }
 

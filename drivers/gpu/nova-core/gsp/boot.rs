@@ -59,7 +59,8 @@ use crate::{
             LibosMemoryRegionInitArgument,
             MsgFunction, //
         },
-        GspFwWprMeta, //
+        GspFwWprMeta,
+        GspVfInfo, //
     },
     regs,
     vbios::Vbios,
@@ -453,11 +454,21 @@ impl super::Gsp {
 
         dev_dbg!(dev, "RISC-V active? {}\n", ctx.gsp_falcon.is_riscv_active(ctx.bar));
 
+        // Build VF info if vGPU is requested.
+        let vf_info = if ctx.vgpu_requested {
+            Some(GspVfInfo::new(ctx.pdev)?)
+        } else {
+            None
+        };
+
         // Send system info and registry RPCs now that GSP is active.
         self.cmdq
-            .send_command_no_wait(ctx.bar, commands::SetSystemInfo::new(ctx.pdev, ctx.chipset))?;
+            .send_command_no_wait(
+                ctx.bar,
+                commands::SetSystemInfo::new(ctx.pdev, ctx.chipset, vf_info),
+            )?;
         self.cmdq
-            .send_command_no_wait(ctx.bar, commands::SetRegistry::new())?;
+            .send_command_no_wait(ctx.bar, commands::SetRegistry::new(ctx.vgpu_requested)?)?;
 
         // Wait for GSP-RM to complete initialization, handling boot events inline.
         Self::wait_gsp_boot_events(
