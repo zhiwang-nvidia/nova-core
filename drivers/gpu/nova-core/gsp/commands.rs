@@ -75,39 +75,56 @@ struct RegistryEntry {
 }
 
 /// The `SetRegistry` command.
+///
+/// Registry entries are built dynamically at runtime based on the current
+/// configuration (e.g. whether vGPU is enabled).
 pub(crate) struct SetRegistry {
-    entries: [RegistryEntry; Self::NUM_ENTRIES],
+    entries: KVec<RegistryEntry>,
 }
 
 impl SetRegistry {
-    // For now we hard-code the registry entries. Future work will allow others to
-    // be added as module parameters.
-    const NUM_ENTRIES: usize = 3;
+    /// Creates a new `SetRegistry` command.
+    ///
+    /// The base set of registry entries is always included. Additional entries
+    /// are appended dynamically based on runtime conditions (e.g. vGPU).
+    pub(crate) fn new(vgpu_requested: bool) -> Result<Self> {
+        let mut entries = KVec::new();
 
-    /// Creates a new `SetRegistry` command, using a set of hardcoded entries.
-    /// When `vgpu_requested` is true, registry may include vGPU-related entries.
-    pub(crate) fn new(_vgpu_requested: bool) -> Result<Self> {
-        Ok(Self {
-            entries: [
-                // RMSecBusResetEnable - enables PCI secondary bus reset
+        entries.push(
+            RegistryEntry {
+                key: "RMSecBusResetEnable",
+                value: 1,
+            },
+            GFP_KERNEL,
+        )?;
+
+        entries.push(
+            RegistryEntry {
+                key: "RMForcePcieConfigSave",
+                value: 1,
+            },
+            GFP_KERNEL,
+        )?;
+
+        entries.push(
+            RegistryEntry {
+                key: "RMDevidCheckIgnore",
+                value: 1,
+            },
+            GFP_KERNEL,
+        )?;
+
+        if vgpu_requested {
+            entries.push(
                 RegistryEntry {
-                    key: "RMSecBusResetEnable",
+                    key: "RMSetSriovMode",
                     value: 1,
                 },
-                // RMForcePcieConfigSave - forces GSP-RM to preserve PCI configuration registers on
-                // any PCI reset.
-                RegistryEntry {
-                    key: "RMForcePcieConfigSave",
-                    value: 1,
-                },
-                // RMDevidCheckIgnore - allows GSP-RM to boot even if the PCI dev ID is not found
-                // in the internal product name database.
-                RegistryEntry {
-                    key: "RMDevidCheckIgnore",
-                    value: 1,
-                },
-            ],
-        })
+                GFP_KERNEL,
+            )?;
+        }
+
+        Ok(Self { entries })
     }
 }
 
@@ -119,28 +136,31 @@ impl CommandToGsp for SetRegistry {
     type InitError = Infallible;
 
     fn init(&self) -> impl Init<Self::Command, Self::InitError> {
-        PackedRegistryTable::init(Self::NUM_ENTRIES as u32, self.variable_payload_len() as u32)
+        PackedRegistryTable::init(
+            self.entries.len() as u32,
+            self.variable_payload_len() as u32,
+        )
     }
 
     fn variable_payload_len(&self) -> usize {
         let mut key_size = 0;
-        for i in 0..Self::NUM_ENTRIES {
-            key_size += self.entries[i].key.len() + 1; // +1 for NULL terminator
+        for entry in self.entries.iter() {
+            key_size += entry.key.len() + 1; // +1 for NULL terminator
         }
-        Self::NUM_ENTRIES * size_of::<PackedRegistryEntry>() + key_size
+        self.entries.len() * size_of::<PackedRegistryEntry>() + key_size
     }
 
     fn init_variable_payload(
         &self,
         dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
     ) -> Result {
-        let string_data_start_offset =
-            size_of::<PackedRegistryTable>() + Self::NUM_ENTRIES * size_of::<PackedRegistryEntry>();
+        let string_data_start_offset = size_of::<PackedRegistryTable>()
+            + self.entries.len() * size_of::<PackedRegistryEntry>();
 
         // Array for string data.
         let mut string_data = KVec::new();
 
-        for entry in self.entries.iter().take(Self::NUM_ENTRIES) {
+        for entry in self.entries.iter() {
             dst.write_all(
                 PackedRegistryEntry::new(
                     (string_data_start_offset + string_data.len()) as u32,

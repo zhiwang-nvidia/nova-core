@@ -107,7 +107,7 @@ impl PackedRegistryEntry {
                 type_: r570::REGISTRY_TABLE_ENTRY_TYPE_DWORD as u8,
                 __bindgen_padding_0: Default::default(),
                 data: value,
-                length: 0,
+                length: core::mem::size_of::<u32>() as u32,
             }
         })
     }
