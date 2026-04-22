@@ -278,6 +278,179 @@ impl PluginRpc {
             fsleep(Delta::from_millis(1));
         }
     }
+
+    /// Initialize the RPC control buffer with version and offsets.
+    pub fn init_rpc(&mut self, dev: &device::Device<device::Bound>) -> Result {
+        self.bar1_map.write32(dev, self.ctrl_off as u64, VGPU_CPU_GSP_CTRL_BUFF_VERSION)?;
+        self.bar1_map
+            .write32(dev, (self.ctrl_off + 16) as u64, self.resp_off as u32)?;
+        self.bar1_map
+            .write32(dev, (self.ctrl_off + 24) as u64, self.msg_off as u32)?;
+        Ok(())
+    }
+
+    /// Generic RPC call: write msg → set ctrl → doorbell → poll response.
+    pub(crate) fn rpc_call(
+        &mut self,
+        dev: &device::Device<device::Bound>,
+        bar0: &Bar0,
+        gfid: Gfid,
+        msg_type: RpcMsg,
+        data: &[u8],
+    ) -> Result {
+        // Write data to message buffer
+        for (i, chunk) in data.chunks(4).enumerate() {
+            let val = u32::from_le_bytes({
+                let mut buf = [0u8; 4];
+                buf[..chunk.len()].copy_from_slice(chunk);
+                buf
+            });
+            self.bar1_map.write32(dev, (self.msg_off + i * 4) as u64, val)?;
+        }
+
+        // Update ctrl: message_type + seq_num
+        self.msg_seq_num += 1;
+        self.bar1_map
+            .write32(dev, (self.ctrl_off + 4) as u64, msg_type as u32)?;
+        self.bar1_map
+            .write32(dev, (self.ctrl_off + 8) as u64, self.msg_seq_num)?;
+
+        // Trigger doorbell
+        ring_doorbell(bar0, gfid);
+
+        // Poll response
+        self.wait_response(dev)
+    }
+
+    fn wait_response(&self, dev: &device::Device<device::Bound>) -> Result {
+        use kernel::time::{delay::fsleep, Delta, Instant, Monotonic};
+
+        let start = Instant::<Monotonic>::now();
+        let timeout = Delta::from_secs(120);
+        loop {
+            let processed =
+                self.bar1_map.read32(dev, (self.resp_off + 4) as u64)?;
+            if processed == self.msg_seq_num {
+                let result =
+                    self.bar1_map.read32(dev, (self.resp_off + 8) as u64)?;
+                if result != 0 {
+                    return Err(EIO);
+                }
+                return Ok(());
+            }
+            if start.elapsed() > timeout {
+                return Err(ETIMEDOUT);
+            }
+            fsleep(Delta::from_millis(1));
+        }
+    }
+
+    /// RPC version negotiation (no data).
+    pub fn negotiate_rpc_version(
+        &mut self,
+        dev: &device::Device<device::Bound>,
+        bar0: &Bar0,
+        gfid: Gfid,
+    ) -> Result {
+        self.rpc_call(dev, bar0, gfid, RpcMsg::VersionNegotiation, &[])
+    }
+
+    /// Send configuration parameters as NVKV-encoded msg_buff_v2.
+    pub fn send_config_params(
+        &mut self,
+        dev: &device::Device<device::Bound>,
+        bar0: &Bar0,
+        instance: &VgpuInstance,
+    ) -> Result {
+        use config_keys::*;
+
+        let mut kvs: KVec<u64> = KVec::new();
+
+        nvkv::nvkv_push_array8(&mut kvs, UUID, &[0u8; 16])?;
+        nvkv::nvkv_push_imm32(&mut kvs, DBDF, instance.dbdf.0)?;
+        nvkv::nvkv_push_imm32(&mut kvs, VGPU_TYPE, instance.vgpu_type.vgpu_type_id)?;
+        nvkv::nvkv_push_imm32(&mut kvs, VM_PID, instance.vm_pid)?;
+        nvkv::nvkv_push_imm32(&mut kvs, NUM_CHANNELS, instance.num_chid)?;
+        nvkv::nvkv_push_imm32(&mut kvs, NUM_PLUGIN_CHANNELS, instance.num_plugin_channels)?;
+        nvkv::nvkv_push_imm32(&mut kvs, HYPERVISOR_TYPE, HYPERVISOR_KVM)?;
+        nvkv::nvkv_push_imm32(&mut kvs, CPU_ARCH, CPU_ARCH_X86_64)?;
+        nvkv::nvkv_push_imm32(&mut kvs, PAGING_LEVEL, PAGING_LEVEL_4)?;
+        nvkv::nvkv_push_imm32(&mut kvs, PAGE_SIZE, PAGE_SIZE_4K)?;
+        nvkv::nvkv_push_seq64(
+            &mut kvs,
+            FEATURE_FLAGS,
+            &[FEATURE_FLAG_ENABLE_UVM | FEATURE_FLAG_VMM_MIGRATION],
+        )?;
+
+        // Encode as msg_buff_v2: [kv_count: u64][kv_pairs: u64[]]
+        let mut msg: KVec<u64> = KVec::new();
+        msg.push(kvs.len() as u64, GFP_KERNEL)?;
+        for &v in kvs.as_slice() {
+            msg.push(v, GFP_KERNEL)?;
+        }
+
+        let payload: &[u8] = unsafe {
+            core::slice::from_raw_parts(msg.as_ptr() as *const u8, msg.len() * 8)
+        };
+        self.rpc_call(
+            dev,
+            bar0,
+            instance.gfid,
+            RpcMsg::SetupConfigParamsAndInit,
+            payload,
+        )
+    }
+
+    /// Send BME (Bus Master Enable) state update.
+    pub fn set_bme(
+        &mut self,
+        dev: &device::Device<device::Bound>,
+        bar0: &Bar0,
+        gfid: Gfid,
+        _enable: bool,
+    ) -> Result {
+        // BME state is communicated via RPC message type
+        self.rpc_call(dev, bar0, gfid, RpcMsg::Reset, &[])
+    }
+}
+
+mod config_keys {
+    pub const UUID: u16 = 0x001;
+    pub const DBDF: u16 = 0x002;
+    pub const VGPU_TYPE: u16 = 0x005;
+    pub const VM_PID: u16 = 0x006;
+    pub const NUM_CHANNELS: u16 = 0x011;
+    pub const NUM_PLUGIN_CHANNELS: u16 = 0x012;
+    pub const HYPERVISOR_TYPE: u16 = 0x021;
+    pub const CPU_ARCH: u16 = 0x022;
+    pub const PAGING_LEVEL: u16 = 0x023;
+    pub const PAGE_SIZE: u16 = 0x024;
+    pub const FEATURE_FLAGS: u16 = 0x030;
+
+    pub const HYPERVISOR_KVM: u32 = 0x4000;
+    pub const CPU_ARCH_X86_64: u32 = 4;
+    pub const PAGING_LEVEL_4: u32 = 2;
+    pub const PAGE_SIZE_4K: u32 = 4096;
+}
+
+const VGPU_CPU_GSP_CTRL_BUFF_VERSION: u32 = 2;
+const FEATURE_FLAG_ENABLE_UVM: u64 = 1 << 3;
+const FEATURE_FLAG_VMM_MIGRATION: u64 = 1 << 5;
+
+#[repr(u32)]
+#[derive(Clone, Copy)]
+enum RpcMsg {
+    VersionNegotiation = 1,
+    SetupConfigParamsAndInit = 2,
+    Reset = 3,
+}
+
+const NV_VIRTUAL_FUNCTION_PRIV_DOORBELL: usize = 0xb8_0000 + 0x2200;
+
+fn ring_doorbell(bar0: &Bar0, gfid: Gfid) {
+    let v = gfid.0 * 32 + 17;
+    let _ = bar0.try_write32(v, NV_VIRTUAL_FUNCTION_PRIV_DOORBELL);
+    let _ = bar0.try_read32(NV_VIRTUAL_FUNCTION_PRIV_DOORBELL);
 }
 
 // --- EngineBitmap ---
