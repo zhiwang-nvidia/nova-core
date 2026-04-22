@@ -908,3 +908,146 @@ pub(crate) fn bootload_plugin(
     };
     cmdq.send_gmc_no_response(bar, gmcapi::VGPU_BOOTLOAD, payload)
 }
+
+// --- FFI exports for vfio-pci driver ---
+
+use crate::driver::NovaCore;
+
+/// Obtain `Pin<&NovaCore>` and `&device::Device<Bound>` from a PF's raw pci_dev.
+///
+/// # Safety
+///
+/// `pf_pdev` must be a valid PF `pci_dev` bound to nova-core.
+unsafe fn pf_to_nova_core<'a>(
+    pf_pdev: *mut kernel::bindings::pci_dev,
+) -> Result<(Pin<&'a NovaCore>, &'a device::Device<device::Bound>)> {
+    // SAFETY: `pci::Device` is `#[repr(transparent)]` over `bindings::pci_dev`.
+    let pf: &pci::Device<device::Bound> = unsafe { &*pf_pdev.cast() };
+    let pf_dev: &device::Device<device::Bound> = pf.as_ref();
+    let nova_core: Pin<&NovaCore> = pf_dev.drvdata::<NovaCore>()?;
+    Ok((nova_core, pf_dev))
+}
+
+fn nvidia_vgpu_open_inner(
+    pf_pdev: *mut kernel::bindings::pci_dev,
+    gfid: u32,
+    dbdf: u32,
+) -> Result {
+    // SAFETY: The C caller (vfio open_device) guarantees `pf_pdev` is the PF
+    // bound to nova-core and remains valid for the duration of this call.
+    let (nova_core, dev) = unsafe { pf_to_nova_core(pf_pdev)? };
+    let gpu = &nova_core.gpu;
+    let gfid = Gfid(gfid);
+    let dbdf = Dbdf(dbdf);
+
+    let bar = gpu.bar.access(dev)?;
+    let cmdq = &gpu.gsp.cmdq;
+    let bar1 = gpu.bar1.as_ref().ok_or(ENODEV)?;
+
+    let type_id = query_assigned_vf_type(cmdq, bar, dbdf)?;
+    let vgpu_type = query_vgpu_type(cmdq, bar, type_id)?;
+
+    let mut chids = gpu.chid_allocator.lock();
+    let mut mgr = gpu.vgpu.lock();
+    let mut instance = mgr.create_instance(
+        &gpu.mm, bar1, &mut chids, gfid, dbdf, vgpu_type, 0,
+    )?;
+
+    bootload_plugin(cmdq, bar, &instance, &mgr.engine_bitmap, &mgr.comm_layout)?;
+
+    instance
+        .plugin_rpc
+        .as_ref()
+        .ok_or(EINVAL)?
+        .wait_plugin_ready(dev)?;
+
+    let mut plugin_rpc = instance.plugin_rpc.take().ok_or(EINVAL)?;
+    plugin_rpc.negotiate_rpc_version(dev, bar, gfid)?;
+    plugin_rpc.send_config_params(dev, bar, &instance)?;
+    plugin_rpc.set_bme(dev, bar, gfid, true)?;
+    instance.plugin_rpc = Some(plugin_rpc);
+
+    mgr.instances.push(instance, GFP_KERNEL)?;
+
+    Ok(())
+}
+
+fn nvidia_vgpu_close_inner(
+    pf_pdev: *mut kernel::bindings::pci_dev,
+    gfid: u32,
+) -> Result {
+    // SAFETY: The C caller (vfio close_device) guarantees `pf_pdev` is valid.
+    let (nova_core, dev) = unsafe { pf_to_nova_core(pf_pdev)? };
+    let gpu = &nova_core.gpu;
+    let gfid = Gfid(gfid);
+
+    let bar = gpu.bar.access(dev)?;
+    let cmdq = &gpu.gsp.cmdq;
+    let mut chids = gpu.chid_allocator.lock();
+    let mut mgr = gpu.vgpu.lock();
+
+    mgr.destroy_instance(cmdq, bar, &mut chids, gfid)
+}
+
+fn nvidia_vgpu_reset_inner(
+    pf_pdev: *mut kernel::bindings::pci_dev,
+    gfid: u32,
+) -> Result {
+    // SAFETY: The C caller (vfio ioctl) guarantees `pf_pdev` is valid.
+    let (nova_core, dev) = unsafe { pf_to_nova_core(pf_pdev)? };
+    let gpu = &nova_core.gpu;
+    let gfid = Gfid(gfid);
+    let bar = gpu.bar.access(dev)?;
+
+    let mut mgr = gpu.vgpu.lock();
+    let instance = mgr
+        .instances
+        .iter_mut()
+        .find(|i| i.gfid == gfid)
+        .ok_or(ENOENT)?;
+
+    let plugin_rpc = instance.plugin_rpc.as_mut().ok_or(EINVAL)?;
+    plugin_rpc.rpc_call(dev, bar, gfid, RpcMsg::Reset, &[])
+}
+
+/// # Safety
+///
+/// `pf_pdev` must be a valid pointer to the PF's `struct pci_dev` bound to
+/// nova-core. `gfid` is the Guest Function ID (VF index + 1). `dbdf` is the
+/// VF's Domain:Bus:Device.Function encoded as `(domain << 16) | (bus << 8) | devfn`.
+#[no_mangle]
+pub unsafe extern "C" fn nvidia_vgpu_open(
+    pf_pdev: *mut kernel::bindings::pci_dev,
+    gfid: core::ffi::c_uint,
+    dbdf: core::ffi::c_uint,
+) -> core::ffi::c_int {
+    match nvidia_vgpu_open_inner(pf_pdev, gfid, dbdf) {
+        Ok(()) => 0,
+        Err(e) => e.to_errno(),
+    }
+}
+
+/// # Safety
+///
+/// `pf_pdev` must be a valid pointer to the PF's `struct pci_dev`.
+#[no_mangle]
+pub unsafe extern "C" fn nvidia_vgpu_close(
+    pf_pdev: *mut kernel::bindings::pci_dev,
+    gfid: core::ffi::c_uint,
+) {
+    let _ = nvidia_vgpu_close_inner(pf_pdev, gfid);
+}
+
+/// # Safety
+///
+/// `pf_pdev` must be a valid pointer to the PF's `struct pci_dev`.
+#[no_mangle]
+pub unsafe extern "C" fn nvidia_vgpu_reset(
+    pf_pdev: *mut kernel::bindings::pci_dev,
+    gfid: core::ffi::c_uint,
+) -> core::ffi::c_int {
+    match nvidia_vgpu_reset_inner(pf_pdev, gfid) {
+        Ok(()) => 0,
+        Err(e) => e.to_errno(),
+    }
+}
