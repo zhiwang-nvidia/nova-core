@@ -31,6 +31,7 @@ pub(crate) mod commands;
 mod fw;
 
 pub(crate) use fw::{
+    vgpu_fw_heap_size,
     GspFwWprMeta,
     GspVfInfo,
     LibosParams, //
@@ -68,6 +69,7 @@ pub(crate) struct GspBootContext<'a> {
     pub(crate) sec2_falcon: &'a Falcon<Sec2Falcon>,
     pub(crate) fsp_falcon: Option<Falcon<crate::falcon::fsp::Fsp>>,
     pub(crate) vgpu_requested: bool,
+    pub(crate) total_vfs: u16,
 }
 
 impl GspBootContext<'_> {
