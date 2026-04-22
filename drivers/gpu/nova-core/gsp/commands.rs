@@ -33,7 +33,8 @@ use crate::{
                 GspInitRequest,
                 GspInitResponse,
                 GspInitResponseSchema,
-                RegKey, //
+                RegKey,
+                VfInfo, //
             },
             MsgFunction,
             GMCAPI_CMD_GSP_INIT, //
@@ -296,10 +297,62 @@ pub(crate) fn build_gsp_init_payload(
         regkeys.push(RegKey::new(b"RMSetSriovMode\0", 1), GFP_KERNEL)?;
     }
 
+    let vf_info = build_vf_info(pdev, vgpu_state)?;
+
     let mut encoder = Encoder::new();
-    GspInitRequest::new(pdev, chipset, regkeys).encode(&mut encoder)?;
+    GspInitRequest::new(pdev, chipset, regkeys, vf_info).encode(&mut encoder)?;
 
     Ok(encoder.finish())
+}
+
+/// Builds the optional VF topology portion of the `GSP_INIT` request.
+fn build_vf_info(
+    pdev: &pci::Device<device::Bound>,
+    vgpu_state: VgpuState,
+) -> Result<Option<VfInfo>> {
+    let VgpuState::Enabled { total_vfs } = vgpu_state else {
+        return Ok(None);
+    };
+
+    let sriov = pdev
+        .config_space_extended()?
+        .find_ext_capability::<pci::ExtSriovRegs>()?;
+
+    // A memory BAR's low four bits carry PCI attributes rather than address bits.
+    const VF_BAR_ADDRESS_MASK: u64 = !0xf;
+
+    let read_bar = |index| -> Result<(bool, u64)> {
+        let is_64bit = sriov.is_vf_bar_64bit(index)?;
+        let raw = if is_64bit {
+            sriov.read_vf_bar64(index)?
+        } else {
+            u64::from(kernel::io_read!(sriov, .vf_bar[try: index]))
+        };
+
+        Ok((is_64bit, raw & VF_BAR_ADDRESS_MASK))
+    };
+
+    // Each 64-bit BAR consumes two configuration-space slots. Walk the three logical NVIDIA VF
+    // BARs so their addresses cannot overlap when an earlier BAR changes width.
+    let bar0_index = 0;
+    let (bar0_64bit, bar0_address) = read_bar(bar0_index)?;
+    let bar1_index = bar0_index + 1 + usize::from(bar0_64bit);
+    let (bar1_64bit, bar1_address) = read_bar(bar1_index)?;
+    let bar2_index = bar1_index + 1 + usize::from(bar1_64bit);
+    let (bar2_64bit, bar2_address) = read_bar(bar2_index)?;
+
+    let flags = u64::from(bar0_64bit)
+        | (u64::from(bar1_64bit) << 1)
+        | (u64::from(bar2_64bit) << 2);
+
+    Ok(Some(VfInfo::new(
+        u32::from(total_vfs.get()),
+        u32::from(kernel::io_read!(sriov, .vf_offset)),
+        flags,
+        bar0_address,
+        bar1_address,
+        bar2_address,
+    )))
 }
 
 /// Size of the buffer GSP-RM may fill with static configuration, matching the allocation Open RM
