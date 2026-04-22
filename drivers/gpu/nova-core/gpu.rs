@@ -16,7 +16,11 @@ use kernel::{
     prelude::*,
     ptr::Alignment,
     sizes::SZ_4K,
-    sync::Arc, //
+    sync::{
+        Arc,
+        Mutex,
+        new_mutex, //
+    }, //
 };
 
 use crate::{
@@ -35,6 +39,7 @@ use crate::{
         Gsp,
         GspBootContext, //
     },
+    vgpu::VgpuManager,
     mm::{
         bar_user::BarUser,
         pagetable::MmuVersion,
@@ -207,6 +212,14 @@ impl Architecture {
             Self::Hopper | Self::BlackwellGB10x | Self::BlackwellGB20x => DmaMask::new::<52>(),
         }
     }
+
+    /// Returns true for architectures that support vGPU (Ada and later).
+    pub(crate) const fn supports_vgpu(&self) -> bool {
+        matches!(
+            self,
+            Self::Ada | Self::BlackwellGB10x | Self::BlackwellGB20x
+        )
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -302,7 +315,7 @@ impl fmt::Display for Spec {
 pub(crate) struct Gpu {
     spec: Spec,
     /// MMIO mapping of PCI BAR 0
-    bar: Arc<Devres<Bar0>>,
+    pub(crate) bar: Arc<Devres<Bar0>>,
     /// System memory page required for flushing all pending GPU-side memory writes done through
     /// PCIE into system memory, via sysmembar (A GPU-initiated HW memory-barrier operation).
     sysmem_flush: SysmemFlush,
@@ -310,14 +323,17 @@ pub(crate) struct Gpu {
     gsp_falcon: Falcon<GspFalcon>,
     /// SEC2 falcon instance, used for GSP boot up and cleanup.
     sec2_falcon: Falcon<Sec2Falcon>,
-    /// GPU memory manager owning memory management resources.
+    /// vGPU state (SR-IOV / FSP PRC), behind Mutex for FFI concurrency.
     #[pin]
-    mm: GpuMm,
-    /// GSP runtime data. Temporarily an empty placeholder.
+    pub(crate) vgpu: Mutex<VgpuManager>,
+    /// GSP runtime data.
     #[pin]
-    gsp: Gsp,
+    pub(crate) gsp: Gsp,
     /// Static GPU information from GSP.
     gsp_static_info: GetGspStaticInfoReply,
+    /// GPU memory manager owning memory management resources.
+    #[pin]
+    pub(crate) mm: GpuMm,
     /// BAR1 user interface for CPU access to GPU virtual memory.
     bar_user: BarUser,
     /// fwctl device registration for GMC API pass-through.
@@ -369,6 +385,8 @@ impl Gpu {
 
                 sec2_falcon: Falcon::new(pdev.as_ref(), chipset)?,
 
+                vgpu <- new_mutex!(VgpuManager::new(pdev, chipset.arch())?, "vgpu_manager"),
+
                 gsp <- Gsp::new(pdev, chipset, build_id.as_ref()),
 
                 gsp_static_info: {
@@ -381,14 +399,18 @@ impl Gpu {
                     // SAFETY: We do not move the pinned `Gsp`; `addr_of!` only
                     // computes the address.
                     cmdq_cell.set(core::ptr::addr_of!(gsp.as_ref().get_ref().cmdq));
-                    let ctx = GspBootContext {
+                    let mut mgr = vgpu.lock();
+                    let mut ctx = GspBootContext {
                         pdev,
                         bar,
                         chipset,
                         gsp_falcon,
                         sec2_falcon,
+                        fsp_falcon: None,
+                        vgpu_requested: mgr.vgpu_requested,
                     };
-                    let info = gsp.boot(&ctx)?;
+                    let info = gsp.boot(&mut ctx)?;
+                    mgr.set_vgpu_enabled(ctx.vgpu_requested);
 
                     dev_info!(
                         pdev.as_ref(),

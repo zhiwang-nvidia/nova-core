@@ -286,14 +286,12 @@ impl super::Gsp {
         ctx: &super::GspBootContext<'_>,
         wpr_meta: &Coherent<GspFwWprMeta>,
         libos: &Coherent<[LibosMemoryRegionInitArgument]>,
+        fsp_falcon: &Falcon<FspEngine>,
     ) -> Result {
         let dev = ctx.dev();
         let bar = ctx.bar;
         let chipset = ctx.chipset;
         let gsp_falcon = ctx.gsp_falcon;
-        let fsp_falcon = Falcon::<FspEngine>::new(dev, chipset)?;
-
-        Fsp::wait_secure_boot(dev, bar, chipset.arch())?;
 
         let fsp_fw = FspFirmware::new(dev, chipset)?;
 
@@ -360,15 +358,31 @@ impl super::Gsp {
     /// Upon return, the GSP is up and running, and its runtime object given as return value.
     pub(crate) fn boot(
         self: Pin<&mut Self>,
-        ctx: &super::GspBootContext<'_>,
+        ctx: &mut super::GspBootContext<'_>,
     ) -> Result<GetGspStaticInfoReply> {
-        let dev = ctx.dev();
+        let bar = ctx.bar;
+        let chipset = ctx.chipset;
         let uses_sec2 = matches!(
-            ctx.chipset.arch(),
+            chipset.arch(),
             Architecture::Turing | Architecture::Ampere | Architecture::Ada
         );
 
-        let gsp_fw = KBox::pin_init(GspFirmware::new(dev, ctx.chipset), GFP_KERNEL)?;
+        // For FSP-based architectures (Hopper/Blackwell), refine the vGPU
+        // request by reading the PRC knob from FSP.
+        // SEC2-based architectures (Turing/Ampere/Ada) keep the initial
+        // request as-is.
+        if !uses_sec2 {
+            let fsp_falcon = Falcon::<FspEngine>::new(ctx.dev(), chipset)?;
+            Fsp::wait_secure_boot(ctx.dev(), bar, chipset.arch())?;
+            let vgpu_mode = Fsp::read_vgpu_mode(ctx.dev(), bar, &fsp_falcon)?;
+            dev_dbg!(ctx.dev(), "vGPU mode: {:?}\n", vgpu_mode);
+            ctx.fsp_falcon = Some(fsp_falcon);
+            ctx.vgpu_requested &= vgpu_mode == crate::fsp::VgpuMode::Enabled;
+        }
+
+        let dev = ctx.dev();
+
+        let gsp_fw = KBox::pin_init(GspFirmware::new(dev, chipset), GFP_KERNEL)?;
 
         dev_info!(
             dev,
@@ -418,7 +432,12 @@ impl super::Gsp {
                 &wpr_meta,
             )?;
         } else {
-            Self::boot_via_fsp(ctx, &wpr_meta, &self.libos)?;
+            Self::boot_via_fsp(
+                ctx,
+                &wpr_meta,
+                &self.libos,
+                ctx.fsp_falcon.as_ref().ok_or(ENODEV)?,
+            )?;
         }
 
         // Common post-boot initialization
