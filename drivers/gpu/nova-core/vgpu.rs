@@ -233,6 +233,8 @@ pub(crate) mod gmcapi {
     pub const VGPU_SHUTDOWN: u32 = 0x1000_0021;
     pub const VGPU_SHUTDOWN_COMPLETE: u32 = 0x1000_0022;
     pub const VGPU_CLEANUP: u32 = 0x1000_0023;
+
+    pub const VGPU_BOOTLOAD: u32 = 0x1000_0020;
 }
 
 /// Plugin RPC channel for vGPU plugin communication.
@@ -244,6 +246,10 @@ pub(crate) struct PluginRpc {
     msg_seq_num: u32,
 }
 
+const GSP_PLUGIN_BOOTLOADED: u32 = 0x4E65_4A6F;
+const CTRL_BUF_MSG_SEQ_NUM_OFFSET: u64 = 8;
+const PLUGIN_BOOT_TIMEOUT_MS: u64 = 10_000;
+
 impl PluginRpc {
     pub fn new(bar1_map: Bar1Map, _comm_layout: &CommBuffLayout) -> Self {
         Self {
@@ -252,6 +258,24 @@ impl PluginRpc {
             resp_off: CTRL_SIZE as usize,
             msg_off: (CTRL_SIZE + RESPONSE_SIZE) as usize,
             msg_seq_num: 0,
+        }
+    }
+
+    /// Poll ctrl_buf for plugin boot completion magic.
+    pub fn wait_plugin_ready(&self, dev: &device::Device<device::Bound>) -> Result {
+        use kernel::time::{delay::fsleep, Delta, Instant, Monotonic};
+
+        let start = Instant::<Monotonic>::now();
+        let timeout = Delta::from_millis(PLUGIN_BOOT_TIMEOUT_MS as i64);
+        loop {
+            let val = self.bar1_map.read32(dev, CTRL_BUF_MSG_SEQ_NUM_OFFSET)?;
+            if val == GSP_PLUGIN_BOOTLOADED {
+                return Ok(());
+            }
+            if start.elapsed() > timeout {
+                return Err(ETIMEDOUT);
+            }
+            fsleep(Delta::from_millis(1));
         }
     }
 }
@@ -559,4 +583,150 @@ impl VgpuManager {
 
         Ok(())
     }
+}
+
+
+mod bootload_keys {
+    pub const DBDF: u16 = 0x0001;
+    pub const GFID: u16 = 0x0002;
+    pub const VGPU_TYPE: u16 = 0x0003;
+    pub const VM_PID: u16 = 0x0004;
+    #[expect(dead_code)]
+    pub const SWIZZ_ID: u16 = 0x0005;
+    pub const NUM_CHANNELS: u16 = 0x0006;
+    pub const NUM_PLUGIN_CHANNELS: u16 = 0x0007;
+    pub const GUEST_FB_SEGMENT_COUNT: u16 = 0x0008;
+
+    pub const CHANNEL_MAPPING: u16 = 0x1001;
+    pub const GUEST_FB_SEGMENT_PHYS_ADDR: u16 = 0x1002;
+    pub const GUEST_FB_SEGMENT_LENGTH: u16 = 0x1003;
+    pub const PLUGIN_HEAP_PHYS_ADDR: u16 = 0x1004;
+    pub const PLUGIN_HEAP_LENGTH: u16 = 0x1005;
+    pub const CTRL_BUFF_OFFSET: u16 = 0x1006;
+    pub const INIT_TASK_LOG_OFFSET: u16 = 0x1007;
+    pub const INIT_TASK_LOG_SIZE: u16 = 0x1008;
+    pub const VGPU_TASK_LOG_OFFSET: u16 = 0x1009;
+    pub const VGPU_TASK_LOG_SIZE: u16 = 0x100A;
+    pub const KERNEL_LOG_OFFSET: u16 = 0x100B;
+    pub const KERNEL_LOG_SIZE: u16 = 0x100C;
+}
+
+// GMC engine type constants (ABI-stable)
+const NVGMC_ENGINE_GR0: u64 = 0;
+const NVGMC_ENGINE_CE0: u64 = 0x10;
+
+/// Convert NV2080 engine index to GMC engine type.
+fn nv2080_to_gmc_engine(idx: usize) -> Option<u64> {
+    match idx {
+        0 => Some(NVGMC_ENGINE_GR0),
+        1..=7 => Some(NVGMC_ENGINE_CE0 + (idx - 1) as u64),
+        _ => None,
+    }
+}
+
+/// Send GMCAPI VGPU_BOOTLOAD with NVKV-encoded parameters.
+pub(crate) fn bootload_plugin(
+    cmdq: &Cmdq,
+    bar: &Bar0,
+    instance: &VgpuInstance,
+    engine_bitmap: &EngineBitmap,
+    comm_layout: &CommBuffLayout,
+) -> Result {
+    let mut kvs: KVec<u64> = KVec::new();
+
+    nvkv::nvkv_push_imm32(&mut kvs, bootload_keys::DBDF, instance.dbdf.0)?;
+    nvkv::nvkv_push_imm32(&mut kvs, bootload_keys::GFID, instance.gfid.0)?;
+    nvkv::nvkv_push_imm32(
+        &mut kvs,
+        bootload_keys::VGPU_TYPE,
+        instance.vgpu_type.vgpu_type_id,
+    )?;
+    nvkv::nvkv_push_imm32(&mut kvs, bootload_keys::VM_PID, instance.vm_pid)?;
+    nvkv::nvkv_push_imm32(&mut kvs, bootload_keys::NUM_CHANNELS, instance.num_chid)?;
+    nvkv::nvkv_push_imm32(
+        &mut kvs,
+        bootload_keys::NUM_PLUGIN_CHANNELS,
+        instance.num_plugin_channels,
+    )?;
+
+    // Channel mapping: [gmc_engine_id, chid_offset] pairs for active engines
+    let mut channel_map: KVec<u64> = KVec::new();
+    for i in 0..NV2080_GPU_MAX_ENGINES {
+        if engine_bitmap.has_engine(i) {
+            if let Some(gmc_id) = nv2080_to_gmc_engine(i) {
+                channel_map.push(gmc_id, GFP_KERNEL)?;
+                channel_map.push(u64::from(instance.chid_offset), GFP_KERNEL)?;
+            }
+        }
+    }
+    nvkv::nvkv_push_seq64(&mut kvs, bootload_keys::CHANNEL_MAPPING, channel_map.as_slice())?;
+
+    // Guest FB segments
+    let fb = instance.fbmem_heap.as_ref().ok_or(EINVAL)?;
+    nvkv::nvkv_push_imm32(&mut kvs, bootload_keys::GUEST_FB_SEGMENT_COUNT, 1)?;
+    nvkv::nvkv_push_seq64(
+        &mut kvs,
+        bootload_keys::GUEST_FB_SEGMENT_PHYS_ADDR,
+        &[fb.addr],
+    )?;
+    nvkv::nvkv_push_seq64(
+        &mut kvs,
+        bootload_keys::GUEST_FB_SEGMENT_LENGTH,
+        &[fb.size],
+    )?;
+
+    // Plugin heap
+    let mgmt = instance.mgmt_heap.as_ref().ok_or(EINVAL)?;
+    nvkv::nvkv_push_seq64(
+        &mut kvs,
+        bootload_keys::PLUGIN_HEAP_PHYS_ADDR,
+        &[mgmt.addr],
+    )?;
+    nvkv::nvkv_push_seq64(
+        &mut kvs,
+        bootload_keys::PLUGIN_HEAP_LENGTH,
+        &[mgmt.size],
+    )?;
+
+    // Log buffer offsets
+    nvkv::nvkv_push_seq64(&mut kvs, bootload_keys::CTRL_BUFF_OFFSET, &[0u64])?;
+    nvkv::nvkv_push_seq64(
+        &mut kvs,
+        bootload_keys::INIT_TASK_LOG_OFFSET,
+        &[comm_layout.init_task_log_offset],
+    )?;
+    nvkv::nvkv_push_seq64(
+        &mut kvs,
+        bootload_keys::INIT_TASK_LOG_SIZE,
+        &[comm_layout.init_task_log_size],
+    )?;
+    let vgpu_log_offset =
+        comm_layout.init_task_log_offset + comm_layout.init_task_log_size;
+    nvkv::nvkv_push_seq64(
+        &mut kvs,
+        bootload_keys::VGPU_TASK_LOG_OFFSET,
+        &[vgpu_log_offset],
+    )?;
+    nvkv::nvkv_push_seq64(
+        &mut kvs,
+        bootload_keys::VGPU_TASK_LOG_SIZE,
+        &[comm_layout.vgpu_task_log_size],
+    )?;
+    let kernel_log_offset = vgpu_log_offset + comm_layout.vgpu_task_log_size;
+    nvkv::nvkv_push_seq64(
+        &mut kvs,
+        bootload_keys::KERNEL_LOG_OFFSET,
+        &[kernel_log_offset],
+    )?;
+    nvkv::nvkv_push_seq64(
+        &mut kvs,
+        bootload_keys::KERNEL_LOG_SIZE,
+        &[comm_layout.kernel_log_size],
+    )?;
+
+    // Convert u64 kvs to byte slice for GMC API
+    let payload: &[u8] = unsafe {
+        core::slice::from_raw_parts(kvs.as_ptr() as *const u8, kvs.len() * 8)
+    };
+    cmdq.send_gmc_no_response(bar, gmcapi::VGPU_BOOTLOAD, payload)
 }
