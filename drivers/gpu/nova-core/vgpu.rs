@@ -81,6 +81,99 @@ impl Bar1Map {
     }
 }
 
+/// GSP-level configuration for vGPU resource sizing.
+pub(crate) struct GspConfig {
+    pub vmmu_segment_size: u64,
+    pub total_avail_chids: u32,
+    pub total_fbmem_size: u64,
+}
+
+impl Default for GspConfig {
+    fn default() -> Self {
+        Self {
+            vmmu_segment_size: 0,
+            total_avail_chids: 0,
+            total_fbmem_size: 0,
+        }
+    }
+}
+
+// --- CommBuffLayout ---
+
+const CTRL_SIZE: u64 = 4 * 1024;
+const RESPONSE_SIZE: u64 = 4 * 1024;
+const MESSAGE_SIZE: u64 = 4 * 1024;
+const MIGRATION_SIZE: u64 = 2 * 1024 * 1024;
+const ERROR_SIZE: u64 = 4 * 1024;
+const INIT_LOG_SIZE: u64 = 128 * 1024;
+const VGPU_LOG_SIZE: u64 = 256 * 1024;
+const KERNEL_LOG_SIZE: u64 = 64 * 1024;
+
+/// Communication buffer layout within the management heap.
+pub(crate) struct CommBuffLayout {
+    pub total_size: u64,
+    pub init_task_log_offset: u64,
+    pub init_task_log_size: u64,
+    pub vgpu_task_log_size: u64,
+    pub kernel_log_size: u64,
+}
+
+impl CommBuffLayout {
+    pub fn calculate() -> Self {
+        let init_task_log_offset =
+            CTRL_SIZE + RESPONSE_SIZE + MESSAGE_SIZE + MIGRATION_SIZE + ERROR_SIZE;
+        let total_size =
+            init_task_log_offset + INIT_LOG_SIZE + VGPU_LOG_SIZE + KERNEL_LOG_SIZE;
+        Self {
+            total_size,
+            init_task_log_offset,
+            init_task_log_size: INIT_LOG_SIZE,
+            vgpu_task_log_size: VGPU_LOG_SIZE,
+            kernel_log_size: KERNEL_LOG_SIZE,
+        }
+    }
+}
+
+impl Default for CommBuffLayout {
+    fn default() -> Self {
+        Self::calculate()
+    }
+}
+
+// --- EngineBitmap ---
+
+const NV2080_GPU_MAX_ENGINES: usize = 84;
+const ENGINE_BITMAP_WORDS: usize = 2;
+
+/// 96-bit engine capability bitmap built from GspStaticConfigInfo.engineCaps.
+pub(crate) struct EngineBitmap {
+    pub bitmap: [u64; ENGINE_BITMAP_WORDS],
+}
+
+impl EngineBitmap {
+    pub fn new() -> Self {
+        Self { bitmap: [0; ENGINE_BITMAP_WORDS] }
+    }
+
+    pub fn from_caps(caps: &[u32; 3]) -> Self {
+        Self {
+            bitmap: [
+                u64::from(caps[1]) << 32 | u64::from(caps[0]),
+                u64::from(caps[2]),
+            ],
+        }
+    }
+
+    pub fn has_engine(&self, idx: usize) -> bool {
+        if idx >= NV2080_GPU_MAX_ENGINES {
+            return false;
+        }
+        let word = idx / 64;
+        let bit = idx % 64;
+        self.bitmap[word] & (1u64 << bit) != 0
+    }
+}
+
 /// Unified vGPU manager.
 ///
 /// On creation, performs platform detection to determine whether vGPU is
@@ -90,6 +183,9 @@ pub(crate) struct VgpuManager {
     pub(crate) vgpu_requested: bool,
     pub(crate) vgpu_enabled: bool,
     pub(crate) total_vfs: u16,
+    pub(crate) gsp_config: GspConfig,
+    pub(crate) comm_layout: CommBuffLayout,
+    pub(crate) engine_bitmap: EngineBitmap,
 }
 
 impl VgpuManager {
@@ -110,11 +206,28 @@ impl VgpuManager {
             vgpu_requested: total_vfs > 0,
             vgpu_enabled: false,
             total_vfs,
+            gsp_config: GspConfig::default(),
+            comm_layout: CommBuffLayout::default(),
+            engine_bitmap: EngineBitmap::new(),
         })
     }
 
     pub(crate) fn set_vgpu_enabled(&mut self, enabled: bool) {
         self.vgpu_enabled = enabled;
+    }
+
+    /// One-time initialization after GSP boot completes.
+    pub(crate) fn init_post_gsp_boot(
+        &mut self,
+        engine_caps: &[u32; 3],
+        total_vram: u64,
+    ) -> Result {
+        self.gsp_config.vmmu_segment_size = 512 * 1024 * 1024; // 512MB for Blackwell
+        self.gsp_config.total_fbmem_size = total_vram;
+        self.gsp_config.total_avail_chids = 2048;
+        self.engine_bitmap = EngineBitmap::from_caps(engine_caps);
+        self.comm_layout = CommBuffLayout::calculate();
+        Ok(())
     }
 }
 

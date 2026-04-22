@@ -193,6 +193,9 @@ pub(crate) struct GetGspStaticInfoReply {
     pub(crate) usable_fb_region: Range<u64>,
     /// End of VRAM.
     pub(crate) total_fb_end: u64,
+    /// Engine capability bitmap (96 bits).
+    // TODO: Extract from NVKV response once GSP exposes the key.
+    pub(crate) engine_caps: [u32; 3],
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -253,5 +256,6 @@ pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: &Bar0) -> Result<GetGspStaticInfoRe
         bar1_pde_base: 0,
         usable_fb_region: 0..usable_fb_size,
         total_fb_end: usable_fb_size,
+        engine_caps: [0; 3],
     })
 }

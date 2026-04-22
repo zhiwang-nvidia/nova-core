@@ -438,6 +438,14 @@ impl Gpu {
                     let info = gsp.boot(&mut ctx)?;
                     mgr.set_vgpu_enabled(ctx.vgpu_requested);
 
+                    if ctx.vgpu_requested {
+                        mgr.init_post_gsp_boot(
+                            &info.engine_caps,
+                            info.total_fb_end,
+                        )?;
+                        *chid_allocator.lock() = ChidAllocator::new(2048);
+                    }
+
                     dev_info!(
                         pdev.as_ref(),
                         "Using FB region: {:#x}..{:#x}\n",
