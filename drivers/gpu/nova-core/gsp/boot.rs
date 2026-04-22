@@ -8,7 +8,6 @@ use kernel::{
         register::WithBase, //
         Io,
     },
-    pci,
     prelude::*,
     time::Delta,
     transmute::FromBytes, //
@@ -247,20 +246,19 @@ impl super::Gsp {
     ///
     /// This path uses FWSEC-FRTS to set up WPR2, then boots GSP directly,
     /// then uses SEC2 to run the booter firmware.
-    #[allow(clippy::too_many_arguments)]
     fn boot_via_sec2(
-        dev: &device::Device<device::Bound>,
-        bar: &Bar0,
-        chipset: Chipset,
-        gsp_falcon: &Falcon<Gsp>,
-        sec2_falcon: &Falcon<Sec2>,
+        ctx: &super::GspBootContext<'_>,
         fb_layout: &FbLayout,
         libos: &Coherent<[LibosMemoryRegionInitArgument]>,
         wpr_meta: &Coherent<GspFwWprMeta>,
     ) -> Result {
+        let dev = ctx.dev();
+        let bar = ctx.bar;
+        let gsp_falcon = ctx.gsp_falcon;
+        let sec2_falcon = ctx.sec2_falcon;
         // Run FWSEC-FRTS to set up the WPR2 region
         let bios = Vbios::new(dev, bar)?;
-        Self::run_fwsec_frts(dev, chipset, gsp_falcon, bar, &bios, fb_layout)?;
+        Self::run_fwsec_frts(dev, ctx.chipset, gsp_falcon, bar, &bios, fb_layout)?;
 
         // Reset and boot GSP before SEC2
         gsp_falcon.reset(bar)?;
@@ -277,7 +275,7 @@ impl super::Gsp {
         );
 
         // Run booter via SEC2
-        Self::run_booter(dev, bar, chipset, sec2_falcon, wpr_meta)
+        Self::run_booter(dev, bar, ctx.chipset, sec2_falcon, wpr_meta)
     }
 
     /// Boot GSP via FSP Chain of Trust (Hopper/Blackwell+ path).
@@ -285,13 +283,14 @@ impl super::Gsp {
     /// This path uses FSP to establish a chain of trust and boot GSP-FMC. FSP handles
     /// the GSP boot internally - no manual GSP reset/boot is needed.
     fn boot_via_fsp(
-        dev: &device::Device<device::Bound>,
-        bar: &Bar0,
-        chipset: Chipset,
-        gsp_falcon: &Falcon<Gsp>,
+        ctx: &super::GspBootContext<'_>,
         wpr_meta: &Coherent<GspFwWprMeta>,
         libos: &Coherent<[LibosMemoryRegionInitArgument]>,
     ) -> Result {
+        let dev = ctx.dev();
+        let bar = ctx.bar;
+        let chipset = ctx.chipset;
+        let gsp_falcon = ctx.gsp_falcon;
         let fsp_falcon = Falcon::<FspEngine>::new(dev, chipset)?;
 
         Fsp::wait_secure_boot(dev, bar, chipset.arch())?;
@@ -361,19 +360,15 @@ impl super::Gsp {
     /// Upon return, the GSP is up and running, and its runtime object given as return value.
     pub(crate) fn boot(
         self: Pin<&mut Self>,
-        pdev: &pci::Device<device::Bound>,
-        bar: &Bar0,
-        chipset: Chipset,
-        gsp_falcon: &Falcon<Gsp>,
-        sec2_falcon: &Falcon<Sec2>,
+        ctx: &super::GspBootContext<'_>,
     ) -> Result<GetGspStaticInfoReply> {
-        let dev = pdev.as_ref();
+        let dev = ctx.dev();
         let uses_sec2 = matches!(
-            chipset.arch(),
+            ctx.chipset.arch(),
             Architecture::Turing | Architecture::Ampere | Architecture::Ada
         );
 
-        let gsp_fw = KBox::pin_init(GspFirmware::new(dev, chipset), GFP_KERNEL)?;
+        let gsp_fw = KBox::pin_init(GspFirmware::new(dev, ctx.chipset), GFP_KERNEL)?;
 
         dev_info!(
             dev,
@@ -384,7 +379,7 @@ impl super::Gsp {
 
         // Load the optional ucodes (bindata) firmware and build a radix3 page table.
         // GSP-RM uses this to load additional microcode at runtime.
-        let ucodes_radix3 = match crate::firmware::request_ucodes_firmware(dev, chipset) {
+        let ucodes_radix3 = match crate::firmware::request_ucodes_firmware(dev, ctx.chipset) {
             Ok(ucodes_fw) => Some(KBox::pin_init(
                 Radix3::new(dev, ucodes_fw.data()),
                 GFP_KERNEL,
@@ -395,7 +390,7 @@ impl super::Gsp {
             }
             Err(e) => return Err(e),
         };
-        let fb_layout = FbLayout::new(chipset, bar, &gsp_fw)?;
+        let fb_layout = FbLayout::new(ctx.chipset, ctx.bar, &gsp_fw)?;
         dev_dbg!(dev, "{:#x?}\n", fb_layout);
 
         let wpr_meta = Coherent::init(dev, GFP_KERNEL, GspFwWprMeta::new(&gsp_fw, &fb_layout))?;
@@ -417,51 +412,47 @@ impl super::Gsp {
         // Architecture-specific boot path
         if uses_sec2 {
             Self::boot_via_sec2(
-                dev,
-                bar,
-                chipset,
-                gsp_falcon,
-                sec2_falcon,
+                ctx,
                 &fb_layout,
                 &self.libos,
                 &wpr_meta,
             )?;
         } else {
-            Self::boot_via_fsp(dev, bar, chipset, gsp_falcon, &wpr_meta, &self.libos)?;
+            Self::boot_via_fsp(ctx, &wpr_meta, &self.libos)?;
         }
 
         // Common post-boot initialization
-        gsp_falcon.write_os_version(bar, gsp_fw.bootloader.app_version);
+        ctx.gsp_falcon.write_os_version(ctx.bar, gsp_fw.bootloader.app_version);
 
         // Poll for RISC-V to become active
         read_poll_timeout(
-            || Ok(gsp_falcon.is_riscv_active(bar)),
+            || Ok(ctx.gsp_falcon.is_riscv_active(ctx.bar)),
             |val: &bool| *val,
             Delta::from_millis(10),
             Delta::from_secs(5),
         )?;
 
-        dev_dbg!(dev, "RISC-V active? {}\n", gsp_falcon.is_riscv_active(bar));
+        dev_dbg!(dev, "RISC-V active? {}\n", ctx.gsp_falcon.is_riscv_active(ctx.bar));
 
         // Send system info and registry RPCs now that GSP is active.
         self.cmdq
-            .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset))?;
+            .send_command_no_wait(ctx.bar, commands::SetSystemInfo::new(ctx.pdev, ctx.chipset))?;
         self.cmdq
-            .send_command_no_wait(bar, commands::SetRegistry::new())?;
+            .send_command_no_wait(ctx.bar, commands::SetRegistry::new())?;
 
         // Wait for GSP-RM to complete initialization, handling boot events inline.
         Self::wait_gsp_boot_events(
             &self.cmdq,
-            gsp_falcon,
-            sec2_falcon,
-            bar,
+            ctx.gsp_falcon,
+            ctx.sec2_falcon,
+            ctx.bar,
             dev,
             gsp_fw.bootloader.app_version,
             self.libos.dma_handle(),
         )?;
 
         // Obtain and display basic GPU information.
-        let info = commands::get_gsp_info(&self.cmdq, bar)?;
+        let info = commands::get_gsp_info(&self.cmdq, ctx.bar)?;
         match info.gpu_name() {
             Ok(name) => dev_info!(dev, "GPU name: {}\n", name),
             Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
