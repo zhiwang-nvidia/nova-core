@@ -16,7 +16,8 @@ use crate::{
             self,
             commands::{
                 GspInitRequest,
-                GspInitResponseSchema, //
+                GspInitResponseSchema,
+                VfInfo, //
             },
             GspGmcMsgElement,
             GMCAPI_CMD_GSP_INIT,
@@ -47,9 +48,43 @@ pub(crate) fn build_gsp_init_payload(
     vgpu_state: VgpuState,
 ) -> Result<EncodedStream> {
     let mut encoder = Encoder::new();
-    GspInitRequest::new(pdev, chipset, vgpu_state)?.encode(&mut encoder)?;
+    let vf_info = build_vf_info(pdev, vgpu_state)?;
+    GspInitRequest::new(pdev, chipset, vgpu_state, vf_info)?.encode(&mut encoder)?;
 
     Ok(encoder.finish())
+}
+
+/// Builds the optional VF topology portion of the `GSP_INIT` request.
+fn build_vf_info(
+    pdev: &pci::Device<device::Bound>,
+    vgpu_state: VgpuState,
+) -> Result<Option<VfInfo>> {
+    let VgpuState::Enabled { total_vfs } = vgpu_state else {
+        return Ok(None);
+    };
+
+    let sriov = pdev
+        .config_space_extended()?
+        .find_ext_capability::<pci::ExtSriovRegs>()?
+        .ok_or(ENODEV)?;
+
+    let mut vf_bars = sriov.vf_bars()?;
+    let bar0 = vf_bars.next().ok_or(EINVAL)?;
+    let bar1 = vf_bars.next().ok_or(EINVAL)?;
+    let bar2 = vf_bars.next().ok_or(EINVAL)?;
+
+    let flags = u64::from(bar0.is_64bit)
+        | (u64::from(bar1.is_64bit) << 1)
+        | (u64::from(bar2.is_64bit) << 2);
+
+    Ok(Some(VfInfo::new(
+        u32::from(total_vfs.get()),
+        u32::from(sriov.first_vf_offset()),
+        flags,
+        bar0.address,
+        bar1.address,
+        bar2.address,
+    )))
 }
 
 /// Largest `GSP_INIT` response that the driver accepts.
