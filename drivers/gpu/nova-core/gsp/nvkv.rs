@@ -87,7 +87,7 @@ impl Encodeable for KVVec<RegKey> {
 }
 
 nvkv_encode! {
-    struct VfInfo {
+    pub(super) struct VfInfo {
         total_vfs: Key<u32, { Self::VF_TOTAL_VFS_KEY }>,
         first_vf_offset: Key<u32, { Self::VF_FIRST_VF_OFFSET_KEY }>,
         flags: Key<u64, { Self::VF_FLAGS_KEY }>,
@@ -104,6 +104,24 @@ impl VfInfo {
     const VF_FIRST_BAR0_ADDRESS_KEY: KeyId = 0x1050;
     const VF_FIRST_BAR1_ADDRESS_KEY: KeyId = 0x1051;
     const VF_FIRST_BAR2_ADDRESS_KEY: KeyId = 0x1052;
+
+    pub(super) fn new(
+        total_vfs: u32,
+        first_vf_offset: u32,
+        flags: u64,
+        first_bar0_address: u64,
+        first_bar1_address: u64,
+        first_bar2_address: u64,
+    ) -> Self {
+        Self {
+            total_vfs: total_vfs.into(),
+            first_vf_offset: first_vf_offset.into(),
+            flags: flags.into(),
+            first_bar0_address: first_bar0_address.into(),
+            first_bar1_address: first_bar1_address.into(),
+            first_bar2_address: first_bar2_address.into(),
+        }
+    }
 }
 
 nvkv_encode! {
@@ -139,6 +157,7 @@ impl GspInitRequest {
         oor_arch: OorArch,
         bus_device_func: u64,
         regkeys: KVVec<RegKey>,
+        vf_info: Option<VfInfo>,
     ) -> Self {
         Self {
             pci_device_id: pci_device_id.into(),
@@ -149,7 +168,7 @@ impl GspInitRequest {
             oor_arch: oor_arch.into(),
             bus_device_func: bus_device_func.into(),
             regkeys,
-            vf_info: None,
+            vf_info,
         }
     }
 }

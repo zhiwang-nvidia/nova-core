@@ -300,6 +300,7 @@ pub(crate) enum MsgFunction {
     OsErrorLog = r570::NV_VGPU_MSG_EVENT_OS_ERROR_LOG,
     PostEvent = r570::NV_VGPU_MSG_EVENT_POST_EVENT,
     RcTriggered = r570::NV_VGPU_MSG_EVENT_RC_TRIGGERED,
+    GpuacctPerfmonUtilSamples = r000::NV_VGPU_MSG_EVENT_GPUACCT_PERFMON_UTIL_SAMPLES,
     UcodeLibOsPrint = r570::NV_VGPU_MSG_EVENT_UCODE_LIBOS_PRINT,
 }
 
@@ -338,6 +339,9 @@ impl TryFrom<u32> for MsgFunction {
             r570::NV_VGPU_MSG_EVENT_OS_ERROR_LOG => Ok(MsgFunction::OsErrorLog),
             r570::NV_VGPU_MSG_EVENT_POST_EVENT => Ok(MsgFunction::PostEvent),
             r570::NV_VGPU_MSG_EVENT_RC_TRIGGERED => Ok(MsgFunction::RcTriggered),
+            r000::NV_VGPU_MSG_EVENT_GPUACCT_PERFMON_UTIL_SAMPLES => {
+                Ok(MsgFunction::GpuacctPerfmonUtilSamples)
+            }
             r570::NV_VGPU_MSG_EVENT_UCODE_LIBOS_PRINT => Ok(MsgFunction::UcodeLibOsPrint),
             _ => Err(EINVAL),
         }
@@ -357,6 +361,7 @@ impl MsgFunction {
                 | Self::MmuFaultQueued
                 | Self::OsErrorLog
                 | Self::GspPostNoCat
+                | Self::GpuacctPerfmonUtilSamples
                 | Self::UcodeLibOsPrint //
         )
     }
