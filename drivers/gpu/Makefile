@@ -57,9 +57,13 @@ $(obj)/nova-core/nova_core_exports.o: private cmd_gensymtypes_c = \
 		$(obj)/nova-core/nova_core.o
 endif
 
-# Output nova-core's crate metadata for use by nova-drm at compile time.
+# Output nova-core's crate metadata for its Rust consumers at compile time.
 RUSTFLAGS_nova-core/nova_core.o += \
 	--emit=metadata=$(objtree)/$(obj)/nova-core/libnova_core.rmeta
+
+# The VFIO bridge also needs this metadata when only modules are requested
+# and nova-core is built-in. drivers/Makefile orders VFIO after this build.
+always-$(CONFIG_NVIDIA_VGPU_VFIO_PCI) += nova-core/nova_core.o
 
 # Allow nova-drm to import nova-core's types.
 $(obj)/drm/nova/nova.o: $(obj)/nova-core/nova_core.o

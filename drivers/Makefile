@@ -95,6 +95,10 @@ obj-$(CONFIG_FUSION)		+= message/
 obj-y				+= firewire/
 obj-$(CONFIG_UIO)		+= uio/
 obj-$(CONFIG_VFIO)		+= vfio/
+ifneq ($(CONFIG_NVIDIA_VGPU_VFIO_PCI),)
+# The Rust VFIO bridge imports nova-core's crate metadata from the GPU build.
+$(obj)/vfio: $(obj)/gpu
+endif
 obj-y				+= cdrom/
 obj-y				+= auxdisplay/
 obj-$(CONFIG_PCCARD)		+= pcmcia/
