@@ -98,3 +98,140 @@ pub(crate) fn find_array8<'a>(payload: &'a [u8], target_key: u16) -> Result<Opti
 
     Ok(None)
 }
+
+/// Decoded value from a single NVKV entry.
+pub(crate) enum NvkvValue<'a> {
+    /// IMM32: immediate 32-bit value (from header count field).
+    Imm32(u32),
+    /// SEQ32: sequence of 32-bit values.
+    Seq32(&'a [u8]),
+    /// SEQ64: sequence of 64-bit values.
+    Seq64(&'a [u8]),
+    /// ARRAY8: byte array.
+    Array8(&'a [u8]),
+}
+
+/// Iterate over all key-value pairs in an NVKV payload, calling `f` for each.
+pub(crate) fn nvkv_decode<F>(payload: &[u8], mut f: F) -> Result
+where
+    F: FnMut(u16, NvkvValue<'_>),
+{
+    if payload.len() % 8 != 0 {
+        return Err(EINVAL);
+    }
+
+    let qwords = payload.len() / 8;
+    let mut pos = 0usize;
+
+    while pos < qwords {
+        let hdr = u64::from_le_bytes(
+            payload[pos * 8..(pos + 1) * 8]
+                .try_into()
+                .map_err(|_| EINVAL)?,
+        );
+        pos += 1;
+
+        let opcode = header_opcode(hdr);
+        let key = header_key(hdr);
+        let count = header_count(hdr);
+        let n_data = data_u64s(opcode, count)?;
+
+        if pos + n_data > qwords {
+            return Err(EINVAL);
+        }
+
+        let data_bytes = &payload[pos * 8..(pos + n_data) * 8];
+
+        match opcode {
+            OPCODE_IMM32 => f(key, NvkvValue::Imm32(count)),
+            OPCODE_SEQ32 => f(key, NvkvValue::Seq32(data_bytes)),
+            OPCODE_SEQ64 => f(key, NvkvValue::Seq64(data_bytes)),
+            OPCODE_ARRAY8 => {
+                let byte_count = count as usize;
+                let byte_offset = pos * 8;
+                if byte_offset + byte_count > payload.len() {
+                    return Err(EINVAL);
+                }
+                f(key, NvkvValue::Array8(&payload[byte_offset..byte_offset + byte_count]));
+            }
+            _ => {} // skip unknown opcodes
+        }
+
+        pos += n_data;
+    }
+
+    Ok(())
+}
+
+/// Read a u32 from an NvkvValue (IMM32 or first element of SEQ32).
+pub(crate) fn nvkv_read_u32(val: &NvkvValue<'_>) -> u32 {
+    match val {
+        NvkvValue::Imm32(v) => *v,
+        NvkvValue::Seq32(data) if data.len() >= 4 => {
+            u32::from_le_bytes(data[..4].try_into().unwrap_or([0; 4]))
+        }
+        _ => 0,
+    }
+}
+
+/// Read a u64 from an NvkvValue (first element of SEQ64).
+pub(crate) fn nvkv_read_u64(val: &NvkvValue<'_>) -> u64 {
+    match val {
+        NvkvValue::Seq64(data) if data.len() >= 8 => {
+            u64::from_le_bytes(data[..8].try_into().unwrap_or([0; 8]))
+        }
+        NvkvValue::Imm32(v) => *v as u64,
+        _ => 0,
+    }
+}
+
+/// Copy a string from an NvkvValue::Array8 into a fixed buffer.
+pub(crate) fn nvkv_read_string8(val: &NvkvValue<'_>, dst: &mut [u8]) {
+    if let NvkvValue::Array8(data) = val {
+        let len = data.len().min(dst.len());
+        dst[..len].copy_from_slice(&data[..len]);
+    }
+}
+
+// --- NVKV Encoding ---
+
+/// Encode an IMM32 key-value pair as two u64s.
+pub(crate) fn nvkv_imm32(key: u16, value: u32) -> [u64; 2] {
+    let header = ((OPCODE_IMM32 as u64) << 28) | (key as u64) | ((value as u64) << 32);
+    [header, 0]
+}
+
+/// Encode a SEQ64 key-value pair: header + N data u64s.
+pub(crate) fn nvkv_push_seq64(kvs: &mut KVec<u64>, key: u16, values: &[u64]) -> Result {
+    let header =
+        ((OPCODE_SEQ64 as u64) << 28) | (key as u64) | ((values.len() as u64) << 32);
+    kvs.push(header, GFP_KERNEL)?;
+    for &v in values {
+        kvs.push(v, GFP_KERNEL)?;
+    }
+    Ok(())
+}
+
+/// Encode an IMM32 key-value pair and push to the kvs vector.
+pub(crate) fn nvkv_push_imm32(kvs: &mut KVec<u64>, key: u16, value: u32) -> Result {
+    let header = ((OPCODE_IMM32 as u64) << 28) | (key as u64) | ((value as u64) << 32);
+    kvs.push(header, GFP_KERNEL)?;
+    Ok(())
+}
+
+/// Encode an ARRAY8 key-value pair: header + ceil(len/8) data u64s.
+pub(crate) fn nvkv_push_array8(kvs: &mut KVec<u64>, key: u16, data: &[u8]) -> Result {
+    let count = data.len();
+    let header = ((OPCODE_ARRAY8 as u64) << 28) | (key as u64) | ((count as u64) << 32);
+    kvs.push(header, GFP_KERNEL)?;
+
+    let n_qwords = count.div_ceil(8);
+    for i in 0..n_qwords {
+        let start = i * 8;
+        let mut buf = [0u8; 8];
+        let end = (start + 8).min(count);
+        buf[..end - start].copy_from_slice(&data[start..end]);
+        kvs.push(u64::from_le_bytes(buf), GFP_KERNEL)?;
+    }
+    Ok(())
+}
