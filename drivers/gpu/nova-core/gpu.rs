@@ -25,7 +25,10 @@ use kernel::{
 
 use crate::{
     bounded_enum,
-    driver::Bar0,
+    driver::{
+        Bar0,
+        Bar1, //
+    },
     falcon::{
         gsp::Gsp as GspFalcon,
         sec2::Sec2 as Sec2Falcon,
@@ -326,6 +329,8 @@ pub(crate) struct Gpu {
     /// vGPU state (SR-IOV / FSP PRC), behind Mutex for FFI concurrency.
     #[pin]
     pub(crate) vgpu: Mutex<VgpuManager>,
+    /// BAR1 MMIO mapping for vGPU, initialized when vGPU is requested.
+    pub(crate) bar1: Option<Arc<Devres<Bar1>>>,
     /// GSP runtime data.
     #[pin]
     pub(crate) gsp: Gsp,
@@ -386,6 +391,18 @@ impl Gpu {
                 sec2_falcon: Falcon::new(pdev.as_ref(), chipset)?,
 
                 vgpu <- new_mutex!(VgpuManager::new(pdev, chipset.arch())?, "vgpu_manager"),
+
+                bar1: {
+                    let mgr = vgpu.lock();
+                    if mgr.vgpu_requested {
+                        Some(Arc::pin_init(
+                            pdev.iomap_region(1, c"nova-core/bar1"),
+                            GFP_KERNEL,
+                        )?)
+                    } else {
+                        None
+                    }
+                },
 
                 gsp <- Gsp::new(pdev, chipset, build_id.as_ref()),
 
