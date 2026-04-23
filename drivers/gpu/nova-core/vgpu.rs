@@ -227,6 +227,11 @@ pub(crate) struct VgpuInstance {
 }
 
 pub(crate) mod gmcapi {
+    pub const VGPU_MGMT_ADD_TYPE: u32 = 0x1000_0001;
+    pub const VGPU_MGMT_QUERY_SUPPORTED: u32 = 0x1000_0002;
+    pub const VGPU_MGMT_QUERY_CREATABLE: u32 = 0x1000_0003;
+    pub const VGPU_MGMT_ASSIGN_TYPE: u32 = 0x1000_0004;
+    pub const VGPU_MGMT_DEASSIGN_TYPE: u32 = 0x1000_0005;
     pub const VGPU_MGMT_QUERY_PROPERTIES: u32 = 0x1000_0006;
     pub const VGPU_MGMT_QUERY_ASSIGNED_VF: u32 = 0x1000_0007;
 
