@@ -1,0 +1,63 @@
+# Kernel Flow Manifest 示例
+# 讨论结束后冻结此文件，后续自动化只认这份输入。
+
+run_id: "20250406-1"
+
+# --- 仓库与分支 ---
+kernel_tree: "/path/to/kernel"
+baseline_commit: "abc1234def"
+branch: "topic/fix-dma-mapping"
+remote: "origin"
+
+# --- 编译配置 ---
+build:
+  arch: "arm64"
+  cross_compile: "aarch64-linux-gnu-"
+  defconfig: "defconfig"
+  out_dir: "build/"
+  extra_args: ""  # 如 CONFIG_DEBUG_INFO=y
+
+# --- Maintainer Comments（逐条，审阅 Agent 只对齐这份） ---
+comments:
+  - id: "c1"
+    author: "maintainer-a"
+    text: "This DMA mapping should use dma_map_single instead of virt_to_phys"
+    file: "drivers/xxx/foo.c"
+    acceptance: "Replace virt_to_phys call with dma_map_single, add error check"
+  - id: "c2"
+    author: "maintainer-a"
+    text: "Missing error path cleanup — if probe fails after ioremap, the region is leaked"
+    file: "drivers/xxx/foo.c"
+    acceptance: "Add iounmap in the error goto label"
+
+# --- 补丁（可选，若有现成 patch 文件） ---
+patches: []
+  # - "patches/0001-fix-dma.patch"
+
+# --- 目标机 ---
+target:
+  ssh_alias: "kernel-target"        # ~/.ssh/config 里配好的别名
+  deploy_script: "scripts/deploy-kernel.sh"
+  remote_kernel_dir: "/boot"
+  remote_modules_dir: "/lib/modules"
+  allow_reboot: true
+  reboot_timeout_sec: 120
+
+# --- 测试 ---
+tests:
+  - name: "kernel version check"
+    command: "uname -r"
+    expect_contains: "6.x"          # 期望输出包含的字符串
+  - name: "dmesg no errors"
+    command: "dmesg | grep -i -E 'error|panic|oops' | head -5"
+    expect_exit_code: 1             # grep 找不到 = 退出码 1 = 好事
+  - name: "DMA smoke test"
+    command: "/opt/tests/dma-test.sh"
+    expect_exit_code: 0
+
+# --- 安全策略 ---
+gates:
+  require_review_pass: true
+  dry_run: false                    # true = 只打印命令不真跑
+  allowed_branch_prefix: "topic/"   # push 时校验分支名前缀
+  # 重试上限由 pipeline.toml 中每个 gate 的 max_iterations 控制

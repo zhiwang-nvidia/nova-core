@@ -1,0 +1,77 @@
+run_id: "vgpu-rfc"
+
+kernel_tree: "/media/inno/disk/src/john"
+baseline_commit: "3ab2f50d171da54c4d0b72cd5152a49602c596ab"
+branch: "nova-core-blackwell-v000-firmware-CL_37745303"
+remote: "origin"
+
+build:
+  arch: "x86_64"
+  cross_compile: ""
+  defconfig: ""
+  out_dir: ""
+  extra_args: "LLVM=1"
+
+comments: []
+
+patches:
+  source_repo: "~/disk/src/nouveau/git/0.git"
+  series_name: "gpu: nova-core: boot GSP with vGPU enabled"
+  series_version: "RFC v2"
+  author: "Zhi Wang <zhiw@nvidia.com>"
+  list:
+    - id: "01/10"
+      commit: "d31a6c695f8c927b29493df1dbbdb47a69ffb663"
+      subject: "rust: pci: expose sriov_get_totalvfs() helper"
+      files: ["rust/helpers/pci.c", "rust/kernel/pci.rs"]
+    - id: "02/10"
+      commit: "1e92a29efcb55a31e300f55fa7742ec092f249a2"
+      subject: "gpu: nova-core: factor out common FSP message header"
+      files: ["drivers/gpu/nova-core/fsp.rs"]
+    - id: "03/10"
+      commit: "dad50f6d82250480a05950deb797606d4395de8b"
+      subject: "gpu: nova-core: return FSP response buffer to caller"
+      files: ["drivers/gpu/nova-core/fsp.rs"]
+    - id: "04/10"
+      commit: "53d958c134b861a03bc694d97f03cf93c8cd30c3"
+      subject: "gpu: nova-core: read vGPU mode from FSP via PRC protocol"
+      files: ["drivers/gpu/nova-core/fsp.rs", "drivers/gpu/nova-core/mctp.rs"]
+    - id: "05/10"
+      commit: "ad97d424849ddc9b996f312735688d4a93ea3cc6"
+      subject: "gpu: nova-core: add FSP and PRC protocol documentation"
+      files: ["Documentation/gpu/nova/core/fsp.rst", "Documentation/gpu/nova/index.rst"]
+    - id: "06/10"
+      commit: "bed4376a7b4ddecc9a459b6666968a56892b67e2"
+      subject: "gpu: nova-core: introduce vgpu_support module param"
+      files: ["drivers/gpu/nova-core/gpu.rs", "drivers/gpu/nova-core/gsp.rs", "drivers/gpu/nova-core/gsp/boot.rs", "drivers/gpu/nova-core/nova_core.rs", "drivers/gpu/nova-core/vgpu.rs"]
+    - id: "07/10"
+      commit: "187a8183c85f1b3964602c1e52f15bea839f2f70"
+      subject: "gpu: nova-core: populate GSP_VF_INFO when vGPU is enabled"
+      files: ["drivers/gpu/nova-core/gsp/boot.rs", "drivers/gpu/nova-core/gsp/commands.rs", "drivers/gpu/nova-core/gsp/fw.rs", "drivers/gpu/nova-core/gsp/fw/commands.rs"]
+    - id: "08/10"
+      commit: "dc2906a049b54766e56f1a8cca8960df07c9cbb0"
+      subject: "gpu: nova-core: set RMSetSriovMode when NVIDIA vGPU is enabled"
+      files: ["drivers/gpu/nova-core/gsp/boot.rs", "drivers/gpu/nova-core/gsp/commands.rs", "drivers/gpu/nova-core/gsp/fw.rs"]
+    - id: "09/10"
+      commit: "de0e82d62e63f54ec8667ba223d0e0327baf1d14"
+      subject: "gpu: nova-core: reserve a larger GSP WPR2 heap when vGPU is enabled"
+      files: ["drivers/gpu/nova-core/fb.rs", "drivers/gpu/nova-core/gpu.rs", "drivers/gpu/nova-core/gsp.rs", "drivers/gpu/nova-core/gsp/boot.rs", "drivers/gpu/nova-core/gsp/fw.rs", "drivers/gpu/nova-core/gsp/fw/r570_144/bindings.rs", "drivers/gpu/nova-core/vgpu.rs"]
+    - id: "10/10"
+      commit: "58ec7ff6602d3b2ff09d40dfcba37bd0cfe73dfc"
+      subject: "gpu: nova-core: load the scrubber ucode when vGPU support is enabled"
+      files: ["drivers/gpu/nova-core/firmware.rs", "drivers/gpu/nova-core/firmware/booter.rs", "drivers/gpu/nova-core/gsp/boot.rs", "drivers/gpu/nova-core/gsp/fw.rs", "drivers/gpu/nova-core/regs.rs"]
+
+notes: |
+  Patch 01 adds sriov_get_totalvfs() to rust/kernel/pci.rs.
+  Our PCI capability patch is already applied (commit 3ab2f50d171d),
+  so patch 01 should apply on top with minor context adjustments.
+  Patches 02-10 modify nova-core, may conflict with mm series patches
+  already in tree (especially gpu.rs, gsp/boot.rs, gsp/fw.rs).
+
+target: null
+tests: []
+
+gates:
+  require_review_pass: true
+  max_rounds: 5
+  dry_run: false

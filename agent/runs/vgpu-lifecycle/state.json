@@ -1,0 +1,8 @@
+{
+  "run_id": "vgpu-lifecycle",
+  "current_stage": "done",
+  "round": 5,
+  "max_rounds": 5,
+  "stages_completed": ["develop", "verify", "review"],
+  "last_error": null
+}

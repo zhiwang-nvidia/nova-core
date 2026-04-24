@@ -57,7 +57,7 @@ impl FspCotVersion {
 }
 
 /// FSP message timeout in milliseconds.
-const FSP_MSG_TIMEOUT_MS: i64 = 2000;
+const FSP_MSG_TIMEOUT_MS: i64 = 10000;
 
 /// FSP secure boot completion timeout in milliseconds.
 ///
@@ -561,7 +561,7 @@ impl Fsp {
         fsp_falcon: &Falcon<FspEngine>,
         args: &FmcBootArgs<'_>,
     ) -> Result {
-        dev_dbg!(dev, "Starting FSP boot sequence for {}\n", args.chipset);
+        dev_info!(dev, "DEBUG-FSP: boot_fmc for {}\n", args.chipset);
 
         let fmc_addr = args.fmc_image_fw.dma_handle();
         let fmc_boot_params_addr = args.fmc_boot_params.dma_handle();
@@ -580,11 +580,15 @@ impl Fsp {
         };
         let frts_size: u32 = if !args.resume { SZ_1M as u32 } else { 0 };
 
+        let cot_version = args.chipset.fsp_cot_version().ok_or(ENOTSUPP)?.raw();
+        dev_info!(dev, "DEBUG-FSP: COT version={}, fmc_addr={:#x}, boot_params={:#x}, frts_offset={:#x}, frts_size={:#x}\n",
+                  cot_version, fmc_addr, fmc_boot_params_addr, frts_offset, frts_size);
+
         let msg = KBox::new(
             FspCotMessage {
                 header: FspMessageHeader::new(mctp::nvdm_type::COT),
                 cot: NvdmPayloadCot {
-                    version: args.chipset.fsp_cot_version().ok_or(ENOTSUPP)?.raw(),
+                    version: cot_version,
                     size: u16::try_from(core::mem::size_of::<NvdmPayloadCot>())
                         .map_err(|_| EINVAL)?,
                     gsp_fmc_sysmem_offset: fmc_addr,
@@ -601,9 +605,26 @@ impl Fsp {
             GFP_KERNEL,
         )?;
 
+        dev_info!(dev, "DEBUG-FSP: sending COT msg ({} bytes) to FSP\n",
+                  core::mem::size_of_val(&*msg));
+
+        // Dump first 52 bytes (header + payload header fields) and verify EMEM readback
+        {
+            let bytes = msg.as_bytes();
+            dev_info!(dev, "DEBUG-FSP: COT msg[0..8] hdr: {:02x} {:02x} {:02x} {:02x}  {:02x} {:02x} {:02x} {:02x}\n",
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]);
+            dev_info!(dev, "DEBUG-FSP: COT msg[8..16] ver/sz/fmc: {:02x} {:02x} {:02x} {:02x}  {:02x} {:02x} {:02x} {:02x}\n",
+                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]);
+            dev_info!(dev, "DEBUG-FSP: COT msg[16..24] fmc_h: {:02x} {:02x} {:02x} {:02x}  {:02x} {:02x} {:02x} {:02x}\n",
+                bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22], bytes[23]);
+            dev_info!(dev, "DEBUG-FSP: NvdmPayloadCot size field = {} (sizeof={})\n",
+                u16::from_le_bytes([bytes[10], bytes[11]]),
+                core::mem::size_of::<NvdmPayloadCot>());
+        }
+
         let _response_buf = Self::send_sync_fsp(dev, bar, fsp_falcon, &*msg)?;
 
-        dev_dbg!(dev, "FSP Chain of Trust completed successfully\n");
+        dev_info!(dev, "DEBUG-FSP: Chain of Trust completed successfully\n");
         Ok(())
     }
 
@@ -618,7 +639,17 @@ impl Fsp {
     where
         M: MessageToFsp,
     {
+        dev_info!(dev, "DEBUG-FSP: send_msg {} bytes\n", msg.as_bytes().len());
         fsp_falcon.send_msg(bar, msg.as_bytes())?;
+
+        // Read back msgq pointers after send
+        {
+            let msgq_size = fsp_falcon.poll_msgq(bar);
+            dev_info!(dev, "DEBUG-FSP: MSGQ poll immediately after send: {} bytes\n", msgq_size);
+        }
+
+        dev_info!(dev, "DEBUG-FSP: send_msg done, waiting for response (timeout={}ms)\n",
+                  FSP_MSG_TIMEOUT_MS);
 
         let timeout = Delta::from_millis(FSP_MSG_TIMEOUT_MS);
         let packet_size = read_poll_timeout(

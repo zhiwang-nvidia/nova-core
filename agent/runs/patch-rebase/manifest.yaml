@@ -1,0 +1,122 @@
+run_id: "patch-rebase"
+
+kernel_tree: "/media/inno/disk/src/john"
+baseline_commit: "906ed0995a0a"
+branch: "nova-core-blackwell-v000-firmware-CL_37745303"
+remote: "origin"
+
+build:
+  arch: "x86_64"
+  cross_compile: ""
+  defconfig: ""
+  out_dir: "build/"
+  extra_args: ""
+
+# --- Patch 来源 ---
+# 从 public-inbox bare repo 提取邮件格式 patch 并 git am
+patch_sources:
+  rust_for_linux_inbox: "/home/inno/disk/src/rust-for-linux/git/0.git"
+  nouveau_inbox: "/home/inno/disk/src/nouveau/git/0.git"
+
+# --- 需要合并的 Patch 系列（按应用顺序） ---
+patch_series:
+
+  # Part 1: mm 前置依赖（不在 HEAD 上的）
+  - name: "rust: ffi module restructure"
+    source: nouveau_inbox
+    version: v10
+    note: "从 v10 prep series 提取"
+    patches:
+      - inbox_commit: "85bb30f8e"
+        subject: "rust: ffi: Convert pub use to pub mod and create ffi module"
+
+  - name: "rust: clist linked list support"
+    source: nouveau_inbox
+    version: v11
+    note: "v11 最新版"
+    patches:
+      - inbox_commit: "ea213dd69"
+        subject: "rust: clist: Add support to interface with C linked lists"
+
+  # Part 2: Gary Guo I/O type generalization and projection (v1, 8 patches)
+  - name: "I/O type generalization and projection"
+    source: rust_for_linux_inbox
+    version: v1
+    lore_url: "https://lore.kernel.org/rust-for-linux/"
+    patches:
+      - inbox_commit: "8a7eac852"
+        subject: "rust: io: generalize MmioRaw to pointer to arbitrary type"
+      - inbox_commit: "6a087f00f"
+        subject: "rust: io: generalize Mmio to arbitrary type"
+      - inbox_commit: "60ba1f17f"
+        subject: "rust: io: use pointer types instead of address"
+      - inbox_commit: "926bde0b2"
+        subject: "rust: io: add view type"
+      - inbox_commit: "51b74d22a"
+        subject: "rust: dma: add methods to unsafely create reference from subview"
+      - inbox_commit: "50714fcd1"
+        subject: "rust: io: add read_val and write_val function on I/O view"
+      - inbox_commit: "025ac5777"
+        subject: "gpu: nova-core: use I/O projection for cleaner encapsulation"
+      - inbox_commit: "01d82104d"
+        subject: "rust: dma: drop dma_read! and dma_write! API"
+
+  # Part 3: Joel mm v9 series (23 patches)
+  - name: "gpu: nova-core: Add memory management support"
+    source: nouveau_inbox
+    version: v9
+    lore_url: "https://lore.kernel.org/nouveau/"
+    note: "patch 02 (Kconfig Sort) 已在 HEAD 上，apply 时可能需跳过"
+    patches:
+      - inbox_commit: "dda147c56"
+        subject: "gpu: nova-core: Select GPU_BUDDY for VRAM allocation"
+      - inbox_commit: "5c0eda584"
+        subject: "gpu: nova-core: Kconfig: Sort select statements alphabetically"
+        note: "已在 HEAD (6ca4bcc23ae8)，可能冲突需跳过"
+      - inbox_commit: "ee154a5df"
+        subject: "gpu: nova-core: gsp: Return GspStaticInfo from boot()"
+      - inbox_commit: "59289c006"
+        subject: "gpu: nova-core: gsp: Extract usable FB region from GSP"
+      - inbox_commit: "74033e8c8"
+        subject: "gpu: nova-core: gsp: Expose total physical VRAM end from FB region info"
+      - inbox_commit: "bbffae97b"
+        subject: "gpu: nova-core: mm: Add support to use PRAMIN windows to write to VRAM"
+      - inbox_commit: "002cd377e"
+        subject: "docs: gpu: nova-core: Document the PRAMIN aperture mechanism"
+      - inbox_commit: "8ed9bd167"
+        subject: "gpu: nova-core: mm: Add common memory management types"
+      - inbox_commit: "66f012176"
+        subject: "gpu: nova-core: mm: Add TLB flush support"
+      - inbox_commit: "7e4f48980"
+        subject: "gpu: nova-core: mm: Add GpuMm centralized memory manager"
+      - inbox_commit: "a396d53a0"
+        subject: "gpu: nova-core: mm: Add common types for all page table formats"
+      - inbox_commit: "efbeef679"
+        subject: "gpu: nova-core: mm: Add MMU v2 page table types"
+      - inbox_commit: "2eb7270d0"
+        subject: "gpu: nova-core: mm: Add MMU v3 page table types"
+      - inbox_commit: "786f907b7"
+        subject: "gpu: nova-core: mm: Add unified page table entry wrapper enums"
+      - inbox_commit: "154cc05d2"
+        subject: "gpu: nova-core: mm: Add page table walker for MMU v2/v3"
+      - inbox_commit: "bf48c4b46"
+        subject: "gpu: nova-core: mm: Add Virtual Memory Manager"
+      - inbox_commit: "fbaf7d10d"
+        subject: "gpu: nova-core: mm: Add virtual address range tracking to VMM"
+      - inbox_commit: "2fc689b3f"
+        subject: "gpu: nova-core: mm: Add multi-page mapping API to VMM"
+      - inbox_commit: "fcdf19a7a"
+        subject: "gpu: nova-core: Add BAR1 aperture type and size constant"
+      - inbox_commit: "f822e5f3e"
+        subject: "gpu: nova-core: mm: Add BAR1 user interface"
+      - inbox_commit: "9c2257b4b"
+        subject: "gpu: nova-core: mm: Add BAR1 memory management self-tests"
+      - inbox_commit: "624fd4a6d"
+        subject: "gpu: nova-core: mm: Add PRAMIN aperture self-tests"
+      - inbox_commit: "c23ad53b6"
+        subject: "gpu: nova-core: Use runtime BAR1 size instead of hardcoded 256MB"
+
+gates:
+  require_review_pass: false
+  max_rounds: 5
+  dry_run: false

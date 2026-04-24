@@ -1,0 +1,43 @@
+[pipeline]
+name = "prereq-apply"
+description = "Apply prerequisite patch series: P0 (Joel MM v11) → P2 (Gary I/O). Developer applies each patch with per-patch compilation, verifier does final quality gate after each series."
+
+# Phase 1: P0 — Joel MM v11 (23 patches)
+[[stages]]
+name = "develop-p0"
+type = "agent"
+role = "developer"
+description = "Apply Joel MM v11 patches (23 patches from PATCHES/joel-mm-v11/), per-patch compile+clippy"
+inputs = ["manifest.yaml"]
+optional_inputs = ["verify-result.json"]
+outputs = ["src/", "build-result.json"]
+
+[[stages]]
+name = "verify-p0"
+type = "gate"
+role = "verifier"
+description = "Verify build quality after P0 (MM v11) is fully applied"
+inputs = ["manifest.yaml", "build-result.json"]
+outputs = ["verify-result.json"]
+on_reject = "develop-p0"
+max_iterations = 3
+
+# Phase 2: P2 — Gary I/O (8 patches)
+[[stages]]
+name = "develop-p2"
+type = "agent"
+role = "developer"
+description = "Apply Gary I/O patches (8 patches from PATCHES/gary-io/), per-patch compile+clippy"
+inputs = ["manifest.yaml"]
+optional_inputs = ["verify-result.json"]
+outputs = ["src/", "build-result.json"]
+
+[[stages]]
+name = "verify-p2"
+type = "gate"
+role = "verifier"
+description = "Verify build quality after P2 (Gary I/O) is fully applied"
+inputs = ["manifest.yaml", "build-result.json"]
+outputs = ["verify-result.json"]
+on_reject = "develop-p2"
+max_iterations = 3

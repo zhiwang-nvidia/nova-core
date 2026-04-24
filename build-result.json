@@ -1,0 +1,156 @@
+{
+  "result": "SUCCESS",
+  "branch": "nova-core-blackwell-v000-firmware-CL_37745303",
+  "baseline_commit": "3ab2f50d171da54c4d0b72cd5152a49602c596ab",
+  "patches_applied": 10,
+  "patches_total": 10,
+  "quality_checks": {
+    "build": "PASS",
+    "clippy": "PASS",
+    "rustfmt": "PASS",
+    "checkpatch": {
+      "errors": 0,
+      "warnings": 1,
+      "note": "benign MAINTAINERS warning for new vgpu.rs file"
+    }
+  },
+  "patches": [
+    {
+      "number": 1,
+      "subject": "rust: pci: expose sriov_get_totalvfs() helper",
+      "commit": "57c4bb7bba97c52b99c3f4a2dd15b95e9661f5e7",
+      "apply_method": "git am (clean)",
+      "conflicts": false,
+      "build_fix_needed": false
+    },
+    {
+      "number": 2,
+      "subject": "gpu: nova-core: factor out common FSP message header",
+      "commit": "57b8b4fbe3a59ef2bf15e122e3367305e0458d03",
+      "apply_method": "manual (conflict)",
+      "conflicts": true,
+      "conflict_files": ["drivers/gpu/nova-core/fsp.rs"],
+      "conflict_reason": "MCTP/NVDM API differences: enum NvdmType vs u8 constants, struct layout divergence",
+      "build_fix_needed": false
+    },
+    {
+      "number": 3,
+      "subject": "gpu: nova-core: return FSP response buffer to caller",
+      "commit": "34e3f44b8f42b3cee33e7b82b2ec22826a9c0a3f",
+      "apply_method": "manual (conflict)",
+      "conflicts": true,
+      "conflict_files": ["drivers/gpu/nova-core/fsp.rs"],
+      "conflict_reason": "Context mismatch from patch 02 manual resolution affecting send_sync_fsp",
+      "build_fix_needed": false
+    },
+    {
+      "number": 4,
+      "subject": "gpu: nova-core: read vGPU mode from FSP via PRC protocol",
+      "commit": "a3f0b4fdb12fd5b8afdbcd8ceb3dddade9e25bd4",
+      "apply_method": "manual (conflict)",
+      "conflicts": true,
+      "conflict_files": ["drivers/gpu/nova-core/fsp.rs", "drivers/gpu/nova-core/mctp.rs"],
+      "conflict_reason": "Extensive structural differences in imports, NvdmType handling, new PRC protocol types",
+      "build_fix_needed": false
+    },
+    {
+      "number": 5,
+      "subject": "gpu: nova-core: add FSP and PRC protocol documentation",
+      "commit": "93b3ca7e4f8f20803b4330f44d61e9b7a7f39ba6",
+      "apply_method": "git am (clean)",
+      "conflicts": false,
+      "build_fix_needed": false
+    },
+    {
+      "number": 6,
+      "subject": "gpu: nova-core: introduce vgpu_support module param and wire up boot context",
+      "commit": "b47a40b26b14f5fb55b7a9bbfbe7f3f3e71f2862",
+      "apply_method": "manual (conflict)",
+      "conflicts": true,
+      "conflict_files": [
+        "drivers/gpu/nova-core/gpu.rs",
+        "drivers/gpu/nova-core/gsp.rs",
+        "drivers/gpu/nova-core/gsp/boot.rs",
+        "drivers/gpu/nova-core/nova_core.rs",
+        "drivers/gpu/nova-core/vgpu.rs"
+      ],
+      "conflict_reason": "Broad changes across imports, struct fields, GSP boot flow with significant tree divergence",
+      "build_fix_needed": false
+    },
+    {
+      "number": 7,
+      "subject": "gpu: nova-core: populate GSP_VF_INFO when vGPU is enabled",
+      "commit": "e88f1d2a2a3f2a9e3d5f5c8beea506b9e8d38be1",
+      "apply_method": "manual (conflict)",
+      "conflicts": true,
+      "conflict_files": [
+        "drivers/gpu/nova-core/gsp/boot.rs",
+        "drivers/gpu/nova-core/gsp/commands.rs",
+        "drivers/gpu/nova-core/gsp/fw.rs",
+        "drivers/gpu/nova-core/gsp/fw/commands.rs"
+      ],
+      "conflict_reason": "GspVfInfo introduction, PCI config space access patterns differ",
+      "build_fix_needed": true,
+      "build_fix": "Removed '?' from io_read!(sriov, .vf_offset) — macro does not support '?' on direct fields"
+    },
+    {
+      "number": 8,
+      "subject": "gpu: nova-core: set RMSetSriovMode when NVIDIA vGPU is enabled",
+      "commit": "cbf0cbb3e24e65b63a9e77e0e1e3c28eb40f8a05",
+      "apply_method": "manual (conflict)",
+      "conflicts": true,
+      "conflict_files": [
+        "drivers/gpu/nova-core/gsp/boot.rs",
+        "drivers/gpu/nova-core/gsp/commands.rs",
+        "drivers/gpu/nova-core/gsp/fw.rs"
+      ],
+      "conflict_reason": "Dynamic SetRegistry with KVec, MsgFunction enum and Display impl additions",
+      "build_fix_needed": false
+    },
+    {
+      "number": 9,
+      "subject": "gpu: nova-core: reserve a larger GSP WPR2 heap when vGPU is enabled",
+      "commit": "d78b8b14f194b5e2b8e29886c9c3b99d39aafc9b",
+      "apply_method": "manual (conflict)",
+      "conflicts": true,
+      "conflict_files": [
+        "drivers/gpu/nova-core/fb.rs",
+        "drivers/gpu/nova-core/gpu.rs",
+        "drivers/gpu/nova-core/gsp.rs",
+        "drivers/gpu/nova-core/gsp/boot.rs",
+        "drivers/gpu/nova-core/gsp/fw.rs",
+        "drivers/gpu/nova-core/gsp/fw/r570_144/bindings.rs",
+        "drivers/gpu/nova-core/vgpu.rs"
+      ],
+      "conflict_reason": "vGPU heap sizing constants, vf_partition_count threading through GspBootContext",
+      "build_fix_needed": false
+    },
+    {
+      "number": 10,
+      "subject": "gpu: nova-core: load the scrubber ucode when vGPU support is enabled",
+      "commit": "23a4f4c7c4fba23ce53e6ffeac9e2b0f66ff9d19",
+      "apply_method": "manual (conflict)",
+      "conflicts": true,
+      "conflict_files": [
+        "drivers/gpu/nova-core/firmware.rs",
+        "drivers/gpu/nova-core/firmware/booter.rs",
+        "drivers/gpu/nova-core/gsp/boot.rs",
+        "drivers/gpu/nova-core/gsp/fw.rs",
+        "drivers/gpu/nova-core/regs.rs"
+      ],
+      "conflict_reason": "register! macro syntax differences, boot flow refactoring",
+      "build_fix_needed": true,
+      "build_fixes": [
+        "Removed 'as u8' from register! macro scrubber_handoff field — macro does not use type cast syntax",
+        "Added pub(crate) to NV_PGC6_BSI_SECURE_SCRATCH_15 register definition — was private"
+      ]
+    }
+  ],
+  "summary": {
+    "clean_applies": 2,
+    "conflict_resolves": 8,
+    "build_fixes_required": 2,
+    "files_modified": 17,
+    "total_lines_changed": 1331
+  }
+}

@@ -1,0 +1,50 @@
+[pipeline]
+name = "kernel-dev-flow"
+description = "Kernel patch workflow: develop → [verify + review] → push → test"
+
+[[stages]]
+name = "develop"
+type = "agent"
+role = "developer"
+description = "Apply patches or address maintainer comments, then compile kernel"
+inputs = ["manifest.yaml"]
+optional_inputs = ["reviews/maintainer-review.md", "verify-result.json"]
+outputs = ["src/", "build-result.json"]
+
+[[stages]]
+name = "verify"
+type = "gate"
+role = "verifier"
+description = "Independently verify build quality: LLVM, Clippy, rustfmt, warnings, config"
+parallel_group = "quality-gate"
+inputs = ["manifest.yaml", "build-result.json"]
+outputs = ["verify-result.json"]
+on_reject = "develop"
+max_iterations = 3
+
+[[stages]]
+name = "review"
+type = "gate"
+role = "reviewer"
+description = "Verify all maintainer comments are properly addressed in the diff"
+parallel_group = "quality-gate"
+inputs = ["manifest.yaml", "src/"]
+outputs = ["reviews/maintainer-review.md"]
+on_reject = "develop"
+max_iterations = 5
+
+[[stages]]
+name = "push"
+type = "agent"
+role = "developer"
+description = "Push feature branch to remote after review passes"
+inputs = ["manifest.yaml", "build-result.json"]
+outputs = ["push-result.json"]
+
+[[stages]]
+name = "test"
+type = "agent"
+role = "debugger"
+description = "Deploy to target machine, run tests, produce verification report"
+inputs = ["manifest.yaml", "build-result.json", "push-result.json"]
+outputs = ["test-report.md"]

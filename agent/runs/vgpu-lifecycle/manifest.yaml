@@ -1,0 +1,141 @@
+run_id: "vgpu-lifecycle"
+
+kernel_tree: "/media/inno/disk/src/john"
+baseline_commit: "9c8fde7ecfcf9cdaa4c34752b2273c241ab3ada4"
+branch: "nova-core-blackwell-v000-firmware-CL_37745303"
+remote: "origin"
+
+build:
+  arch: "x86_64"
+  cross_compile: ""
+  defconfig: ""
+  out_dir: ""
+  extra_args: "LLVM=1"
+
+comments: []
+
+patches:
+  source_repo: "~/disk/src/vgpu-linux.m2/.git"
+  series_name: "gpu: nova-core: vgpu lifecycle management"
+  author: "Zhi Wang <zhiw@nvidia.com>"
+  list:
+    - id: "01/12"
+      commit: "1f5358e77d3c788b61dde6578114bfbacebd856e"
+      subject: "gpu: nova-core: mm: add VramBlock and VRAM allocation helper"
+      files: ["drivers/gpu/nova-core/mm.rs"]
+      notes: |
+        Our tree has buddy() returning Result<&GpuBuddy> (not &GpuBuddy).
+        Must change mm.buddy().alloc_blocks(...) to mm.buddy()?.alloc_blocks(...).
+
+    - id: "02/12"
+      commit: "467f6886ce2e16df0809326555d4e3cd68a88339"
+      subject: "nova-core: persist BAR1 mapping in Gpu struct"
+      files: ["drivers/gpu/nova-core/driver.rs", "drivers/gpu/nova-core/gpu.rs"]
+      notes: |
+        Our gpu.rs has different struct layout (bar_user: Option<BarUser>, vgpu fields).
+        Our driver.rs already uses pci::Bar (runtime size) for Bar1.
+        Self-test currently does temporary BAR1 map; this makes it persistent.
+        Heavy conflict expected — must adapt to our struct layout.
+
+    - id: "03/12"
+      commit: "6e4273c38c4d1cdf6c4ab2c09378bed23aedd4f9"
+      subject: "gpu: nova-core: vgpu: add vGPU preludes"
+      files: ["drivers/gpu/nova-core/vgpu.rs"]
+      notes: |
+        Our vgpu.rs already has Vgpu struct with vgpu_requested/vgpu_enabled/total_vfs
+        from the boot GSP series. This patch adds foundational types (Gfid, Dbdf,
+        check_rmcontrol_status, VgpuType, VgpuInstance, GspPluginConfig, etc.)
+        on top of a simpler baseline. Must merge into our existing vgpu.rs.
+
+    - id: "04/12"
+      commit: "024bdfa075e375f2f8593162e242abe3b3bc622d"
+      subject: "gpu: nova-core: vgpu: add engine bitmap construction"
+      files: ["drivers/gpu/nova-core/vgpu.rs"]
+
+    - id: "05/12"
+      commit: "6b01e3c142adc6fbe50623b4feee23c862e9e307"
+      subject: "gpu: nova-core: vgpu: add channel ID allocator"
+      files: ["drivers/gpu/nova-core/vgpu.rs"]
+
+    - id: "06/12"
+      commit: "8c85ccb5a6cbc95b6caa3f63bb8c544d8ed9f9f7"
+      subject: "gpu: nova-core: vgpu: bootstrap vGPU"
+      files: ["drivers/gpu/nova-core/vgpu.rs"]
+      notes: |
+        Adds BootloadParams, VGPU_GSP_* constants, alloc_vram helpers.
+        Imports mm::{self, GpuMm, VramBlock}. Heavy changes to vgpu.rs.
+
+    - id: "07/12"
+      commit: "a3f8597f845bde6320f0699291dfa532fd0d26f4"
+      subject: "gpu: nova-core: vgpu: add L40-1Q vGPU type upload"
+      files: ["drivers/gpu/nova-core/vgpu.rs", "drivers/gpu/nova-core/l40_1q.bin"]
+      notes: |
+        Contains binary blob l40_1q.bin (5224 bytes). Use git show to extract.
+
+    - id: "08/12"
+      commit: "cabc4841b8cb7981644dfd371f25c349db30d123"
+      subject: "gpu: nova-core: vgpu: add vGPU instance lifecycle management"
+      files: ["drivers/gpu/nova-core/vgpu.rs"]
+
+    - id: "09/12"
+      commit: "201a86c0f72aae92656e0468a0a7bdbe200f2eb7"
+      subject: "gpu: nova-core: vgpu: add post GSP boot initialization"
+      files: ["drivers/gpu/nova-core/vgpu.rs"]
+
+    - id: "10/12"
+      commit: "6cdda919c3ebb376f84fe7ee435b917f1bb1253b"
+      subject: "gpu: nova-core: vgpu: add plugin bootload verification"
+      files: ["drivers/gpu/nova-core/vgpu.rs"]
+      notes: |
+        Depends on bar1 field from patch 02.
+
+    - id: "11/12"
+      subject: "gpu: nova-core: query VMMU segment size and align buddy base"
+      source: "extracted from d7b74a13a374 (11c)"
+      commit: "d7b74a13a37472f7917fe318dfb56125b6e4494f"
+      extract: true
+      files: ["drivers/gpu/nova-core/gsp.rs", "drivers/gpu/nova-core/gsp/boot.rs", "drivers/gpu/nova-core/gpu.rs", "drivers/gpu/nova-core/vgpu.rs"]
+      notes: |
+        MANUALLY EXTRACT from d7b74a13a374 — only the VMMU segment parts:
+        - gsp.rs: add vmmu_segment_size field to GspBootContext
+        - gsp/boot.rs: query VMMU segment size via RM control after boot
+        - gpu.rs: align buddy base to VMMU segment, set vmmu_segment_size in boot_params
+        - vgpu.rs: remove query_vmmu_segment_size() from init_post_gsp_boot()
+        SKIP: VirtualAddress bitfield (already in tree via ver2.rs/ver3.rs)
+        SKIP: BAR1 runtime size (already in tree)
+        SKIP: mock_bootload (patch 12)
+
+    - id: "12/12"
+      subject: "gpu: nova-core: wire vGPU mock bootload into probe"
+      source: "extracted from d7b74a13a374 (11d)"
+      commit: "d7b74a13a37472f7917fe318dfb56125b6e4494f"
+      extract: true
+      files: ["drivers/gpu/nova-core/gpu.rs", "drivers/gpu/nova-core/driver.rs", "drivers/gpu/nova-core/vgpu.rs"]
+      notes: |
+        MANUALLY EXTRACT from d7b74a13a374 — only the mock bootload parts:
+        - gpu.rs: add mock_bootload() method
+        - driver.rs: wire mock_bootload() into probe after run_selftests
+        - vgpu.rs: add mock_create_instance() method
+
+notes: |
+  Source: vgpu-linux.m2 repo (not public-inbox).
+  Patches 01-10 are direct commits; use git format-patch or git show to extract.
+  Patches 11-12 are manually extracted from d7b74a13a374 (skip 11a/11b, already in tree).
+  
+  Key API differences from vgpu-linux baseline:
+  - mm.buddy() returns Result<&GpuBuddy> (buddy is Option)
+  - bar_user is Option<BarUser>
+  - Bar1 = pci::Bar (runtime size, already done)
+  - VirtualAddress bitfield split into ver2.rs/ver3.rs (already done)
+  - vgpu.rs has boot GSP series fields (vgpu_requested, vgpu_enabled, etc.)
+
+target:
+  ssh: "col"
+  gpu_chip: "ad102"
+
+tests: []
+
+gates:
+  require_review_pass: true
+  max_rounds: 5
+  dry_run: false

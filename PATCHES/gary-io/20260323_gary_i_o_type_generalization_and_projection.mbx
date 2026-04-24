@@ -1,0 +1,2357 @@
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 1/8] rust: io: generalize `MmioRaw` to pointer to arbitrary
+ type
+From: Gary Guo <gary@garyguo.net>
+Date: Mon, 23 Mar 2026 15:37:53 +0000
+Message-Id: <20260323153807.1360705-2-gary@kernel.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Conceptually, `MmioRaw` is just `__iomem *`, so it should work for any
+types. The existing use case where it represents a region of compile-time
+known minimum size and run-time known actual size is moved to a custom
+dynamic-sized type `Region<SIZE>` instead. The `maxsize` method is also
+renamed to `size` to reflect that it is the actual size (not a bound) of
+the region.
+
+Signed-off-by: Gary Guo <gary@garyguo.net>
+---
+ rust/kernel/devres.rs |  7 ++--
+ rust/kernel/io.rs     | 84 +++++++++++++++++++++++++++++++++----------
+ rust/kernel/io/mem.rs |  4 +--
+ rust/kernel/pci/io.rs |  4 +--
+ 4 files changed, 74 insertions(+), 25 deletions(-)
+
+diff --git a/rust/kernel/devres.rs b/rust/kernel/devres.rs
+index 9e5f93aed20c..65a4082122af 100644
+--- a/rust/kernel/devres.rs
++++ b/rust/kernel/devres.rs
+@@ -71,14 +71,15 @@ struct Inner<T> {
+ ///         IoKnownSize,
+ ///         Mmio,
+ ///         MmioRaw,
+-///         PhysAddr, //
++///         PhysAddr,
++///         Region, //
+ ///     },
+ ///     prelude::*,
+ /// };
+ /// use core::ops::Deref;
+ ///
+ /// // See also [`pci::Bar`] for a real example.
+-/// struct IoMem<const SIZE: usize>(MmioRaw<SIZE>);
++/// struct IoMem<const SIZE: usize>(MmioRaw<Region<SIZE>>);
+ ///
+ /// impl<const SIZE: usize> IoMem<SIZE> {
+ ///     /// # Safety
+@@ -93,7 +94,7 @@ struct Inner<T> {
+ ///             return Err(ENOMEM);
+ ///         }
+ ///
+-///         Ok(IoMem(MmioRaw::new(addr as usize, SIZE)?))
++///         Ok(IoMem(MmioRaw::new_region(addr as usize, SIZE)?))
+ ///     }
+ /// }
+ ///
+diff --git a/rust/kernel/io.rs b/rust/kernel/io.rs
+index fcc7678fd9e3..d7f2145fa9b9 100644
+--- a/rust/kernel/io.rs
++++ b/rust/kernel/io.rs
+@@ -6,7 +6,8 @@
+ 
+ use crate::{
+     bindings,
+-    prelude::*, //
++    prelude::*,
++    ptr::KnownSize, //
+ };
+ 
+ pub mod mem;
+@@ -31,39 +32,85 @@
+ /// `CONFIG_PHYS_ADDR_T_64BIT`, and it can be a u64 even on 32-bit architectures.
+ pub type ResourceSize = bindings::resource_size_t;
+ 
++/// Untyped I/O region.
++///
++/// This type can be used when an I/O region without known type information has a compile-time known
++/// minimum size (and a runtime known actual size).
++///
++/// The `SIZE` generic parameter indicate the minimum size of the region.
++#[repr(transparent)]
++pub struct Region<const SIZE: usize = 0> {
++    inner: [u8],
++}
++
++impl<const SIZE: usize> KnownSize for Region<SIZE> {
++    #[inline(always)]
++    fn size(p: *const Self) -> usize {
++        (p as *const [u8]).len()
++    }
++}
++
+ /// Raw representation of an MMIO region.
+ ///
++/// `MmioRaw<T>` is equivalent to `T __iomem *` in C.
++///
+ /// By itself, the existence of an instance of this structure does not provide any guarantees that
+ /// the represented MMIO region does exist or is properly mapped.
+ ///
+ /// Instead, the bus specific MMIO implementation must convert this raw representation into an
+ /// `Mmio` instance providing the actual memory accessors. Only by the conversion into an `Mmio`
+ /// structure any guarantees are given.
+-pub struct MmioRaw<const SIZE: usize = 0> {
+-    addr: usize,
+-    maxsize: usize,
++pub struct MmioRaw<T: ?Sized> {
++    /// Pointer is in I/O address space.
++    ///
++    /// The provenance does not matter, only the address and metadata do.
++    addr: *mut T,
+ }
+ 
+-impl<const SIZE: usize> MmioRaw<SIZE> {
+-    /// Returns a new `MmioRaw` instance on success, an error otherwise.
+-    pub fn new(addr: usize, maxsize: usize) -> Result<Self> {
+-        if maxsize < SIZE {
++// SAFETY: `MmioRaw` is just an address, so is thread-safe.
++unsafe impl<T: ?Sized> Send for MmioRaw<T> {}
++// SAFETY: `MmioRaw` is just an address, so is thread-safe.
++unsafe impl<T: ?Sized> Sync for MmioRaw<T> {}
++
++impl<T> MmioRaw<T> {
++    /// Create a `MmioRaw` from address.
++    #[inline]
++    pub fn new(addr: usize) -> Self {
++        Self {
++            addr: core::ptr::without_provenance_mut(addr),
++        }
++    }
++}
++
++impl<const SIZE: usize> MmioRaw<Region<SIZE>> {
++    /// Create a `MmioRaw` representing a I/O region with given size.
++    ///
++    /// The size is checked against the minimum size specified via const generics.
++    #[inline]
++    pub fn new_region(addr: usize, size: usize) -> Result<Self> {
++        if size < SIZE {
+             return Err(EINVAL);
+         }
+ 
+-        Ok(Self { addr, maxsize })
++        let addr = core::ptr::slice_from_raw_parts_mut::<u8>(
++            core::ptr::without_provenance_mut(addr),
++            size,
++        ) as *mut Region<SIZE>;
++        Ok(Self { addr })
+     }
++}
+ 
++impl<T: ?Sized + KnownSize> MmioRaw<T> {
+     /// Returns the base address of the MMIO region.
+     #[inline]
+     pub fn addr(&self) -> usize {
+-        self.addr
++        self.addr.addr()
+     }
+ 
+-    /// Returns the maximum size of the MMIO region.
++    /// Returns the size of the MMIO region.
+     #[inline]
+-    pub fn maxsize(&self) -> usize {
+-        self.maxsize
++    pub fn size(&self) -> usize {
++        KnownSize::size(self.addr)
+     }
+ }
+ 
+@@ -89,12 +136,13 @@ pub fn maxsize(&self) -> usize {
+ ///         Mmio,
+ ///         MmioRaw,
+ ///         PhysAddr,
++///         Region,
+ ///     },
+ /// };
+ /// use core::ops::Deref;
+ ///
+ /// // See also `pci::Bar` for a real example.
+-/// struct IoMem<const SIZE: usize>(MmioRaw<SIZE>);
++/// struct IoMem<const SIZE: usize>(MmioRaw<Region<SIZE>>);
+ ///
+ /// impl<const SIZE: usize> IoMem<SIZE> {
+ ///     /// # Safety
+@@ -109,7 +157,7 @@ pub fn maxsize(&self) -> usize {
+ ///             return Err(ENOMEM);
+ ///         }
+ ///
+-///         Ok(IoMem(MmioRaw::new(addr as usize, SIZE)?))
++///         Ok(IoMem(MmioRaw::new_region(addr as usize, SIZE)?))
+ ///     }
+ /// }
+ ///
+@@ -139,7 +187,7 @@ pub fn maxsize(&self) -> usize {
+ /// # }
+ /// ```
+ #[repr(transparent)]
+-pub struct Mmio<const SIZE: usize = 0>(MmioRaw<SIZE>);
++pub struct Mmio<const SIZE: usize = 0>(MmioRaw<Region<SIZE>>);
+ 
+ /// Checks whether an access of type `U` at the given `offset`
+ /// is valid within this region.
+@@ -767,7 +815,7 @@ fn addr(&self) -> usize {
+     /// Returns the maximum size of this mapping.
+     #[inline]
+     fn maxsize(&self) -> usize {
+-        self.0.maxsize()
++        self.0.size()
+     }
+ }
+ 
+@@ -782,7 +830,7 @@ impl<const SIZE: usize> Mmio<SIZE> {
+     ///
+     /// Callers must ensure that `addr` is the start of a valid I/O mapped memory region of size
+     /// `maxsize`.
+-    pub unsafe fn from_raw(raw: &MmioRaw<SIZE>) -> &Self {
++    pub unsafe fn from_raw(raw: &MmioRaw<Region<SIZE>>) -> &Self {
+         // SAFETY: `Mmio` is a transparent wrapper around `MmioRaw`.
+         unsafe { &*core::ptr::from_ref(raw).cast() }
+     }
+diff --git a/rust/kernel/io/mem.rs b/rust/kernel/io/mem.rs
+index 7dc78d547f7a..9117d417f99c 100644
+--- a/rust/kernel/io/mem.rs
++++ b/rust/kernel/io/mem.rs
+@@ -231,7 +231,7 @@ fn deref(&self) -> &Self::Target {
+ /// [`IoMem`] always holds an [`MmioRaw`] instance that holds a valid pointer to the
+ /// start of the I/O memory mapped region.
+ pub struct IoMem<const SIZE: usize = 0> {
+-    io: MmioRaw<SIZE>,
++    io: MmioRaw<super::Region<SIZE>>,
+ }
+ 
+ impl<const SIZE: usize> IoMem<SIZE> {
+@@ -266,7 +266,7 @@ fn ioremap(resource: &Resource) -> Result<Self> {
+             return Err(ENOMEM);
+         }
+ 
+-        let io = MmioRaw::new(addr as usize, size)?;
++        let io = MmioRaw::new_region(addr as usize, size)?;
+         let io = IoMem { io };
+ 
+         Ok(io)
+diff --git a/rust/kernel/pci/io.rs b/rust/kernel/pci/io.rs
+index ae78676c927f..0335b5068f69 100644
+--- a/rust/kernel/pci/io.rs
++++ b/rust/kernel/pci/io.rs
+@@ -148,7 +148,7 @@ impl<'a, S: ConfigSpaceKind> IoKnownSize for ConfigSpace<'a, S> {
+ /// memory mapped PCI BAR and its size.
+ pub struct Bar<const SIZE: usize = 0> {
+     pdev: ARef<Device>,
+-    io: MmioRaw<SIZE>,
++    io: MmioRaw<crate::io::Region<SIZE>>,
+     num: i32,
+ }
+ 
+@@ -184,7 +184,7 @@ pub(super) fn new(pdev: &Device, num: u32, name: &CStr) -> Result<Self> {
+             return Err(ENOMEM);
+         }
+ 
+-        let io = match MmioRaw::new(ioptr, len as usize) {
++        let io = match MmioRaw::new_region(ioptr, len as usize) {
+             Ok(io) => io,
+             Err(err) => {
+                 // SAFETY:
+-- 
+2.51.2
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 2/8] rust: io: generalize `Mmio` to arbitrary type
+From: Gary Guo <gary@garyguo.net>
+Date: Mon, 23 Mar 2026 15:37:54 +0000
+Message-Id: <20260323153807.1360705-3-gary@kernel.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Currently, `io::Mmio` always represent an untyped region of a compile-time
+known minimum size, which is roughly equivalent to `void __iomem*` (but
+with bound checks). However, it is useful to also be to represent I/O
+memory of a specific type, e.g. `u32 __iomem*` or `struct foo __iomem*`.
+
+Thus, make `Mmio` generic on arbitrary `T`, where `T` is a sized type, or a
+DST that implements `KnownSize`. Similar to the `MmioRaw` change, the
+existing behaviour is preserved in the form of `Mmio<Region<SIZE>>`. This
+change brings the MMIO closer to the DMA coherent allocation types that we
+have, which is already typed.
+
+To be able to implement `IoKnownSize`, add a `MIN_SIZE` constant to
+`KnownSize` trait to represent compile-time known minimum size of a
+specific type.
+
+Signed-off-by: Gary Guo <gary@garyguo.net>
+Acked-by: Miguel Ojeda <ojeda@kernel.org>
+---
+ rust/kernel/devres.rs      |  2 +-
+ rust/kernel/io.rs          | 63 ++++++++++++++++++++++----------------
+ rust/kernel/io/mem.rs      |  4 +--
+ rust/kernel/io/poll.rs     |  6 ++--
+ rust/kernel/io/register.rs | 19 +++++++-----
+ rust/kernel/pci/io.rs      |  2 +-
+ rust/kernel/ptr.rs         |  7 +++++
+ 7 files changed, 64 insertions(+), 39 deletions(-)
+
+diff --git a/rust/kernel/devres.rs b/rust/kernel/devres.rs
+index 65a4082122af..3e22c63efb98 100644
+--- a/rust/kernel/devres.rs
++++ b/rust/kernel/devres.rs
+@@ -106,7 +106,7 @@ struct Inner<T> {
+ /// }
+ ///
+ /// impl<const SIZE: usize> Deref for IoMem<SIZE> {
+-///    type Target = Mmio<SIZE>;
++///    type Target = Mmio<Region<SIZE>>;
+ ///
+ ///    fn deref(&self) -> &Self::Target {
+ ///         // SAFETY: The memory range stored in `self` has been properly mapped in `Self::new`.
+diff --git a/rust/kernel/io.rs b/rust/kernel/io.rs
+index d7f2145fa9b9..5a26b1e7e533 100644
+--- a/rust/kernel/io.rs
++++ b/rust/kernel/io.rs
+@@ -44,6 +44,8 @@ pub struct Region<const SIZE: usize = 0> {
+ }
+ 
+ impl<const SIZE: usize> KnownSize for Region<SIZE> {
++    const MIN_SIZE: usize = SIZE;
++
+     #[inline(always)]
+     fn size(p: *const Self) -> usize {
+         (p as *const [u8]).len()
+@@ -169,7 +171,7 @@ pub fn size(&self) -> usize {
+ /// }
+ ///
+ /// impl<const SIZE: usize> Deref for IoMem<SIZE> {
+-///    type Target = Mmio<SIZE>;
++///    type Target = Mmio<Region<SIZE>>;
+ ///
+ ///    fn deref(&self) -> &Self::Target {
+ ///         // SAFETY: The memory range stored in `self` has been properly mapped in `Self::new`.
+@@ -187,7 +189,7 @@ pub fn size(&self) -> usize {
+ /// # }
+ /// ```
+ #[repr(transparent)]
+-pub struct Mmio<const SIZE: usize = 0>(MmioRaw<Region<SIZE>>);
++pub struct Mmio<T: ?Sized>(MmioRaw<T>);
+ 
+ /// Checks whether an access of type `U` at the given `offset`
+ /// is valid within this region.
+@@ -462,9 +464,10 @@ fn write64(&self, value: u64, offset: usize)
+     /// use kernel::io::{
+     ///     Io,
+     ///     Mmio,
++    ///     Region,
+     /// };
+     ///
+-    /// fn do_reads(io: &Mmio) -> Result {
++    /// fn do_reads(io: &Mmio<Region<0>>) -> Result {
+     ///     // 32-bit read from address `0x10`.
+     ///     let v: u32 = io.try_read(0x10)?;
+     ///
+@@ -496,9 +499,10 @@ fn try_read<T, L>(&self, location: L) -> Result<T>
+     /// use kernel::io::{
+     ///     Io,
+     ///     Mmio,
++    ///     Region,
+     /// };
+     ///
+-    /// fn do_writes(io: &Mmio) -> Result {
++    /// fn do_writes(io: &Mmio<Region<0>>) -> Result {
+     ///     // 32-bit write of value `1` at address `0x10`.
+     ///     io.try_write(0x10, 1u32)?;
+     ///
+@@ -534,6 +538,7 @@ fn try_write<T, L>(&self, location: L, value: T) -> Result
+     ///     register,
+     ///     Io,
+     ///     Mmio,
++    ///     Region,
+     /// };
+     ///
+     /// register! {
+@@ -549,7 +554,7 @@ fn try_write<T, L>(&self, location: L, value: T) -> Result
+     ///     }
+     /// }
+     ///
+-    /// fn do_write_reg(io: &Mmio) -> Result {
++    /// fn do_write_reg(io: &Mmio<Region<0>>) -> Result {
+     ///
+     ///     io.try_write_reg(VERSION::new(1, 0))
+     /// }
+@@ -579,9 +584,10 @@ fn try_write_reg<T, L, V>(&self, value: V) -> Result
+     /// use kernel::io::{
+     ///     Io,
+     ///     Mmio,
++    ///     Region,
+     /// };
+     ///
+-    /// fn do_update(io: &Mmio<0x1000>) -> Result {
++    /// fn do_update(io: &Mmio<Region<0x1000>>) -> Result {
+     ///     io.try_update(0x10, |v: u32| {
+     ///         v + 1
+     ///     })
+@@ -616,9 +622,10 @@ fn try_update<T, L, F>(&self, location: L, f: F) -> Result
+     /// use kernel::io::{
+     ///     Io,
+     ///     Mmio,
++    ///     Region,
+     /// };
+     ///
+-    /// fn do_reads(io: &Mmio<0x1000>) {
++    /// fn do_reads(io: &Mmio<Region<0x1000>>) {
+     ///     // 32-bit read from address `0x10`.
+     ///     let v: u32 = io.read(0x10);
+     ///
+@@ -648,9 +655,10 @@ fn read<T, L>(&self, location: L) -> T
+     /// use kernel::io::{
+     ///     Io,
+     ///     Mmio,
++    ///     Region,
+     /// };
+     ///
+-    /// fn do_writes(io: &Mmio<0x1000>) {
++    /// fn do_writes(io: &Mmio<Region<0x1000>>) {
+     ///     // 32-bit write of value `1` at address `0x10`.
+     ///     io.write(0x10, 1u32);
+     ///
+@@ -682,6 +690,7 @@ fn write<T, L>(&self, location: L, value: T)
+     ///     register,
+     ///     Io,
+     ///     Mmio,
++    ///     Region,
+     /// };
+     ///
+     /// register! {
+@@ -697,7 +706,7 @@ fn write<T, L>(&self, location: L, value: T)
+     ///     }
+     /// }
+     ///
+-    /// fn do_write_reg(io: &Mmio<0x1000>) {
++    /// fn do_write_reg(io: &Mmio<Region<0x1000>>) {
+     ///     io.write_reg(VERSION::new(1, 0));
+     /// }
+     /// ```
+@@ -726,9 +735,10 @@ fn write_reg<T, L, V>(&self, value: V)
+     /// use kernel::io::{
+     ///     Io,
+     ///     Mmio,
++    ///     Region,
+     /// };
+     ///
+-    /// fn do_update(io: &Mmio<0x1000>) {
++    /// fn do_update(io: &Mmio<Region<0x1000>>) {
+     ///     io.update(0x10, |v: u32| {
+     ///         v + 1
+     ///     })
+@@ -778,7 +788,7 @@ fn io_addr_assert<U>(&self, offset: usize) -> usize {
+ macro_rules! impl_mmio_io_capable {
+     ($mmio:ident, $(#[$attr:meta])* $ty:ty, $read_fn:ident, $write_fn:ident) => {
+         $(#[$attr])*
+-        impl<const SIZE: usize> IoCapable<$ty> for $mmio<SIZE> {
++        impl<T: ?Sized> IoCapable<$ty> for $mmio<T> {
+             unsafe fn io_read(&self, address: usize) -> $ty {
+                 // SAFETY: By the trait invariant `address` is a valid address for MMIO operations.
+                 unsafe { bindings::$read_fn(address as *const c_void) }
+@@ -805,7 +815,7 @@ unsafe fn io_write(&self, value: $ty, address: usize) {
+     writeq
+ );
+ 
+-impl<const SIZE: usize> Io for Mmio<SIZE> {
++impl<T: ?Sized + KnownSize> Io for Mmio<T> {
+     /// Returns the base address of this mapping.
+     #[inline]
+     fn addr(&self) -> usize {
+@@ -819,18 +829,18 @@ fn maxsize(&self) -> usize {
+     }
+ }
+ 
+-impl<const SIZE: usize> IoKnownSize for Mmio<SIZE> {
+-    const MIN_SIZE: usize = SIZE;
++impl<T: ?Sized + KnownSize> IoKnownSize for Mmio<T> {
++    const MIN_SIZE: usize = T::MIN_SIZE;
+ }
+ 
+-impl<const SIZE: usize> Mmio<SIZE> {
++impl<T: ?Sized + KnownSize> Mmio<T> {
+     /// Converts an `MmioRaw` into an `Mmio` instance, providing the accessors to the MMIO mapping.
+     ///
+     /// # Safety
+     ///
+     /// Callers must ensure that `addr` is the start of a valid I/O mapped memory region of size
+-    /// `maxsize`.
+-    pub unsafe fn from_raw(raw: &MmioRaw<Region<SIZE>>) -> &Self {
++    /// `addr.size()`.
++    pub unsafe fn from_raw(raw: &MmioRaw<T>) -> &Self {
+         // SAFETY: `Mmio` is a transparent wrapper around `MmioRaw`.
+         unsafe { &*core::ptr::from_ref(raw).cast() }
+     }
+@@ -843,9 +853,9 @@ pub unsafe fn from_raw(raw: &MmioRaw<Region<SIZE>>) -> &Self {
+ ///
+ /// See [`Mmio::relaxed`] for a usage example.
+ #[repr(transparent)]
+-pub struct RelaxedMmio<const SIZE: usize = 0>(Mmio<SIZE>);
++pub struct RelaxedMmio<T: ?Sized>(Mmio<T>);
+ 
+-impl<const SIZE: usize> Io for RelaxedMmio<SIZE> {
++impl<T: ?Sized + KnownSize> Io for RelaxedMmio<T> {
+     #[inline]
+     fn addr(&self) -> usize {
+         self.0.addr()
+@@ -857,11 +867,11 @@ fn maxsize(&self) -> usize {
+     }
+ }
+ 
+-impl<const SIZE: usize> IoKnownSize for RelaxedMmio<SIZE> {
+-    const MIN_SIZE: usize = SIZE;
++impl<T: ?Sized + KnownSize> IoKnownSize for RelaxedMmio<T> {
++    const MIN_SIZE: usize = T::MIN_SIZE;
+ }
+ 
+-impl<const SIZE: usize> Mmio<SIZE> {
++impl<T: ?Sized> Mmio<T> {
+     /// Returns a [`RelaxedMmio`] reference that performs relaxed I/O operations.
+     ///
+     /// Relaxed accessors do not provide ordering guarantees with respect to DMA or memory accesses
+@@ -873,18 +883,19 @@ impl<const SIZE: usize> Mmio<SIZE> {
+     /// use kernel::io::{
+     ///     Io,
+     ///     Mmio,
++    ///     Region,
+     ///     RelaxedMmio,
+     /// };
+     ///
+-    /// fn do_io(io: &Mmio<0x100>) {
++    /// fn do_io(io: &Mmio<Region<0x100>>) {
+     ///     // The access is performed using `readl_relaxed` instead of `readl`.
+     ///     let v = io.relaxed().read32(0x10);
+     /// }
+     ///
+     /// ```
+-    pub fn relaxed(&self) -> &RelaxedMmio<SIZE> {
+-        // SAFETY: `RelaxedMmio` is `#[repr(transparent)]` over `Mmio`, so `Mmio<SIZE>` and
+-        // `RelaxedMmio<SIZE>` have identical layout.
++    pub fn relaxed(&self) -> &RelaxedMmio<T> {
++        // SAFETY: `RelaxedMmio` is `#[repr(transparent)]` over `Mmio`, so `Mmio<T>` and
++        // `RelaxedMmio<T>` have identical layout.
+         unsafe { core::mem::transmute(self) }
+     }
+ }
+diff --git a/rust/kernel/io/mem.rs b/rust/kernel/io/mem.rs
+index 9117d417f99c..a6292f4ebfa4 100644
+--- a/rust/kernel/io/mem.rs
++++ b/rust/kernel/io/mem.rs
+@@ -214,7 +214,7 @@ pub fn new<'a>(io_request: IoRequest<'a>) -> impl PinInit<Devres<Self>, Error> +
+ }
+ 
+ impl<const SIZE: usize> Deref for ExclusiveIoMem<SIZE> {
+-    type Target = Mmio<SIZE>;
++    type Target = Mmio<super::Region<SIZE>>;
+ 
+     fn deref(&self) -> &Self::Target {
+         &self.iomem
+@@ -289,7 +289,7 @@ fn drop(&mut self) {
+ }
+ 
+ impl<const SIZE: usize> Deref for IoMem<SIZE> {
+-    type Target = Mmio<SIZE>;
++    type Target = Mmio<super::Region<SIZE>>;
+ 
+     fn deref(&self) -> &Self::Target {
+         // SAFETY: Safe as by the invariant of `IoMem`.
+diff --git a/rust/kernel/io/poll.rs b/rust/kernel/io/poll.rs
+index 75d1b3e8596c..2dce2b24b5ff 100644
+--- a/rust/kernel/io/poll.rs
++++ b/rust/kernel/io/poll.rs
+@@ -48,13 +48,14 @@
+ /// use kernel::io::{
+ ///     Io,
+ ///     Mmio,
++///     Region,
+ ///     poll::read_poll_timeout, //
+ /// };
+ /// use kernel::time::Delta;
+ ///
+ /// const HW_READY: u16 = 0x01;
+ ///
+-/// fn wait_for_hardware<const SIZE: usize>(io: &Mmio<SIZE>) -> Result {
++/// fn wait_for_hardware<const SIZE: usize>(io: &Mmio<Region<SIZE>>) -> Result {
+ ///     read_poll_timeout(
+ ///         // The `op` closure reads the value of a specific status register.
+ ///         || io.try_read16(0x1000),
+@@ -135,13 +136,14 @@ pub fn read_poll_timeout<Op, Cond, T>(
+ /// use kernel::io::{
+ ///     Io,
+ ///     Mmio,
++///     Region,
+ ///     poll::read_poll_timeout_atomic, //
+ /// };
+ /// use kernel::time::Delta;
+ ///
+ /// const HW_READY: u16 = 0x01;
+ ///
+-/// fn wait_for_hardware<const SIZE: usize>(io: &Mmio<SIZE>) -> Result {
++/// fn wait_for_hardware<const SIZE: usize>(io: &Mmio<Region<SIZE>>) -> Result {
+ ///     read_poll_timeout_atomic(
+ ///         // The `op` closure reads the value of a specific status register.
+ ///         || io.try_read16(0x1000),
+diff --git a/rust/kernel/io/register.rs b/rust/kernel/io/register.rs
+index abc49926abfe..1a407fc35edc 100644
+--- a/rust/kernel/io/register.rs
++++ b/rust/kernel/io/register.rs
+@@ -55,6 +55,7 @@
+ //!         register,
+ //!         Io,
+ //!         IoLoc,
++//!         Region,
+ //!     },
+ //!     num::Bounded,
+ //! };
+@@ -66,7 +67,7 @@
+ //! #         3:0 minor_revision;
+ //! #     }
+ //! # }
+-//! # fn test(io: &Mmio<0x1000>) {
++//! # fn test(io: &Mmio<Region<0x1000>>) {
+ //! # fn obtain_vendor_id() -> u8 { 0xff }
+ //!
+ //! // Read from the register's defined offset (0x100).
+@@ -441,6 +442,7 @@ fn into_io_op(self) -> (FixedRegisterLoc<T>, T) {
+ ///     io::{
+ ///         register,
+ ///         Io,
++///         Region,
+ ///     },
+ /// };
+ /// # use kernel::io::Mmio;
+@@ -452,7 +454,7 @@ fn into_io_op(self) -> (FixedRegisterLoc<T>, T) {
+ ///     }
+ /// }
+ ///
+-/// # fn test(io: &Mmio<0x1000>) {
++/// # fn test(io: &Mmio<Region<0x1000>>) {
+ /// let val = io.read(FIXED_REG);
+ ///
+ /// // Write from an already-existing value.
+@@ -554,6 +556,7 @@ fn into_io_op(self) -> (FixedRegisterLoc<T>, T) {
+ ///             WithBase,
+ ///         },
+ ///         Io,
++///         Region,
+ ///     },
+ /// };
+ /// # use kernel::io::Mmio;
+@@ -581,7 +584,7 @@ fn into_io_op(self) -> (FixedRegisterLoc<T>, T) {
+ ///     }
+ /// }
+ ///
+-/// # fn test(io: Mmio<0x1000>) {
++/// # fn test(io: Mmio<Region<0x1000>>) {
+ /// // Read the status of `Cpu0`.
+ /// let cpu0_started = io.read(CPU_CTL::of::<Cpu0>());
+ ///
+@@ -598,7 +601,7 @@ fn into_io_op(self) -> (FixedRegisterLoc<T>, T) {
+ ///     }
+ /// }
+ ///
+-/// # fn test2(io: Mmio<0x1000>) {
++/// # fn test2(io: Mmio<Region<0x1000>>) {
+ /// // Start the aliased `CPU0`, leaving its other fields untouched.
+ /// io.update(CPU_CTL_ALIAS::of::<Cpu0>(), |r| r.with_alias_start(true));
+ /// # }
+@@ -633,6 +636,7 @@ fn into_io_op(self) -> (FixedRegisterLoc<T>, T) {
+ ///         register,
+ ///         register::Array,
+ ///         Io,
++///         Region,
+ ///     },
+ /// };
+ /// # use kernel::io::Mmio;
+@@ -648,7 +652,7 @@ fn into_io_op(self) -> (FixedRegisterLoc<T>, T) {
+ ///     }
+ /// }
+ ///
+-/// # fn test(io: &Mmio<0x1000>)
++/// # fn test(io: &Mmio<Region<0x1000>>)
+ /// #     -> Result<(), Error>{
+ /// // Read scratch register 0, i.e. I/O address `0x80`.
+ /// let scratch_0 = io.read(SCRATCH::at(0)).value();
+@@ -719,6 +723,7 @@ fn into_io_op(self) -> (FixedRegisterLoc<T>, T) {
+ ///             WithBase,
+ ///         },
+ ///         Io,
++///         Region,
+ ///     },
+ /// };
+ /// # use kernel::io::Mmio;
+@@ -749,7 +754,7 @@ fn into_io_op(self) -> (FixedRegisterLoc<T>, T) {
+ ///     }
+ /// }
+ ///
+-/// # fn test(io: &Mmio<0x1000>) -> Result<(), Error> {
++/// # fn test(io: &Mmio<Region<0x1000>>) -> Result<(), Error> {
+ /// // Read scratch register 0 of CPU0.
+ /// let scratch = io.read(CPU_SCRATCH::of::<Cpu0>().at(0));
+ ///
+@@ -791,7 +796,7 @@ fn into_io_op(self) -> (FixedRegisterLoc<T>, T) {
+ ///     }
+ /// }
+ ///
+-/// # fn test2(io: &Mmio<0x1000>) -> Result<(), Error> {
++/// # fn test2(io: &Mmio<Region<0x1000>>) -> Result<(), Error> {
+ /// let cpu0_status = io.read(CPU_FIRMWARE_STATUS::of::<Cpu0>()).status();
+ /// # Ok(())
+ /// # }
+diff --git a/rust/kernel/pci/io.rs b/rust/kernel/pci/io.rs
+index 0335b5068f69..e048370fb8c1 100644
+--- a/rust/kernel/pci/io.rs
++++ b/rust/kernel/pci/io.rs
+@@ -238,7 +238,7 @@ fn drop(&mut self) {
+ }
+ 
+ impl<const SIZE: usize> Deref for Bar<SIZE> {
+-    type Target = Mmio<SIZE>;
++    type Target = Mmio<crate::io::Region<SIZE>>;
+ 
+     fn deref(&self) -> &Self::Target {
+         // SAFETY: By the type invariant of `Self`, the MMIO range in `self.io` is properly mapped.
+diff --git a/rust/kernel/ptr.rs b/rust/kernel/ptr.rs
+index bdc2d79ff669..72d51ba7b67e 100644
+--- a/rust/kernel/ptr.rs
++++ b/rust/kernel/ptr.rs
+@@ -236,11 +236,16 @@ fn align_up(self, alignment: Alignment) -> Option<Self> {
+ ///
+ /// This is a generalization of [`size_of`] that works for dynamically sized types.
+ pub trait KnownSize {
++    /// Minimum size of this type known at compile-time.
++    const MIN_SIZE: usize;
++
+     /// Get the size of an object of this type in bytes, with the metadata of the given pointer.
+     fn size(p: *const Self) -> usize;
+ }
+ 
+ impl<T> KnownSize for T {
++    const MIN_SIZE: usize = core::mem::size_of::<T>();
++
+     #[inline(always)]
+     fn size(_: *const Self) -> usize {
+         size_of::<T>()
+@@ -248,6 +253,8 @@ fn size(_: *const Self) -> usize {
+ }
+ 
+ impl<T> KnownSize for [T] {
++    const MIN_SIZE: usize = 0;
++
+     #[inline(always)]
+     fn size(p: *const Self) -> usize {
+         p.len() * size_of::<T>()
+-- 
+2.51.2
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 3/8] rust: io: use pointer types instead of address
+From: Gary Guo <gary@garyguo.net>
+Date: Mon, 23 Mar 2026 15:37:55 +0000
+Message-Id: <20260323153807.1360705-4-gary@kernel.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+This carries the size information with the pointer type and metadata, makes
+it possible to use I/O projections and paves the way for IO view types.
+
+With this change, minimum size information becomes available through types;
+so `KnownSize::MIN_SIZE` can be used and `IoKnownSize` trait is no longer
+necessary. The trait is kept for compatibility and can be removed when
+users stop using it for bounds.
+
+PCI config space uses only offsets and not pointers like MMIO; for this
+null pointers (with proper size metadata) is used. This is okay as I/O
+trait impl and I/O projections can operate on invalid pointers, and for PCI
+config space we will only use address info and ignore the provenance.
+
+The current safety comment on `io_read`/`io_write` does not cover the topic
+about alignment, although this is guaranteed by checks in `Io`. Add it so
+it can be relied on by implementor of `IoCapable`.
+
+Signed-off-by: Gary Guo <gary@garyguo.net>
+Reviewed-by: Andreas Hindborg <a.hindborg@kernel.org>
+---
+ rust/kernel/devres.rs |   2 +-
+ rust/kernel/io.rs     | 129 ++++++++++++++++++------------------------
+ rust/kernel/io/mem.rs |   2 +-
+ rust/kernel/pci/io.rs |  82 +++++++++++++++++----------
+ 4 files changed, 111 insertions(+), 104 deletions(-)
+
+diff --git a/rust/kernel/devres.rs b/rust/kernel/devres.rs
+index 3e22c63efb98..ea86e9c62cdf 100644
+--- a/rust/kernel/devres.rs
++++ b/rust/kernel/devres.rs
+@@ -101,7 +101,7 @@ struct Inner<T> {
+ /// impl<const SIZE: usize> Drop for IoMem<SIZE> {
+ ///     fn drop(&mut self) {
+ ///         // SAFETY: `self.0.addr()` is guaranteed to be properly mapped by `Self::new`.
+-///         unsafe { bindings::iounmap(self.0.addr() as *mut c_void); };
++///         unsafe { bindings::iounmap(self.0.as_ptr().cast()); };
+ ///     }
+ /// }
+ ///
+diff --git a/rust/kernel/io.rs b/rust/kernel/io.rs
+index 5a26b1e7e533..72902a4a343d 100644
+--- a/rust/kernel/io.rs
++++ b/rust/kernel/io.rs
+@@ -105,8 +105,8 @@ pub fn new_region(addr: usize, size: usize) -> Result<Self> {
+ impl<T: ?Sized + KnownSize> MmioRaw<T> {
+     /// Returns the base address of the MMIO region.
+     #[inline]
+-    pub fn addr(&self) -> usize {
+-        self.addr.addr()
++    pub fn as_ptr(&self) -> *mut T {
++        self.addr
+     }
+ 
+     /// Returns the size of the MMIO region.
+@@ -166,7 +166,7 @@ pub fn size(&self) -> usize {
+ /// impl<const SIZE: usize> Drop for IoMem<SIZE> {
+ ///     fn drop(&mut self) {
+ ///         // SAFETY: `self.0.addr()` is guaranteed to be properly mapped by `Self::new`.
+-///         unsafe { bindings::iounmap(self.0.addr() as *mut c_void); };
++///         unsafe { bindings::iounmap(self.0.as_ptr().cast()); };
+ ///     }
+ /// }
+ ///
+@@ -216,15 +216,17 @@ pub trait IoCapable<T> {
+     ///
+     /// # Safety
+     ///
+-    /// The range `[address..address + size_of::<T>()]` must be within the bounds of `Self`.
+-    unsafe fn io_read(&self, address: usize) -> T;
++    /// - The range `[address..address + size_of::<T>()]` must be within the bounds of `Self`.
++    /// - `address` must be aligned.
++    unsafe fn io_read(&self, address: *mut T) -> T;
+ 
+     /// Performs an I/O write of `value` at `address`.
+     ///
+     /// # Safety
+     ///
+-    /// The range `[address..address + size_of::<T>()]` must be within the bounds of `Self`.
+-    unsafe fn io_write(&self, value: T, address: usize);
++    /// - The range `[address..address + size_of::<T>()]` must be within the bounds of `Self`.
++    /// - `address` must be aligned.
++    unsafe fn io_write(&self, value: T, address: *mut T);
+ }
+ 
+ /// Describes a given I/O location: its offset, width, and type to convert the raw value from and
+@@ -291,23 +293,35 @@ fn offset(self) -> usize {
+ /// For MMIO regions, all widths (u8, u16, u32, and u64 on 64-bit systems) are typically
+ /// supported. For PCI configuration space, u8, u16, and u32 are supported but u64 is not.
+ pub trait Io {
+-    /// Returns the base address of this mapping.
+-    fn addr(&self) -> usize;
++    /// Type of this I/O region. For untyped I/O regions, [`Region`] type can be used.
++    type Type: ?Sized + KnownSize;
++
++    /// Returns the base pointer of this mapping.
++    ///
++    /// This is a pointer to capture metadata. The specific meaning of the pointer depends on
++    /// I/O backend and is not necessarily valid.
++    fn as_ptr(&self) -> *mut Self::Type;
++
++    /// Returns the absolute I/O address for a given `offset`,
++    /// performing compile-time bound checks.
++    // Always inline to optimize out error path of `build_assert`.
++    #[inline(always)]
++    fn io_addr_assert<U>(&self, offset: usize) -> *mut U {
++        build_assert!(offset_valid::<U>(offset, Self::Type::MIN_SIZE));
+ 
+-    /// Returns the maximum size of this mapping.
+-    fn maxsize(&self) -> usize;
++        self.as_ptr().wrapping_byte_add(offset).cast()
++    }
+ 
+     /// Returns the absolute I/O address for a given `offset`,
+     /// performing runtime bound checks.
+     #[inline]
+-    fn io_addr<U>(&self, offset: usize) -> Result<usize> {
+-        if !offset_valid::<U>(offset, self.maxsize()) {
++    fn io_addr<U>(&self, offset: usize) -> Result<*mut U> {
++        let ptr = self.as_ptr();
++        if !offset_valid::<U>(offset, Self::Type::size(ptr)) {
+             return Err(EINVAL);
+         }
+ 
+-        // Probably no need to check, since the safety requirements of `Self::new` guarantee that
+-        // this can't overflow.
+-        self.addr().checked_add(offset).ok_or(EINVAL)
++        Ok(ptr.wrapping_byte_add(offset).cast())
+     }
+ 
+     /// Fallible 8-bit read with runtime bounds check.
+@@ -386,7 +400,7 @@ fn try_write64(&self, value: u64, offset: usize) -> Result
+     #[inline(always)]
+     fn read8(&self, offset: usize) -> u8
+     where
+-        Self: IoKnownSize + IoCapable<u8>,
++        Self: IoCapable<u8>,
+     {
+         self.read(offset)
+     }
+@@ -395,7 +409,7 @@ fn read8(&self, offset: usize) -> u8
+     #[inline(always)]
+     fn read16(&self, offset: usize) -> u16
+     where
+-        Self: IoKnownSize + IoCapable<u16>,
++        Self: IoCapable<u16>,
+     {
+         self.read(offset)
+     }
+@@ -404,7 +418,7 @@ fn read16(&self, offset: usize) -> u16
+     #[inline(always)]
+     fn read32(&self, offset: usize) -> u32
+     where
+-        Self: IoKnownSize + IoCapable<u32>,
++        Self: IoCapable<u32>,
+     {
+         self.read(offset)
+     }
+@@ -413,7 +427,7 @@ fn read32(&self, offset: usize) -> u32
+     #[inline(always)]
+     fn read64(&self, offset: usize) -> u64
+     where
+-        Self: IoKnownSize + IoCapable<u64>,
++        Self: IoCapable<u64>,
+     {
+         self.read(offset)
+     }
+@@ -422,7 +436,7 @@ fn read64(&self, offset: usize) -> u64
+     #[inline(always)]
+     fn write8(&self, value: u8, offset: usize)
+     where
+-        Self: IoKnownSize + IoCapable<u8>,
++        Self: IoCapable<u8>,
+     {
+         self.write(offset, value)
+     }
+@@ -431,7 +445,7 @@ fn write8(&self, value: u8, offset: usize)
+     #[inline(always)]
+     fn write16(&self, value: u16, offset: usize)
+     where
+-        Self: IoKnownSize + IoCapable<u16>,
++        Self: IoCapable<u16>,
+     {
+         self.write(offset, value)
+     }
+@@ -440,7 +454,7 @@ fn write16(&self, value: u16, offset: usize)
+     #[inline(always)]
+     fn write32(&self, value: u32, offset: usize)
+     where
+-        Self: IoKnownSize + IoCapable<u32>,
++        Self: IoCapable<u32>,
+     {
+         self.write(offset, value)
+     }
+@@ -449,7 +463,7 @@ fn write32(&self, value: u32, offset: usize)
+     #[inline(always)]
+     fn write64(&self, value: u64, offset: usize)
+     where
+-        Self: IoKnownSize + IoCapable<u64>,
++        Self: IoCapable<u64>,
+     {
+         self.write(offset, value)
+     }
+@@ -637,7 +651,7 @@ fn try_update<T, L, F>(&self, location: L, f: F) -> Result
+     fn read<T, L>(&self, location: L) -> T
+     where
+         L: IoLoc<T>,
+-        Self: IoKnownSize + IoCapable<L::IoType>,
++        Self: IoCapable<L::IoType>,
+     {
+         let address = self.io_addr_assert::<L::IoType>(location.offset());
+ 
+@@ -670,7 +684,7 @@ fn read<T, L>(&self, location: L) -> T
+     fn write<T, L>(&self, location: L, value: T)
+     where
+         L: IoLoc<T>,
+-        Self: IoKnownSize + IoCapable<L::IoType>,
++        Self: IoCapable<L::IoType>,
+     {
+         let address = self.io_addr_assert::<L::IoType>(location.offset());
+         let io_value = value.into();
+@@ -715,7 +729,7 @@ fn write_reg<T, L, V>(&self, value: V)
+     where
+         L: IoLoc<T>,
+         V: LocatedRegister<Location = L, Value = T>,
+-        Self: IoKnownSize + IoCapable<L::IoType>,
++        Self: IoCapable<L::IoType>,
+     {
+         let (location, value) = value.into_io_op();
+ 
+@@ -748,7 +762,7 @@ fn write_reg<T, L, V>(&self, value: V)
+     fn update<T, L, F>(&self, location: L, f: F)
+     where
+         L: IoLoc<T>,
+-        Self: IoKnownSize + IoCapable<L::IoType> + Sized,
++        Self: IoCapable<L::IoType>,
+         F: FnOnce(T) -> T,
+     {
+         let address = self.io_addr_assert::<L::IoType>(location.offset());
+@@ -762,41 +776,25 @@ fn update<T, L, F>(&self, location: L, f: F)
+     }
+ }
+ 
+-/// Trait for types with a known size at compile time.
+-///
+-/// This trait is implemented by I/O backends that have a compile-time known size,
+-/// enabling the use of infallible I/O accessors with compile-time bounds checking.
+-///
+-/// Types implementing this trait can use the infallible methods in [`Io`] trait
+-/// (e.g., `read8`, `write32`), which require `Self: IoKnownSize` bound.
+-pub trait IoKnownSize: Io {
+-    /// Minimum usable size of this region.
+-    const MIN_SIZE: usize;
+-
+-    /// Returns the absolute I/O address for a given `offset`,
+-    /// performing compile-time bound checks.
+-    // Always inline to optimize out error path of `build_assert`.
+-    #[inline(always)]
+-    fn io_addr_assert<U>(&self, offset: usize) -> usize {
+-        build_assert!(offset_valid::<U>(offset, Self::MIN_SIZE));
++// For compatibility only.
++#[doc(hidden)]
++pub trait IoKnownSize: Io {}
+ 
+-        self.addr() + offset
+-    }
+-}
++impl<T: Io + ?Sized> IoKnownSize for T {}
+ 
+ /// Implements [`IoCapable`] on `$mmio` for `$ty` using `$read_fn` and `$write_fn`.
+ macro_rules! impl_mmio_io_capable {
+     ($mmio:ident, $(#[$attr:meta])* $ty:ty, $read_fn:ident, $write_fn:ident) => {
+         $(#[$attr])*
+         impl<T: ?Sized> IoCapable<$ty> for $mmio<T> {
+-            unsafe fn io_read(&self, address: usize) -> $ty {
++            unsafe fn io_read(&self, address: *mut $ty) -> $ty {
+                 // SAFETY: By the trait invariant `address` is a valid address for MMIO operations.
+                 unsafe { bindings::$read_fn(address as *const c_void) }
+             }
+ 
+-            unsafe fn io_write(&self, value: $ty, address: usize) {
++            unsafe fn io_write(&self, value: $ty, address: *mut $ty) {
+                 // SAFETY: By the trait invariant `address` is a valid address for MMIO operations.
+-                unsafe { bindings::$write_fn(value, address as *mut c_void) }
++                unsafe { bindings::$write_fn(value, address.cast()) }
+             }
+         }
+     };
+@@ -816,23 +814,15 @@ unsafe fn io_write(&self, value: $ty, address: usize) {
+ );
+ 
+ impl<T: ?Sized + KnownSize> Io for Mmio<T> {
+-    /// Returns the base address of this mapping.
+-    #[inline]
+-    fn addr(&self) -> usize {
+-        self.0.addr()
+-    }
++    type Type = T;
+ 
+-    /// Returns the maximum size of this mapping.
++    /// Returns the base address of this mapping.
+     #[inline]
+-    fn maxsize(&self) -> usize {
+-        self.0.size()
++    fn as_ptr(&self) -> *mut T {
++        self.0.as_ptr()
+     }
+ }
+ 
+-impl<T: ?Sized + KnownSize> IoKnownSize for Mmio<T> {
+-    const MIN_SIZE: usize = T::MIN_SIZE;
+-}
+-
+ impl<T: ?Sized + KnownSize> Mmio<T> {
+     /// Converts an `MmioRaw` into an `Mmio` instance, providing the accessors to the MMIO mapping.
+     ///
+@@ -856,21 +846,14 @@ pub unsafe fn from_raw(raw: &MmioRaw<T>) -> &Self {
+ pub struct RelaxedMmio<T: ?Sized>(Mmio<T>);
+ 
+ impl<T: ?Sized + KnownSize> Io for RelaxedMmio<T> {
+-    #[inline]
+-    fn addr(&self) -> usize {
+-        self.0.addr()
+-    }
++    type Type = T;
+ 
+     #[inline]
+-    fn maxsize(&self) -> usize {
+-        self.0.maxsize()
++    fn as_ptr(&self) -> *mut T {
++        self.0.as_ptr()
+     }
+ }
+ 
+-impl<T: ?Sized + KnownSize> IoKnownSize for RelaxedMmio<T> {
+-    const MIN_SIZE: usize = T::MIN_SIZE;
+-}
+-
+ impl<T: ?Sized> Mmio<T> {
+     /// Returns a [`RelaxedMmio`] reference that performs relaxed I/O operations.
+     ///
+diff --git a/rust/kernel/io/mem.rs b/rust/kernel/io/mem.rs
+index a6292f4ebfa4..f87a29f90e79 100644
+--- a/rust/kernel/io/mem.rs
++++ b/rust/kernel/io/mem.rs
+@@ -284,7 +284,7 @@ pub fn new<'a>(io_request: IoRequest<'a>) -> impl PinInit<Devres<Self>, Error> +
+ impl<const SIZE: usize> Drop for IoMem<SIZE> {
+     fn drop(&mut self) {
+         // SAFETY: Safe as by the invariant of `Io`.
+-        unsafe { bindings::iounmap(self.io.addr() as *mut c_void) }
++        unsafe { bindings::iounmap(self.io.as_ptr().cast()) }
+     }
+ }
+ 
+diff --git a/rust/kernel/pci/io.rs b/rust/kernel/pci/io.rs
+index e048370fb8c1..2c8f6388db70 100644
+--- a/rust/kernel/pci/io.rs
++++ b/rust/kernel/pci/io.rs
+@@ -10,11 +10,11 @@
+     io::{
+         Io,
+         IoCapable,
+-        IoKnownSize,
+         Mmio,
+         MmioRaw, //
+     },
+     prelude::*,
++    ptr::KnownSize,
+     sync::aref::ARef, //
+ };
+ use core::{
+@@ -60,14 +60,45 @@ pub const fn into_raw(self) -> usize {
+ pub trait ConfigSpaceKind {
+     /// The size of this configuration space in bytes.
+     const SIZE: usize;
++
++    /// Region type for this kind of config space. This should be [`crate::io::Region<SIZE>`].
++    type Region: ?Sized + KnownSize;
++
++    /// Obtain pointer with actual size information.
++    fn null_ptr_from_size(size: ConfigSpaceSize) -> *mut Self::Region;
+ }
+ 
+ impl ConfigSpaceKind for Normal {
+     const SIZE: usize = 256;
++
++    type Region = crate::io::Region<256>;
++
++    #[inline]
++    #[allow(
++        clippy::invalid_null_ptr_usage,
++        reason = "false positive, fixed in Clippy 1.83"
++    )]
++    fn null_ptr_from_size(size: ConfigSpaceSize) -> *mut Self::Region {
++        core::ptr::slice_from_raw_parts_mut(core::ptr::null_mut::<u8>(), size.into_raw())
++            as *mut Self::Region
++    }
+ }
+ 
+ impl ConfigSpaceKind for Extended {
+     const SIZE: usize = 4096;
++
++    type Region = crate::io::Region<4096>;
++
++    #[inline]
++    #[allow(
++        clippy::invalid_null_ptr_usage,
++        reason = "false positive, fixed in Clippy 1.83"
++    )]
++    fn null_ptr_from_size(_: ConfigSpaceSize) -> *mut Self::Region {
++        // Small optimization. For a extended config space, we already know that the size
++        // is 4096.
++        core::ptr::slice_from_raw_parts_mut(core::ptr::null_mut::<u8>(), 4096) as *mut Self::Region
++    }
+ }
+ 
+ /// The PCI configuration space of a device.
+@@ -87,28 +118,28 @@ pub struct ConfigSpace<'a, S: ConfigSpaceKind = Extended> {
+ macro_rules! impl_config_space_io_capable {
+     ($ty:ty, $read_fn:ident, $write_fn:ident) => {
+         impl<'a, S: ConfigSpaceKind> IoCapable<$ty> for ConfigSpace<'a, S> {
+-            unsafe fn io_read(&self, address: usize) -> $ty {
++            unsafe fn io_read(&self, address: *mut $ty) -> $ty {
++                // CAST: The offset is cast to `i32` because the C functions expect a 32-bit
++                // signed offset parameter. PCI configuration space size is at most 4096 bytes,
++                // so the value always fits within `i32` without truncation or sign change.
++                let addr = address.addr() as i32;
+                 let mut val: $ty = 0;
+ 
+                 // Return value from C function is ignored in infallible accessors.
+-                let _ret =
+-                    // SAFETY: By the type invariant `self.pdev` is a valid address.
+-                    // CAST: The offset is cast to `i32` because the C functions expect a 32-bit
+-                    // signed offset parameter. PCI configuration space size is at most 4096 bytes,
+-                    // so the value always fits within `i32` without truncation or sign change.
+-                    unsafe { bindings::$read_fn(self.pdev.as_raw(), address as i32, &mut val) };
+-
++                // SAFETY: By the type invariant `self.pdev` is a valid address.
++                let _ = unsafe { bindings::$read_fn(self.pdev.as_raw(), addr, &mut val) };
+                 val
+             }
+ 
+-            unsafe fn io_write(&self, value: $ty, address: usize) {
++            unsafe fn io_write(&self, value: $ty, address: *mut $ty) {
++                // CAST: The offset is cast to `i32` because the C functions expect a 32-bit
++                // signed offset parameter. PCI configuration space size is at most 4096 bytes,
++                // so the value always fits within `i32` without truncation or sign change.
++                let addr = address.addr() as i32;
++
+                 // Return value from C function is ignored in infallible accessors.
+-                let _ret =
+-                    // SAFETY: By the type invariant `self.pdev` is a valid address.
+-                    // CAST: The offset is cast to `i32` because the C functions expect a 32-bit
+-                    // signed offset parameter. PCI configuration space size is at most 4096 bytes,
+-                    // so the value always fits within `i32` without truncation or sign change.
+-                    unsafe { bindings::$write_fn(self.pdev.as_raw(), address as i32, value) };
++                // SAFETY: By the type invariant `self.pdev` is a valid address.
++                let _ = unsafe { bindings::$write_fn(self.pdev.as_raw(), addr, value) };
+             }
+         }
+     };
+@@ -120,23 +151,15 @@ unsafe fn io_write(&self, value: $ty, address: usize) {
+ impl_config_space_io_capable!(u32, pci_read_config_dword, pci_write_config_dword);
+ 
+ impl<'a, S: ConfigSpaceKind> Io for ConfigSpace<'a, S> {
+-    /// Returns the base address of the I/O region. It is always 0 for configuration space.
+-    #[inline]
+-    fn addr(&self) -> usize {
+-        0
+-    }
++    type Type = S::Region;
+ 
+-    /// Returns the maximum size of the configuration space.
++    /// Returns the base address of the I/O region. It is always 0 for configuration space.
+     #[inline]
+-    fn maxsize(&self) -> usize {
+-        self.pdev.cfg_size().into_raw()
++    fn as_ptr(&self) -> *mut Self::Type {
++        S::null_ptr_from_size(self.pdev.cfg_size())
+     }
+ }
+ 
+-impl<'a, S: ConfigSpaceKind> IoKnownSize for ConfigSpace<'a, S> {
+-    const MIN_SIZE: usize = S::SIZE;
+-}
+-
+ /// A PCI BAR to perform I/O-Operations on.
+ ///
+ /// I/O backend assumes that the device is little-endian and will automatically
+@@ -219,7 +242,7 @@ unsafe fn do_release(pdev: &Device, ioptr: usize, num: i32) {
+ 
+     fn release(&self) {
+         // SAFETY: The safety requirements are guaranteed by the type invariant of `self.pdev`.
+-        unsafe { Self::do_release(&self.pdev, self.io.addr(), self.num) };
++        unsafe { Self::do_release(&self.pdev, self.io.as_ptr().addr(), self.num) };
+     }
+ }
+ 
+@@ -267,6 +290,7 @@ pub fn iomap_region<'a>(
+     }
+ 
+     /// Returns the size of configuration space.
++    #[inline]
+     pub fn cfg_size(&self) -> ConfigSpaceSize {
+         // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
+         let size = unsafe { (*self.as_raw()).cfg_size };
+-- 
+2.51.2
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 4/8] rust: io: add view type
+From: Gary Guo <gary@garyguo.net>
+Date: Mon, 23 Mar 2026 15:37:56 +0000
+Message-Id: <20260323153807.1360705-5-gary@kernel.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+The view may be created statically via I/O projection using `io_project!()`
+macro to perform compile-time checks, or created by type-casting an
+existing view type with `try_cast()` function, where the size and alignment
+checks are performed at runtime.
+
+Signed-off-by: Gary Guo <gary@garyguo.net>
+Reviewed-by: Andreas Hindborg <a.hindborg@kernel.org>
+---
+ rust/kernel/io.rs | 147 +++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 146 insertions(+), 1 deletion(-)
+
+diff --git a/rust/kernel/io.rs b/rust/kernel/io.rs
+index 72902a4a343d..8166e47f1381 100644
+--- a/rust/kernel/io.rs
++++ b/rust/kernel/io.rs
+@@ -7,7 +7,11 @@
+ use crate::{
+     bindings,
+     prelude::*,
+-    ptr::KnownSize, //
++    ptr::KnownSize,
++    transmute::{
++        AsBytes,
++        FromBytes, //
++    }, //
+ };
+ 
+ pub mod mem;
+@@ -296,6 +300,13 @@ pub trait Io {
+     /// Type of this I/O region. For untyped I/O regions, [`Region`] type can be used.
+     type Type: ?Sized + KnownSize;
+ 
++    /// Get a [`View`] covering the entire region.
++    #[inline]
++    fn as_view(&self) -> View<'_, Self, Self::Type> {
++        // SAFETY: Trivially satisfied.
++        unsafe { View::new_unchecked(self, self.as_ptr()) }
++    }
++
+     /// Returns the base pointer of this mapping.
+     ///
+     /// This is a pointer to capture metadata. The specific meaning of the pointer depends on
+@@ -895,3 +906,137 @@ pub fn relaxed(&self) -> &RelaxedMmio<T> {
+     readq_relaxed,
+     writeq_relaxed
+ );
++
++/// A view into an I/O region.
++///
++/// # Invariants
++///
++/// - `ptr` is aligned for `T`
++/// - `ptr` has same provenance as `io.as_ptr()`
++/// - `ptr.byte_offset_from(io.as_ptr())` is between 0 to
++///   `KnownSize::size(io.as_ptr()) - KnownSize::size(ptr)`.
++///
++/// These invariants are trivially satisfied if the pointer is created via pointer projection.
++pub struct View<'a, IO: ?Sized, T: ?Sized> {
++    io: &'a IO,
++    ptr: *mut T,
++}
++
++impl<'a, IO: ?Sized, T: ?Sized> View<'a, IO, T> {
++    // For `io_project!` macro use only.
++    #[doc(hidden)]
++    #[inline]
++    pub fn as_view(&self) -> Self {
++        *self
++    }
++
++    /// Create a view of a provided I/O region.
++    ///
++    /// # Safety
++    ///
++    /// `ptr` must satisfy the invariants of the view type.
++    #[inline]
++    pub unsafe fn new_unchecked(io: &'a IO, ptr: *mut T) -> Self {
++        // INVARIANT: Per function safety requirement.
++        Self { io, ptr }
++    }
++
++    /// Obtain the underlying I/O region.
++    #[inline]
++    pub fn io(self) -> &'a IO {
++        self.io
++    }
++
++    /// Obtain a pointer to the subview.
++    ///
++    /// The interpretation of the pointer depends on the underlying I/O region.
++    #[inline]
++    pub fn as_ptr(self) -> *mut T {
++        self.ptr
++    }
++}
++
++impl<IO: ?Sized, T: ?Sized> Clone for View<'_, IO, T> {
++    #[inline]
++    fn clone(&self) -> Self {
++        *self
++    }
++}
++
++impl<IO: ?Sized, T: ?Sized> Copy for View<'_, IO, T> {}
++
++impl<'a, IO: ?Sized, T: ?Sized> View<'a, IO, T> {
++    /// Try to convert this view into a different typed I/O view.
++    ///
++    /// The target type must be of same or smaller size to current type, and the current view must
++    /// be properly aligned for the target type.
++    #[inline]
++    pub fn try_cast<U>(self) -> Result<View<'a, IO, U>>
++    where
++        T: KnownSize + FromBytes + AsBytes,
++        U: FromBytes + AsBytes,
++    {
++        if size_of::<U>() > KnownSize::size(self.ptr) {
++            return Err(EINVAL);
++        }
++
++        if self.ptr.addr() % align_of::<U>() != 0 {
++            return Err(EINVAL);
++        }
++
++        // INVARIANT: We have checked bounds and alignment.
++        Ok(View {
++            io: self.io,
++            ptr: self.ptr.cast(),
++        })
++    }
++}
++
++/// Project an I/O type to a subview of it.
++///
++/// The syntax is of form `io_project!(io, proj)` where `io` is an expression to a type that
++/// implements [`Io`] and `proj` is a [projection specification](kernel::ptr::project!).
++///
++/// In addition to projecting from [`Io`], you may also project from a [`View`] of an [`Io`].
++///
++/// # Examples
++///
++/// ```
++/// use kernel::io::{
++///     io_project,
++///     Mmio,
++///     View,
++/// };
++/// struct MyStruct { field: u32, }
++///
++/// // SAFETY: All bit patterns are acceptable values for `MyStruct`.
++/// unsafe impl kernel::transmute::FromBytes for MyStruct{};
++/// // SAFETY: Instances of `MyStruct` have no uninitialized portions.
++/// unsafe impl kernel::transmute::AsBytes for MyStruct{};
++///
++/// # fn test(mmio: &Mmio<[MyStruct]>) -> Result {
++/// // let mmio: Mmio<[MyStruct]>;
++/// let field: View<'_, _, u32> = io_project!(mmio, [1]?.field);
++/// let whole: View<'_, _, MyStruct> = io_project!(mmio, [2]?);
++/// let nested: View<'_, Mmio<_>, u32> = io_project!(whole, .field);
++/// # Ok::<(), Error>(()) }
++#[macro_export]
++#[doc(hidden)]
++macro_rules! io_project {
++    ($io:expr, $($proj:tt)*) => {{
++        // Bring `as_view` to scope.
++        use $crate::io::Io as _;
++
++        // Convert IO to view for unified handling.
++        // This also takes advantage to deref coercion.
++        let view: $crate::io::View<'_, _, _> = $io.as_view();
++        let ptr = $crate::ptr::project!(
++            mut view.as_ptr(), $($proj)*
++        );
++        // SAFETY: projection of a projection is still a valid projection.
++        unsafe { $crate::io::View::new_unchecked(view.io(), ptr) }
++    }};
++}
++
++#[doc(inline)]
++pub use crate::io_project;
+-- 
+2.51.2
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 5/8] rust: dma: add methods to unsafely create reference
+ from subview
+From: Gary Guo <gary@garyguo.net>
+Date: Mon, 23 Mar 2026 15:37:57 +0000
+Message-Id: <20260323153807.1360705-6-gary@kernel.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Implement `Io` for `Coherent`, so now `dma::Coherent` can be used with I/O
+projections.
+
+This allows the `as_ref()` and `as_mut()` API to be used in smaller region
+than the whole DMA allocation itself. For example, if a ring buffer is shared
+between GPU and CPU, users may now use the `io_project!` API to obtain a view
+of the buffer that is unified owned by the CPU and get a reference.
+
+Signed-off-by: Gary Guo <gary@garyguo.net>
+---
+ rust/kernel/dma.rs | 56 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 56 insertions(+)
+
+diff --git a/rust/kernel/dma.rs b/rust/kernel/dma.rs
+index 779d4babab9a..ae2939abc166 100644
+--- a/rust/kernel/dma.rs
++++ b/rust/kernel/dma.rs
+@@ -12,6 +12,10 @@
+         Core, //
+     },
+     error::to_result,
++    io::{
++        Io,
++        IoCapable, //
++    },
+     prelude::*,
+     ptr::KnownSize,
+     sync::aref::ARef,
+@@ -864,6 +868,58 @@ fn drop(&mut self) {
+ // can be sent to another thread.
+ unsafe impl<T: KnownSize + Send + ?Sized> Send for Coherent<T> {}
+ 
++impl<T: ?Sized + KnownSize> Io for Coherent<T> {
++    type Type = T;
++
++    #[inline]
++    fn as_ptr(&self) -> *mut Self::Type {
++        self.as_mut_ptr()
++    }
++}
++
++impl<'a, B: ?Sized + KnownSize, T: ?Sized> crate::io::View<'a, Coherent<B>, T> {
++    /// Returns a DMA handle which may be given to the device as the DMA address base of
++    /// the region.
++    #[inline]
++    pub fn dma_handle(&self) -> DmaAddress {
++        let base = self.io();
++        let offset = self.as_ptr().addr() - base.as_ptr().addr();
++        base.dma_handle() + offset as DmaAddress
++    }
++
++    /// Returns a reference to the data in the region.
++    ///
++    /// # Safety
++    ///
++    /// * Callers must ensure that the device does not read/write to/from memory while the returned
++    ///   slice is live.
++    /// * Callers must ensure that this call does not race with a write to the same region while
++    ///   the returned slice is live.
++    #[inline]
++    pub unsafe fn as_ref(self) -> &'a T {
++        let ptr = self.as_ptr();
++        // SAFETY: pointer is aligned and valid per type invariant of `View`. Aliasing rule is
++        // satisfied per safety requirement.
++        unsafe { &*ptr }
++    }
++
++    /// Returns a mutable reference to the data in the region.
++    ///
++    /// # Safety
++    ///
++    /// * Callers must ensure that the device does not read/write to/from memory while the returned
++    ///   slice is live.
++    /// * Callers must ensure that this call does not race with a read or write to the same region
++    ///   while the returned slice is live.
++    #[inline]
++    pub unsafe fn as_mut(self) -> &'a mut T {
++        let ptr = self.as_ptr();
++        // SAFETY: pointer is aligned and valid per type invariant of `View`. Aliasing rule is
++        // satisfied per safety requirement.
++        unsafe { &mut *ptr }
++    }
++}
++
+ /// Reads a field of an item from an allocated region of structs.
+ ///
+ /// The syntax is of the form `kernel::dma_read!(dma, proj)` where `dma` is an expression evaluating
+-- 
+2.51.2
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 6/8] rust: io: add `read_val` and `write_val` function on
+ I/O view
+From: Gary Guo <gary@garyguo.net>
+Date: Mon, 23 Mar 2026 15:37:58 +0000
+Message-Id: <20260323153807.1360705-7-gary@kernel.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+When a view is narrowed to just a primitive, these functions provide a way
+to access them using the `IoCapable` trait. This is used to provide
+`io_read!` and `io_write!` macros, which are generalized version of current
+`dma_read!` and `dma_write!` macro (that works on `Coherent` only, but not
+subview of them, or other I/O backends).
+
+For DMA coherent objects, `IoCapable` is only implemented for atomically
+accessible primitives; this is because `read_volatile`/`write_volatile` can
+behave undesirably for aggregates; LLVM may turn them to multiple
+instructions to access parts and assemble, or could combine them to a
+single instruction.
+
+The ability to read/write aggregates (when atomicity is of no concern),
+could be implemented with copying primitives (e.g. memcpy_{from,to}io) in
+the future.
+
+Signed-off-by: Gary Guo <gary@garyguo.net>
+---
+ rust/kernel/dma.rs | 40 +++++++++++++++++++
+ rust/kernel/io.rs  | 95 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 135 insertions(+)
+
+diff --git a/rust/kernel/dma.rs b/rust/kernel/dma.rs
+index ae2939abc166..fcdf85f5ed50 100644
+--- a/rust/kernel/dma.rs
++++ b/rust/kernel/dma.rs
+@@ -877,6 +877,46 @@ fn as_ptr(&self) -> *mut Self::Type {
+     }
+ }
+ 
++/// Implements [`IoCapable`] on `Coherent` for `$ty` using `read_volatile` and `write_volatile`.
++macro_rules! impl_coherent_io_capable {
++    ($(#[$attr:meta])* $ty:ty) => {
++        $(#[$attr])*
++        impl<T: ?Sized + KnownSize> IoCapable<$ty> for Coherent<T> {
++            #[inline]
++            unsafe fn io_read(&self, address: *mut $ty) -> $ty {
++                // SAFETY:
++                // - By the safety precondition, the address is within bounds of the allocation and
++                //   aligned.
++                // - Using read_volatile() here so that race with hardware is well-defined.
++                // - Using read_volatile() here is not sound if it races with other CPU per Rust
++                //   rules, but this is allowed per LKMM.
++                unsafe { address.read_volatile() }
++            }
++
++            #[inline]
++            unsafe fn io_write(&self, value: $ty, address: *mut $ty) {
++                // SAFETY:
++                // - By the safety precondition, the address is within bounds of the allocation and
++                //   aligned.
++                // - Using write_volatile() here so that race with hardware is well-defined.
++                // - Using write_volatile() here is not sound if it races with other CPU per Rust
++                //   rules, but this is allowed per LKMM.
++                unsafe { address.write_volatile(value) }
++            }
++        }
++    };
++}
++
++// DMA regions support atomic 8, 16, and 32-bit accesses.
++impl_coherent_io_capable!(u8);
++impl_coherent_io_capable!(u16);
++impl_coherent_io_capable!(u32);
++// DMA regions on 64-bit systems also support atomic 64-bit accesses.
++impl_coherent_io_capable!(
++    #[cfg(CONFIG_64BIT)]
++    u64
++);
++
+ impl<'a, B: ?Sized + KnownSize, T: ?Sized> crate::io::View<'a, Coherent<B>, T> {
+     /// Returns a DMA handle which may be given to the device as the DMA address base of
+     /// the region.
+diff --git a/rust/kernel/io.rs b/rust/kernel/io.rs
+index 8166e47f1381..cf2074d066d2 100644
+--- a/rust/kernel/io.rs
++++ b/rust/kernel/io.rs
+@@ -992,6 +992,26 @@ pub fn try_cast<U>(self) -> Result<View<'a, IO, U>>
+     }
+ }
+ 
++impl<T, IO: ?Sized + Io + IoCapable<T>> View<'_, IO, T> {
++    /// Read from I/O memory.
++    ///
++    /// This is only supported on types that is directly supported by `IO` with [`IoCapable`].
++    #[inline]
++    pub fn read_val(&self) -> T {
++        // SAFETY: Per type invariant.
++        unsafe { self.io.io_read(self.ptr) }
++    }
++
++    /// Write to I/O memory.
++    ///
++    /// This is only supported on types that is directly supported by `IO` with [`IoCapable`].
++    #[inline]
++    pub fn write_val(&self, value: T) {
++        // SAFETY: Per type invariant.
++        unsafe { self.io.io_write(value, self.ptr) }
++    }
++}
++
+ /// Project an I/O type to a subview of it.
+ ///
+ /// The syntax is of form `io_project!(io, proj)` where `io` is an expression to a type that
+@@ -1040,3 +1060,78 @@ macro_rules! io_project {
+ 
+ #[doc(inline)]
+ pub use crate::io_project;
++
++/// Read from I/O memory.
++///
++/// The syntax is of form `io_read!(io, proj)` where `io` is an expression to a type that
++/// implements [`Io`] and `proj` is a [projection specification](kernel::ptr::project!).
++///
++/// # Examples
++///
++/// ```
++/// # use kernel::io::View;
++/// struct MyStruct { field: u32, }
++///
++/// // SAFETY: All bit patterns are acceptable values for `MyStruct`.
++/// unsafe impl kernel::transmute::FromBytes for MyStruct{};
++/// // SAFETY: Instances of `MyStruct` have no uninitialized portions.
++/// unsafe impl kernel::transmute::AsBytes for MyStruct{};
++///
++/// # fn test(mmio: &kernel::io::Mmio<[MyStruct]>) -> Result {
++/// // let mmio: Mmio<[MyStruct]>;
++/// let field: u32 = kernel::io::io_read!(mmio, [2]?.field);
++/// # Ok::<(), Error>(()) }
++#[macro_export]
++#[doc(hidden)]
++macro_rules! io_read {
++    ($io:expr, $($proj:tt)*) => {
++        $crate::io_project!($io, $($proj)*).read_val()
++    };
++}
++
++#[doc(inline)]
++pub use crate::io_read;
++
++/// Writes to I/O memory.
++///
++/// The syntax is of form `io_write!(io, proj, val)` where `io` is an expression to a type that
++/// implements [`Io`] and `proj` is a [projection specification](kernel::ptr::project!),
++/// and `val` is the value to be written to the projected location.
++///
++/// # Examples
++///
++/// ```
++/// # use kernel::io::View;
++/// struct MyStruct { field: u32, }
++///
++/// // SAFETY: All bit patterns are acceptable values for `MyStruct`.
++/// unsafe impl kernel::transmute::FromBytes for MyStruct{};
++/// // SAFETY: Instances of `MyStruct` have no uninitialized portions.
++/// unsafe impl kernel::transmute::AsBytes for MyStruct{};
++///
++/// # fn test(mmio: &kernel::io::Mmio<[MyStruct]>) -> Result {
++/// // let mmio: Mmio<[MyStruct]>;
++/// kernel::io::io_write!(mmio, [2]?.field, 10);
++/// # Ok::<(), Error>(()) }
++#[macro_export]
++#[doc(hidden)]
++macro_rules! io_write {
++    (@parse [$io:expr] [$($proj:tt)*] [, $val:expr]) => {
++        $crate::io_project!($io, $($proj)*).write_val($val)
++    };
++    (@parse [$io:expr] [$($proj:tt)*] [.$field:tt $($rest:tt)*]) => {
++        $crate::io_write!(@parse [$io] [$($proj)* .$field] [$($rest)*])
++    };
++    (@parse [$io:expr] [$($proj:tt)*] [[$index:expr]? $($rest:tt)*]) => {
++        $crate::io_write!(@parse [$io] [$($proj)* [$index]?] [$($rest)*])
++    };
++    (@parse [$io:expr] [$($proj:tt)*] [[$index:expr] $($rest:tt)*]) => {
++        $crate::io_write!(@parse [$io] [$($proj)* [$index]] [$($rest)*])
++    };
++    ($io:expr, $($rest:tt)*) => {
++        $crate::io_write!(@parse [$io] [] [$($rest)*])
++    };
++}
++
++#[doc(inline)]
++pub use crate::io_write;
+-- 
+2.51.2
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 7/8] gpu: nova-core: use I/O projection for cleaner
+ encapsulation
+From: Gary Guo <gary@garyguo.net>
+Date: Mon, 23 Mar 2026 15:37:59 +0000
+Message-Id: <20260323153807.1360705-8-gary@kernel.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Use `io_project!` for PTE array and message queues to remove the
+break off encapsulation.
+
+The remaining `dma_read!` and `dma_write!` is now only acting on
+primitives; thus replace by `io_read!` and `io_write!`.
+
+Signed-off-by: Gary Guo <gary@garyguo.net>
+---
+ drivers/gpu/nova-core/gsp.rs      | 42 +++++++++-------
+ drivers/gpu/nova-core/gsp/cmdq.rs | 69 ++++++++++++++-----------
+ drivers/gpu/nova-core/gsp/fw.rs   | 84 ++++++++++++-------------------
+ 3 files changed, 96 insertions(+), 99 deletions(-)
+
+diff --git a/drivers/gpu/nova-core/gsp.rs b/drivers/gpu/nova-core/gsp.rs
+index a045c4189989..e675b0227872 100644
+--- a/drivers/gpu/nova-core/gsp.rs
++++ b/drivers/gpu/nova-core/gsp.rs
+@@ -9,8 +9,13 @@
+         CoherentBox,
+         DmaAddress, //
+     },
++    io::{
++        self,
++        io_project, //
++    },
+     pci,
+     prelude::*,
++    ptr::KnownSize,
+     transmute::{
+         AsBytes,
+         FromBytes, //
+@@ -53,12 +58,20 @@ unsafe impl<const NUM_ENTRIES: usize> FromBytes for PteArray<NUM_ENTRIES> {}
+ unsafe impl<const NUM_ENTRIES: usize> AsBytes for PteArray<NUM_ENTRIES> {}
+ 
+ impl<const NUM_PAGES: usize> PteArray<NUM_PAGES> {
+-    /// Returns the page table entry for `index`, for a mapping starting at `start`.
+-    // TODO: Replace with `IoView` projection once available.
+-    fn entry(start: DmaAddress, index: usize) -> Result<u64> {
+-        start
+-            .checked_add(num::usize_as_u64(index) << GSP_PAGE_SHIFT)
+-            .ok_or(EOVERFLOW)
++    /// Initialize a new page table array mapping `NUM_PAGES` GSP pages starting at address `start`.
++    fn init<T: FromBytes + AsBytes + KnownSize + ?Sized>(
++        view: io::View<'_, Coherent<T>, Self>,
++        start: DmaAddress,
++    ) -> Result<()> {
++        for i in 0..NUM_PAGES {
++            io_project!(view, .0[i]).write_val(
++                start
++                    .checked_add(num::usize_as_u64(i) << GSP_PAGE_SHIFT)
++                    .ok_or(EOVERFLOW)?,
++            );
++        }
++
++        Ok(())
+     }
+ }
+ 
+@@ -90,17 +103,12 @@ fn new(dev: &device::Device<device::Bound>) -> Result<Self> {
+         )?);
+ 
+         let start_addr = obj.0.dma_handle();
+-
+-        // SAFETY: `obj` has just been created and we are its sole user.
+-        let pte_region =
+-            unsafe { &mut obj.0.as_mut()[size_of::<u64>()..][..NUM_PAGES * size_of::<u64>()] };
+-
+-        // Write values one by one to avoid an on-stack instance of `PteArray`.
+-        for (i, chunk) in pte_region.chunks_exact_mut(size_of::<u64>()).enumerate() {
+-            let pte_value = PteArray::<0>::entry(start_addr, i)?;
+-
+-            chunk.copy_from_slice(&pte_value.to_ne_bytes());
+-        }
++        let pte_view = io_project!(
++            obj.0,
++            [size_of::<u64>()..]?[..NUM_PAGES * size_of::<u64>()]?
++        )
++        .try_cast::<PteArray<NUM_PAGES>>()?;
++        PteArray::init(pte_view, start_addr)?;
+ 
+         Ok(obj)
+     }
+diff --git a/drivers/gpu/nova-core/gsp/cmdq.rs b/drivers/gpu/nova-core/gsp/cmdq.rs
+index f38790601a0f..191b648e2ede 100644
+--- a/drivers/gpu/nova-core/gsp/cmdq.rs
++++ b/drivers/gpu/nova-core/gsp/cmdq.rs
+@@ -2,16 +2,25 @@
+ 
+ mod continuation;
+ 
+-use core::mem;
++use core::{
++    mem,
++    sync::atomic::{
++        fence,
++        Ordering, //
++    },
++};
+ 
+ use kernel::{
+     device,
+     dma::{
+         Coherent,
++        CoherentBox,
+         DmaAddress, //
+     },
+-    dma_write,
+-    io::poll::read_poll_timeout,
++    io::{
++        io_project,
++        poll::read_poll_timeout, //
++    },
+     new_mutex,
+     prelude::*,
+     sync::{
+@@ -165,20 +174,18 @@ struct MsgqData {
+ #[repr(C)]
+ // There is no struct defined for this in the open-gpu-kernel-source headers.
+ // Instead it is defined by code in `GspMsgQueuesInit()`.
+-// TODO: Revert to private once `IoView` projections replace the `gsp_mem` module.
+-pub(super) struct Msgq {
++struct Msgq {
+     /// Header for sending messages, including the write pointer.
+-    pub(super) tx: MsgqTxHeader,
++    tx: MsgqTxHeader,
+     /// Header for receiving messages, including the read pointer.
+-    pub(super) rx: MsgqRxHeader,
++    rx: MsgqRxHeader,
+     /// The message queue proper.
+     msgq: MsgqData,
+ }
+ 
+ /// Structure shared between the driver and the GSP and containing the command and message queues.
+ #[repr(C)]
+-// TODO: Revert to private once `IoView` projections replace the `gsp_mem` module.
+-pub(super) struct GspMem {
++struct GspMem {
+     /// Self-mapping page table entries.
+     ptes: PteArray<{ Self::PTE_ARRAY_SIZE }>,
+     /// CPU queue: the driver writes commands here, and the GSP reads them. It also contains the
+@@ -186,13 +193,13 @@ pub(super) struct GspMem {
+     /// index into the GSP queue.
+     ///
+     /// This member is read-only for the GSP.
+-    pub(super) cpuq: Msgq,
++    cpuq: Msgq,
+     /// GSP queue: the GSP writes messages here, and the driver reads them. It also contains the
+     /// write and read pointers that the GSP updates. This means that the read pointer here is an
+     /// index into the CPU queue.
+     ///
+     /// This member is read-only for the driver.
+-    pub(super) gspq: Msgq,
++    gspq: Msgq,
+ }
+ 
+ impl GspMem {
+@@ -226,20 +233,13 @@ fn new(dev: &device::Device<device::Bound>) -> Result<Self> {
+         const MSGQ_SIZE: u32 = num::usize_into_u32::<{ size_of::<Msgq>() }>();
+         const RX_HDR_OFF: u32 = num::usize_into_u32::<{ mem::offset_of!(Msgq, rx) }>();
+ 
+-        let gsp_mem = Coherent::<GspMem>::zeroed(dev, GFP_KERNEL)?;
++        let mut gsp_mem = CoherentBox::<GspMem>::zeroed(dev, GFP_KERNEL)?;
++        gsp_mem.cpuq.tx = MsgqTxHeader::new(MSGQ_SIZE, RX_HDR_OFF, MSGQ_NUM_PAGES);
++        gsp_mem.cpuq.rx = MsgqRxHeader::new();
+ 
++        let gsp_mem: Coherent<_> = gsp_mem.into();
+         let start = gsp_mem.dma_handle();
+-        // Write values one by one to avoid an on-stack instance of `PteArray`.
+-        for i in 0..GspMem::PTE_ARRAY_SIZE {
+-            dma_write!(gsp_mem, .ptes.0[i], PteArray::<0>::entry(start, i)?);
+-        }
+-
+-        dma_write!(
+-            gsp_mem,
+-            .cpuq.tx,
+-            MsgqTxHeader::new(MSGQ_SIZE, RX_HDR_OFF, MSGQ_NUM_PAGES)
+-        );
+-        dma_write!(gsp_mem, .cpuq.rx, MsgqRxHeader::new());
++        PteArray::init(io_project!(gsp_mem, .ptes), start)?;
+ 
+         Ok(Self(gsp_mem))
+     }
+@@ -380,7 +380,7 @@ fn allocate_command(&mut self, size: usize, timeout: Delta) -> Result<GspCommand
+     //
+     // - The returned value is within `0..MSGQ_NUM_PAGES`.
+     fn gsp_write_ptr(&self) -> u32 {
+-        super::fw::gsp_mem::gsp_write_ptr(&self.0)
++        MsgqTxHeader::write_ptr(io_project!(self.0, .gspq.tx)) % MSGQ_NUM_PAGES
+     }
+ 
+     // Returns the index of the memory page the GSP will read the next command from.
+@@ -389,7 +389,7 @@ fn gsp_write_ptr(&self) -> u32 {
+     //
+     // - The returned value is within `0..MSGQ_NUM_PAGES`.
+     fn gsp_read_ptr(&self) -> u32 {
+-        super::fw::gsp_mem::gsp_read_ptr(&self.0)
++        MsgqRxHeader::read_ptr(io_project!(self.0, .gspq.rx)) % MSGQ_NUM_PAGES
+     }
+ 
+     // Returns the index of the memory page the CPU can read the next message from.
+@@ -398,12 +398,18 @@ fn gsp_read_ptr(&self) -> u32 {
+     //
+     // - The returned value is within `0..MSGQ_NUM_PAGES`.
+     fn cpu_read_ptr(&self) -> u32 {
+-        super::fw::gsp_mem::cpu_read_ptr(&self.0)
++        MsgqRxHeader::read_ptr(io_project!(self.0, .cpuq.rx)) % MSGQ_NUM_PAGES
+     }
+ 
+     // Informs the GSP that it can send `elem_count` new pages into the message queue.
+     fn advance_cpu_read_ptr(&mut self, elem_count: u32) {
+-        super::fw::gsp_mem::advance_cpu_read_ptr(&self.0, elem_count)
++        let rx = io_project!(self.0, .cpuq.rx);
++        let rptr = MsgqRxHeader::read_ptr(rx).wrapping_add(elem_count) % MSGQ_NUM_PAGES;
++
++        // Ensure read pointer is properly ordered.
++        fence(Ordering::SeqCst);
++
++        MsgqRxHeader::set_read_ptr(rx, rptr)
+     }
+ 
+     // Returns the index of the memory page the CPU can write the next command to.
+@@ -412,12 +418,17 @@ fn advance_cpu_read_ptr(&mut self, elem_count: u32) {
+     //
+     // - The returned value is within `0..MSGQ_NUM_PAGES`.
+     fn cpu_write_ptr(&self) -> u32 {
+-        super::fw::gsp_mem::cpu_write_ptr(&self.0)
++        MsgqTxHeader::write_ptr(io_project!(self.0, .cpuq.tx)) % MSGQ_NUM_PAGES
+     }
+ 
+     // Informs the GSP that it can process `elem_count` new pages from the command queue.
+     fn advance_cpu_write_ptr(&mut self, elem_count: u32) {
+-        super::fw::gsp_mem::advance_cpu_write_ptr(&self.0, elem_count)
++        let tx = io_project!(self.0, .cpuq.tx);
++        let wptr = MsgqTxHeader::write_ptr(tx).wrapping_add(elem_count) % MSGQ_NUM_PAGES;
++        MsgqTxHeader::set_write_ptr(tx, wptr);
++
++        // Ensure all command data is visible before triggering the GSP read.
++        fence(Ordering::SeqCst);
+     }
+ }
+ 
+diff --git a/drivers/gpu/nova-core/gsp/fw.rs b/drivers/gpu/nova-core/gsp/fw.rs
+index 847b5eb215d4..fbac382e1969 100644
+--- a/drivers/gpu/nova-core/gsp/fw.rs
++++ b/drivers/gpu/nova-core/gsp/fw.rs
+@@ -10,6 +10,11 @@
+ 
+ use kernel::{
+     dma::Coherent,
++    io::{
++        self,
++        io_read,
++        io_write, //
++    },
+     prelude::*,
+     ptr::{
+         Alignable,
+@@ -40,59 +45,6 @@
+     },
+ };
+ 
+-// TODO: Replace with `IoView` projections once available.
+-pub(super) mod gsp_mem {
+-    use core::sync::atomic::{
+-        fence,
+-        Ordering, //
+-    };
+-
+-    use kernel::{
+-        dma::Coherent,
+-        dma_read,
+-        dma_write, //
+-    };
+-
+-    use crate::gsp::cmdq::{
+-        GspMem,
+-        MSGQ_NUM_PAGES, //
+-    };
+-
+-    pub(in crate::gsp) fn gsp_write_ptr(qs: &Coherent<GspMem>) -> u32 {
+-        dma_read!(qs, .gspq.tx.0.writePtr) % MSGQ_NUM_PAGES
+-    }
+-
+-    pub(in crate::gsp) fn gsp_read_ptr(qs: &Coherent<GspMem>) -> u32 {
+-        dma_read!(qs, .gspq.rx.0.readPtr) % MSGQ_NUM_PAGES
+-    }
+-
+-    pub(in crate::gsp) fn cpu_read_ptr(qs: &Coherent<GspMem>) -> u32 {
+-        dma_read!(qs, .cpuq.rx.0.readPtr) % MSGQ_NUM_PAGES
+-    }
+-
+-    pub(in crate::gsp) fn advance_cpu_read_ptr(qs: &Coherent<GspMem>, count: u32) {
+-        let rptr = cpu_read_ptr(qs).wrapping_add(count) % MSGQ_NUM_PAGES;
+-
+-        // Ensure read pointer is properly ordered.
+-        fence(Ordering::SeqCst);
+-
+-        dma_write!(qs, .cpuq.rx.0.readPtr, rptr);
+-    }
+-
+-    pub(in crate::gsp) fn cpu_write_ptr(qs: &Coherent<GspMem>) -> u32 {
+-        dma_read!(qs, .cpuq.tx.0.writePtr) % MSGQ_NUM_PAGES
+-    }
+-
+-    pub(in crate::gsp) fn advance_cpu_write_ptr(qs: &Coherent<GspMem>, count: u32) {
+-        let wptr = cpu_write_ptr(qs).wrapping_add(count) % MSGQ_NUM_PAGES;
+-
+-        dma_write!(qs, .cpuq.tx.0.writePtr, wptr);
+-
+-        // Ensure all command data is visible before triggering the GSP read.
+-        fence(Ordering::SeqCst);
+-    }
+-}
+-
+ /// Maximum size of a single GSP message queue element in bytes.
+ pub(crate) const GSP_MSG_QUEUE_ELEMENT_SIZE_MAX: usize =
+     num::u32_as_usize(bindings::GSP_MSG_QUEUE_ELEMENT_SIZE_MAX);
+@@ -706,6 +658,19 @@ pub(crate) fn new(msgq_size: u32, rx_hdr_offset: u32, msg_count: u32) -> Self {
+             entryOff: num::usize_into_u32::<GSP_PAGE_SIZE>(),
+         })
+     }
++
++    /// Returns the value of the write pointer for this queue.
++    pub(crate) fn write_ptr<T: KnownSize + ?Sized>(this: io::View<'_, Coherent<T>, Self>) -> u32 {
++        io_read!(this, .0.writePtr)
++    }
++
++    /// Sets the value of the write pointer for this queue.
++    pub(crate) fn set_write_ptr<T: KnownSize + ?Sized>(
++        this: io::View<'_, Coherent<T>, Self>,
++        val: u32,
++    ) {
++        io_write!(this, .0.writePtr, val)
++    }
+ }
+ 
+ // SAFETY: Padding is explicit and does not contain uninitialized data.
+@@ -721,6 +686,19 @@ impl MsgqRxHeader {
+     pub(crate) fn new() -> Self {
+         Self(Default::default())
+     }
++
++    /// Returns the value of the read pointer for this queue.
++    pub(crate) fn read_ptr<T: KnownSize + ?Sized>(this: io::View<'_, Coherent<T>, Self>) -> u32 {
++        io_read!(this, .0.readPtr)
++    }
++
++    /// Sets the value of the read pointer for this queue.
++    pub(crate) fn set_read_ptr<T: KnownSize + ?Sized>(
++        this: io::View<'_, Coherent<T>, Self>,
++        val: u32,
++    ) {
++        io_write!(this, .0.readPtr, val)
++    }
+ }
+ 
+ // SAFETY: Padding is explicit and does not contain uninitialized data.
+-- 
+2.51.2
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 8/8] rust: dma: drop `dma_read!` and `dma_write!` API
+From: Gary Guo <gary@garyguo.net>
+Date: Mon, 23 Mar 2026 15:38:00 +0000
+Message-Id: <20260323153807.1360705-9-gary@kernel.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+The primitive read/write use case is covered by the `io_read!` and
+`io_write!` macro. The non-primitive use case was finicky; they should
+either be achieved using `CoherentBox` or `as_ref()/as_mut()` to assert the
+lack of concurrent access, or should be using memcpy-like APIs to express
+the non-atomic and tearable nature.
+
+Signed-off-by: Gary Guo <gary@garyguo.net>
+Reviewed-by: Andreas Hindborg <a.hindborg@kernel.org>
+---
+ rust/kernel/dma.rs       | 131 ---------------------------------------
+ samples/rust/rust_dma.rs |  21 ++++---
+ 2 files changed, 14 insertions(+), 138 deletions(-)
+
+diff --git a/rust/kernel/dma.rs b/rust/kernel/dma.rs
+index fcdf85f5ed50..7124886a468d 100644
+--- a/rust/kernel/dma.rs
++++ b/rust/kernel/dma.rs
+@@ -598,52 +598,6 @@ pub unsafe fn as_mut(&self) -> &mut T {
+         // SAFETY: per safety requirement.
+         unsafe { &mut *self.as_mut_ptr() }
+     }
+-
+-    /// Reads the value of `field` and ensures that its type is [`FromBytes`].
+-    ///
+-    /// # Safety
+-    ///
+-    /// This must be called from the [`dma_read`] macro which ensures that the `field` pointer is
+-    /// validated beforehand.
+-    ///
+-    /// Public but hidden since it should only be used from [`dma_read`] macro.
+-    #[doc(hidden)]
+-    pub unsafe fn field_read<F: FromBytes>(&self, field: *const F) -> F {
+-        // SAFETY:
+-        // - By the safety requirements field is valid.
+-        // - Using read_volatile() here is not sound as per the usual rules, the usage here is
+-        // a special exception with the following notes in place. When dealing with a potential
+-        // race from a hardware or code outside kernel (e.g. user-space program), we need that
+-        // read on a valid memory is not UB. Currently read_volatile() is used for this, and the
+-        // rationale behind is that it should generate the same code as READ_ONCE() which the
+-        // kernel already relies on to avoid UB on data races. Note that the usage of
+-        // read_volatile() is limited to this particular case, it cannot be used to prevent
+-        // the UB caused by racing between two kernel functions nor do they provide atomicity.
+-        unsafe { field.read_volatile() }
+-    }
+-
+-    /// Writes a value to `field` and ensures that its type is [`AsBytes`].
+-    ///
+-    /// # Safety
+-    ///
+-    /// This must be called from the [`dma_write`] macro which ensures that the `field` pointer is
+-    /// validated beforehand.
+-    ///
+-    /// Public but hidden since it should only be used from [`dma_write`] macro.
+-    #[doc(hidden)]
+-    pub unsafe fn field_write<F: AsBytes>(&self, field: *mut F, val: F) {
+-        // SAFETY:
+-        // - By the safety requirements field is valid.
+-        // - Using write_volatile() here is not sound as per the usual rules, the usage here is
+-        // a special exception with the following notes in place. When dealing with a potential
+-        // race from a hardware or code outside kernel (e.g. user-space program), we need that
+-        // write on a valid memory is not UB. Currently write_volatile() is used for this, and the
+-        // rationale behind is that it should generate the same code as WRITE_ONCE() which the
+-        // kernel already relies on to avoid UB on data races. Note that the usage of
+-        // write_volatile() is limited to this particular case, it cannot be used to prevent
+-        // the UB caused by racing between two kernel functions nor do they provide atomicity.
+-        unsafe { field.write_volatile(val) }
+-    }
+ }
+ 
+ impl<T: AsBytes + FromBytes> Coherent<T> {
+@@ -959,88 +913,3 @@ pub unsafe fn as_mut(self) -> &'a mut T {
+         unsafe { &mut *ptr }
+     }
+ }
+-
+-/// Reads a field of an item from an allocated region of structs.
+-///
+-/// The syntax is of the form `kernel::dma_read!(dma, proj)` where `dma` is an expression evaluating
+-/// to a [`Coherent`] and `proj` is a [projection specification](kernel::ptr::project!).
+-///
+-/// # Examples
+-///
+-/// ```
+-/// use kernel::device::Device;
+-/// use kernel::dma::{attrs::*, Coherent};
+-///
+-/// struct MyStruct { field: u32, }
+-///
+-/// // SAFETY: All bit patterns are acceptable values for `MyStruct`.
+-/// unsafe impl kernel::transmute::FromBytes for MyStruct{};
+-/// // SAFETY: Instances of `MyStruct` have no uninitialized portions.
+-/// unsafe impl kernel::transmute::AsBytes for MyStruct{};
+-///
+-/// # fn test(alloc: &kernel::dma::Coherent<[MyStruct]>) -> Result {
+-/// let whole = kernel::dma_read!(alloc, [2]?);
+-/// let field = kernel::dma_read!(alloc, [1]?.field);
+-/// # Ok::<(), Error>(()) }
+-/// ```
+-#[macro_export]
+-macro_rules! dma_read {
+-    ($dma:expr, $($proj:tt)*) => {{
+-        let dma = &$dma;
+-        let ptr = $crate::ptr::project!(
+-            $crate::dma::Coherent::as_ptr(dma), $($proj)*
+-        );
+-        // SAFETY: The pointer created by the projection is within the DMA region.
+-        unsafe { $crate::dma::Coherent::field_read(dma, ptr) }
+-    }};
+-}
+-
+-/// Writes to a field of an item from an allocated region of structs.
+-///
+-/// The syntax is of the form `kernel::dma_write!(dma, proj, val)` where `dma` is an expression
+-/// evaluating to a [`Coherent`], `proj` is a
+-/// [projection specification](kernel::ptr::project!), and `val` is the value to be written to the
+-/// projected location.
+-///
+-/// # Examples
+-///
+-/// ```
+-/// use kernel::device::Device;
+-/// use kernel::dma::{attrs::*, Coherent};
+-///
+-/// struct MyStruct { member: u32, }
+-///
+-/// // SAFETY: All bit patterns are acceptable values for `MyStruct`.
+-/// unsafe impl kernel::transmute::FromBytes for MyStruct{};
+-/// // SAFETY: Instances of `MyStruct` have no uninitialized portions.
+-/// unsafe impl kernel::transmute::AsBytes for MyStruct{};
+-///
+-/// # fn test(alloc: &kernel::dma::Coherent<[MyStruct]>) -> Result {
+-/// kernel::dma_write!(alloc, [2]?.member, 0xf);
+-/// kernel::dma_write!(alloc, [1]?, MyStruct { member: 0xf });
+-/// # Ok::<(), Error>(()) }
+-/// ```
+-#[macro_export]
+-macro_rules! dma_write {
+-    (@parse [$dma:expr] [$($proj:tt)*] [, $val:expr]) => {{
+-        let dma = &$dma;
+-        let ptr = $crate::ptr::project!(
+-            mut $crate::dma::Coherent::as_mut_ptr(dma), $($proj)*
+-        );
+-        let val = $val;
+-        // SAFETY: The pointer created by the projection is within the DMA region.
+-        unsafe { $crate::dma::Coherent::field_write(dma, ptr, val) }
+-    }};
+-    (@parse [$dma:expr] [$($proj:tt)*] [.$field:tt $($rest:tt)*]) => {
+-        $crate::dma_write!(@parse [$dma] [$($proj)* .$field] [$($rest)*])
+-    };
+-    (@parse [$dma:expr] [$($proj:tt)*] [[$index:expr]? $($rest:tt)*]) => {
+-        $crate::dma_write!(@parse [$dma] [$($proj)* [$index]?] [$($rest)*])
+-    };
+-    (@parse [$dma:expr] [$($proj:tt)*] [[$index:expr] $($rest:tt)*]) => {
+-        $crate::dma_write!(@parse [$dma] [$($proj)* [$index]] [$($rest)*])
+-    };
+-    ($dma:expr, $($rest:tt)*) => {
+-        $crate::dma_write!(@parse [$dma] [] [$($rest)*])
+-    };
+-}
+diff --git a/samples/rust/rust_dma.rs b/samples/rust/rust_dma.rs
+index 314ef51cd86c..7bd1b8588835 100644
+--- a/samples/rust/rust_dma.rs
++++ b/samples/rust/rust_dma.rs
+@@ -6,7 +6,14 @@
+ 
+ use kernel::{
+     device::Core,
+-    dma::{Coherent, DataDirection, Device, DmaMask},
++    dma::{
++        Coherent,
++        CoherentBox,
++        DataDirection,
++        Device,
++        DmaMask, //
++    },
++    io::io_read,
+     page, pci,
+     prelude::*,
+     scatterlist::{Owned, SGTable},
+@@ -64,11 +71,11 @@ fn probe(pdev: &pci::Device<Core>, _info: &Self::IdInfo) -> impl PinInit<Self, E
+             // SAFETY: There are no concurrent calls to DMA allocation and mapping primitives.
+             unsafe { pdev.dma_set_mask_and_coherent(mask)? };
+ 
+-            let ca: Coherent<[MyStruct]> =
+-                Coherent::zeroed_slice(pdev.as_ref(), TEST_VALUES.len(), GFP_KERNEL)?;
++            let mut ca: CoherentBox<[MyStruct]> =
++                CoherentBox::zeroed_slice(pdev.as_ref(), TEST_VALUES.len(), GFP_KERNEL)?;
+ 
+             for (i, value) in TEST_VALUES.into_iter().enumerate() {
+-                kernel::dma_write!(ca, [i]?, MyStruct::new(value.0, value.1));
++                ca.init_at(i, MyStruct::new(value.0, value.1))?;
+             }
+ 
+             let size = 4 * page::PAGE_SIZE;
+@@ -78,7 +85,7 @@ fn probe(pdev: &pci::Device<Core>, _info: &Self::IdInfo) -> impl PinInit<Self, E
+ 
+             Ok(try_pin_init!(Self {
+                 pdev: pdev.into(),
+-                ca,
++                ca: ca.into(),
+                 sgt <- sgt,
+             }))
+         })
+@@ -88,8 +95,8 @@ fn probe(pdev: &pci::Device<Core>, _info: &Self::IdInfo) -> impl PinInit<Self, E
+ impl DmaSampleDriver {
+     fn check_dma(&self) -> Result {
+         for (i, value) in TEST_VALUES.into_iter().enumerate() {
+-            let val0 = kernel::dma_read!(self.ca, [i]?.h);
+-            let val1 = kernel::dma_read!(self.ca, [i]?.b);
++            let val0 = io_read!(self.ca, [i]?.h);
++            let val1 = io_read!(self.ca, [i]?.b);
+ 
+             assert_eq!(val0, value.0);
+             assert_eq!(val1, value.1);
+-- 
+2.51.2
+

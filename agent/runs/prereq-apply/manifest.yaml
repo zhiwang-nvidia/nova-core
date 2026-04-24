@@ -1,0 +1,132 @@
+run_id: "prereq-apply"
+
+kernel_tree: "/media/inno/disk/src/john"
+baseline_commit: "fcbf7b61edff"
+branch: "nova-core-blackwell-v000-firmware-CL_37745303-no-ELF"
+remote: "origin"
+
+build:
+  arch: "x86_64"
+  cross_compile: ""
+  defconfig: ""
+  out_dir: ""
+  extra_args: ""
+
+comments: []
+
+# Phase 1: P0 — Joel MM v11 (23 patches)
+# Source: tag nova-mm-v11-20260415, exported to PATCHES/joel-mm-v11/
+# Dependencies: P1 (clist+buddy) already on HEAD
+# Note: Patches were built from merge-base 7c50d748b4a6, HEAD is 57 commits ahead.
+#       register.rs unchanged on HEAD, conflicts expected mainly in gsp/boot.rs and gpu.rs.
+p0_patches:
+  source: "PATCHES/joel-mm-v11/"
+  description: "Joel Fernandes MM v11 — bitfield extraction + full MM stack (PRAMIN, buddy, MMU v2/v3, VMM, BAR1)"
+  count: 23
+  list:
+    - id: "p0-01"
+      file: "PATCHES/joel-mm-v11/0001-rust-extract-bitfield-macro-from-register.patch"
+      subject: "rust: extract bitfield! macro from register!"
+    - id: "p0-02"
+      file: "PATCHES/joel-mm-v11/0002-rust-bitfield-Add-KUNIT-tests-for-bitfield.patch"
+      subject: "rust: bitfield: Add KUNIT tests for bitfield"
+    - id: "p0-03"
+      file: "PATCHES/joel-mm-v11/0003-gpu-nova-core-gsp-Return-GspStaticInfo-from-boot.patch"
+      subject: "gpu: nova-core: gsp: Return GspStaticInfo from boot()"
+    - id: "p0-04"
+      file: "PATCHES/joel-mm-v11/0004-gpu-nova-core-gsp-Extract-usable-FB-region-from-GSP.patch"
+      subject: "gpu: nova-core: gsp: Extract usable FB region from GSP"
+    - id: "p0-05"
+      file: "PATCHES/joel-mm-v11/0005-gpu-nova-core-gsp-Expose-total-physical-VRAM-end-fro.patch"
+      subject: "gpu: nova-core: gsp: Expose total physical VRAM end from FB region info"
+    - id: "p0-06"
+      file: "PATCHES/joel-mm-v11/0006-gpu-nova-core-mm-Add-support-to-use-PRAMIN-windows-t.patch"
+      subject: "gpu: nova-core: mm: Add support to use PRAMIN windows to write to VRAM"
+    - id: "p0-07"
+      file: "PATCHES/joel-mm-v11/0007-docs-gpu-nova-core-Document-the-PRAMIN-aperture-mech.patch"
+      subject: "docs: gpu: nova-core: Document the PRAMIN aperture mechanism"
+    - id: "p0-08"
+      file: "PATCHES/joel-mm-v11/0008-gpu-nova-core-switch-to-kernel-bitfield-macro.patch"
+      subject: "gpu: nova-core: switch to kernel bitfield macro"
+    - id: "p0-09"
+      file: "PATCHES/joel-mm-v11/0009-gpu-nova-core-mm-Add-common-memory-management-types.patch"
+      subject: "gpu: nova-core: mm: Add common memory management types"
+    - id: "p0-10"
+      file: "PATCHES/joel-mm-v11/0010-gpu-nova-core-mm-Add-TLB-flush-support.patch"
+      subject: "gpu: nova-core: mm: Add TLB flush support"
+    - id: "p0-11"
+      file: "PATCHES/joel-mm-v11/0011-gpu-nova-core-mm-Add-GpuMm-centralized-memory-manage.patch"
+      subject: "gpu: nova-core: mm: Add GpuMm centralized memory manager"
+    - id: "p0-12"
+      file: "PATCHES/joel-mm-v11/0012-gpu-nova-core-mm-Add-common-types-for-all-page-table.patch"
+      subject: "gpu: nova-core: mm: Add common types for all page table formats"
+    - id: "p0-13"
+      file: "PATCHES/joel-mm-v11/0013-gpu-nova-core-mm-Add-MMU-v2-page-table-types.patch"
+      subject: "gpu: nova-core: mm: Add MMU v2 page table types"
+    - id: "p0-14"
+      file: "PATCHES/joel-mm-v11/0014-gpu-nova-core-mm-Add-MMU-v3-page-table-types.patch"
+      subject: "gpu: nova-core: mm: Add MMU v3 page table types"
+    - id: "p0-15"
+      file: "PATCHES/joel-mm-v11/0015-gpu-nova-core-mm-Add-unified-page-table-entry-wrappe.patch"
+      subject: "gpu: nova-core: mm: Add unified page table entry wrapper enums"
+    - id: "p0-16"
+      file: "PATCHES/joel-mm-v11/0016-gpu-nova-core-mm-Add-page-table-walker-for-MMU-v2-v3.patch"
+      subject: "gpu: nova-core: mm: Add page table walker for MMU v2/v3"
+    - id: "p0-17"
+      file: "PATCHES/joel-mm-v11/0017-gpu-nova-core-mm-Add-Virtual-Memory-Manager.patch"
+      subject: "gpu: nova-core: mm: Add Virtual Memory Manager"
+    - id: "p0-18"
+      file: "PATCHES/joel-mm-v11/0018-gpu-nova-core-mm-Add-virtual-address-range-tracking-.patch"
+      subject: "gpu: nova-core: mm: Add virtual address range tracking to VMM"
+    - id: "p0-19"
+      file: "PATCHES/joel-mm-v11/0019-gpu-nova-core-mm-Add-multi-page-mapping-API-to-VMM.patch"
+      subject: "gpu: nova-core: mm: Add multi-page mapping API to VMM"
+    - id: "p0-20"
+      file: "PATCHES/joel-mm-v11/0020-gpu-nova-core-Add-BAR1-aperture-type-and-size-consta.patch"
+      subject: "gpu: nova-core: Add BAR1 aperture type and size constant"
+    - id: "p0-21"
+      file: "PATCHES/joel-mm-v11/0021-gpu-nova-core-mm-Add-BAR1-user-interface.patch"
+      subject: "gpu: nova-core: mm: Add BAR1 user interface"
+    - id: "p0-22"
+      file: "PATCHES/joel-mm-v11/0022-gpu-nova-core-mm-Add-BAR1-memory-management-self-tes.patch"
+      subject: "gpu: nova-core: mm: Add BAR1 memory management self-tests"
+    - id: "p0-23"
+      file: "PATCHES/joel-mm-v11/0023-gpu-nova-core-mm-Add-PRAMIN-aperture-self-tests.patch"
+      subject: "gpu: nova-core: mm: Add PRAMIN aperture self-tests"
+
+# Phase 2: P2 — Gary I/O generalization (8 patches)
+# Source: lore via b4, in PATCHES/gary-io/
+# Dependencies: standalone (Coherent API rework already on HEAD)
+# Note: john tree already has Gary's DMA Coherent rework (ptr projection, Coherent<T>)
+#       but NOT the I/O generalization (Mmio, io::view, etc.)
+#       After P0, register.rs will have bitfield extracted — minor conflicts possible with patch 2/8.
+p2_patches:
+  source: "PATCHES/gary-io/20260323_gary_i_o_type_generalization_and_projection.mbx"
+  description: "Gary Guo I/O type generalization — Mmio generalization, io::view, read_val/write_val, nova-core I/O projection, drop dma_read!/dma_write!"
+  count: 8
+  list:
+    - id: "p2-01"
+      subject: "rust: io: generalize MmioRaw to pointer to arbitrary type"
+    - id: "p2-02"
+      subject: "rust: io: generalize Mmio to arbitrary type"
+    - id: "p2-03"
+      subject: "rust: io: use pointer types instead of address"
+    - id: "p2-04"
+      subject: "rust: io: add view type"
+    - id: "p2-05"
+      subject: "rust: dma: add methods to unsafely create reference from subview"
+    - id: "p2-06"
+      subject: "rust: io: add read_val and write_val function on I/O view"
+    - id: "p2-07"
+      subject: "gpu: nova-core: use I/O projection for cleaner encapsulation"
+    - id: "p2-08"
+      subject: "rust: dma: drop dma_read! and dma_write! API"
+
+# Conflict expectations:
+# P0 conflicts: gsp/boot.rs (Return GspStaticInfo), gpu.rs, gsp/commands.rs (57 commits diverged)
+# P2 conflicts: register.rs (after P0 extracted bitfield), gsp/cmdq.rs (I/O projection)
+# Strategy: per-patch manual conflict resolution per developer SOP
+
+gates:
+  require_review_pass: false
+  dry_run: false

@@ -1,0 +1,43 @@
+[PATCH v10] rust: ffi: module restructure (mm prep dependency)
+https://lore.kernel.org/nouveau/
+a8186da63ac3 rust: ffi: Convert pub use to pub mod and create ffi module
+
+[PATCH v1 0/8] rust: io: I/O type generalization and projection
+https://lore.kernel.org/rust-for-linux/
+0ee5c313b027 rust: io: generalize `MmioRaw` to pointer to arbitrary type
+f9634ae038c2 rust: io: generalize `Mmio` to arbitrary type
+236359cce759 rust: io: use pointer types instead of address
+a20ce133b1d9 rust: io: add view type
+b857cb51c5fa rust: dma: add methods to unsafely create reference from subview
+f39f8b555d1a rust: io: add `read_val` and `write_val` function on I/O view
+4c45c767f6f7 gpu: nova-core: use I/O projection for cleaner encapsulation
+9d25cc7a47b4 rust: dma: drop `dma_read!` and `dma_write!` API
+
+[PATCH v9 0/22] gpu: nova-core: Add memory management support
+https://lore.kernel.org/nouveau/
+e5be889c01fb gpu: nova-core: Select GPU_BUDDY for VRAM allocation
+490abd24f5be gpu: nova-core: gsp: Return GspStaticInfo from boot()
+6fb6c937be22 gpu: nova-core: gsp: Extract usable FB region from GSP
+aedf5fd8039e gpu: nova-core: gsp: Expose total physical VRAM end from FB region info
+2b75ba0d7980 gpu: nova-core: mm: Add support to use PRAMIN windows to write to VRAM
+3179334c93eb docs: gpu: nova-core: Document the PRAMIN aperture mechanism
+d6a00e49a515 gpu: nova-core: mm: Add common memory management types
+8712cc296c54 gpu: nova-core: mm: Add TLB flush support
+7e3185ecd05d gpu: nova-core: mm: Add GpuMm centralized memory manager
+5ec337dd111d gpu: nova-core: mm: Add common types for all page table formats
+f79ecc0ddf0a gpu: nova-core: mm: Add MMU v2 page table types
+4a0d0d99d7ca gpu: nova-core: mm: Add MMU v3 page table types
+5db4763d71fd gpu: nova-core: mm: Add unified page table entry wrapper enums
+8830b9048902 gpu: nova-core: mm: Add page table walker for MMU v2/v3
+a1f5589a6608 gpu: nova-core: mm: Add Virtual Memory Manager
+6e41e9e87572 gpu: nova-core: mm: Add virtual address range tracking to VMM
+e4c7db402adb gpu: nova-core: mm: Add multi-page mapping API to VMM
+32e8f7e1a1a8 gpu: nova-core: Add BAR1 aperture type and size constant
+38beb6a2cc5b gpu: nova-core: mm: Add BAR1 user interface
+5baa295d2d50 gpu: nova-core: mm: Add BAR1 memory management self-tests
+65e8fc1bfd67 gpu: nova-core: mm: Add PRAMIN aperture self-tests
+3647df287b9a gpu: nova-core: Use runtime BAR1 size instead of hardcoded 256MB
+
+[RFC v2 1/1] rust: pci: add extended capability and SR-IOV support
+https://lore.kernel.org/rust-for-linux/20260126215957.541180-1-zhiw@nvidia.com/
+e4ed8d8e4bba rust: pci: add extended capability and SR-IOV support

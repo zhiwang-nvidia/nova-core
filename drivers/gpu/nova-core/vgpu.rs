@@ -458,37 +458,38 @@ fn ring_doorbell(bar0: &Bar0, gfid: Gfid) {
     let _ = bar0.try_read32(NV_VIRTUAL_FUNCTION_PRIV_DOORBELL);
 }
 
-// --- EngineBitmap ---
+// --- GmcEngineMasks ---
 
-const NV2080_GPU_MAX_ENGINES: usize = 84;
-const ENGINE_BITMAP_WORDS: usize = 2;
+use crate::gsp::commands::NVGMC_ENGINE_TYPE_COUNT;
 
-/// 96-bit engine capability bitmap built from GspStaticConfigInfo.engineCaps.
-pub(crate) struct EngineBitmap {
-    pub bitmap: [u64; ENGINE_BITMAP_WORDS],
+/// Per-GMC-engine-type bitmask of available engine instances.
+///
+/// Indexed by `NVGMC_ENGINE_TYPE` (GR=1, COPY=2, ..., OFA=19).
+/// Each `u64` is a bitmask where bit N means engine instance N exists.
+/// Directly parsed from `NVGMC_SC_ENGINE_MASK` NVKV key — no conversion needed.
+pub(crate) struct GmcEngineMasks {
+    pub masks: [u64; NVGMC_ENGINE_TYPE_COUNT],
 }
 
-impl EngineBitmap {
+/// GMC engine type constants matching `gmcapi_engine_types.h`.
+pub(crate) mod gmc_engine_type {
+    pub(crate) const GR: usize = 0x01;
+    pub(crate) const COPY: usize = 0x02;
+    pub(crate) const NVDEC: usize = 0x03;
+    pub(crate) const NVENC: usize = 0x04;
+    pub(crate) const SEC2: usize = 0x0D;
+    pub(crate) const NVJPEG: usize = 0x12;
+    pub(crate) const OFA: usize = 0x13;
+    pub(crate) const COUNT: usize = super::NVGMC_ENGINE_TYPE_COUNT;
+}
+
+impl GmcEngineMasks {
     pub fn new() -> Self {
-        Self { bitmap: [0; ENGINE_BITMAP_WORDS] }
+        Self { masks: [0; NVGMC_ENGINE_TYPE_COUNT] }
     }
 
-    pub fn from_caps(caps: &[u32; 3]) -> Self {
-        Self {
-            bitmap: [
-                u64::from(caps[1]) << 32 | u64::from(caps[0]),
-                u64::from(caps[2]),
-            ],
-        }
-    }
-
-    pub fn has_engine(&self, idx: usize) -> bool {
-        if idx >= NV2080_GPU_MAX_ENGINES {
-            return false;
-        }
-        let word = idx / 64;
-        let bit = idx % 64;
-        self.bitmap[word] & (1u64 << bit) != 0
+    pub fn from_masks(masks: &[u64; NVGMC_ENGINE_TYPE_COUNT]) -> Self {
+        Self { masks: *masks }
     }
 }
 
@@ -503,7 +504,7 @@ pub(crate) struct VgpuManager {
     pub(crate) total_vfs: u16,
     pub(crate) gsp_config: GspConfig,
     pub(crate) comm_layout: CommBuffLayout,
-    pub(crate) engine_bitmap: EngineBitmap,
+    pub(crate) engine_masks: GmcEngineMasks,
     pub(crate) instances: KVec<VgpuInstance>,
 }
 
@@ -527,7 +528,7 @@ impl VgpuManager {
             total_vfs,
             gsp_config: GspConfig::default(),
             comm_layout: CommBuffLayout::default(),
-            engine_bitmap: EngineBitmap::new(),
+            engine_masks: GmcEngineMasks::new(),
             instances: KVec::new(),
         })
     }
@@ -544,13 +545,13 @@ impl VgpuManager {
     /// One-time initialization after GSP boot completes.
     pub(crate) fn init_post_gsp_boot(
         &mut self,
-        engine_caps: &[u32; 3],
+        gmc_engine_masks: &[u64; NVGMC_ENGINE_TYPE_COUNT],
         total_vram: u64,
     ) -> Result {
         self.gsp_config.vmmu_segment_size = 512 * 1024 * 1024; // 512MB for Blackwell
         self.gsp_config.total_fbmem_size = total_vram;
         self.gsp_config.total_avail_chids = 2048;
-        self.engine_bitmap = EngineBitmap::from_caps(engine_caps);
+        self.engine_masks = GmcEngineMasks::from_masks(gmc_engine_masks);
         self.comm_layout = CommBuffLayout::calculate();
         Ok(())
     }
@@ -665,7 +666,7 @@ pub(crate) fn query_vgpu_type(cmdq: &Cmdq, bar: &Bar0, type_id: u32) -> Result<V
     )?;
 
     let mut vt = VgpuType::default();
-    nvkv::nvkv_decode(&resp.payload, |key, value| match key {
+    nvkv::nvkv_decode(&resp.payload, |key, _index, value| match key {
         vgpu_prop_keys::TYPE_NAME => nvkv::nvkv_read_string8(&value, &mut vt.name),
         vgpu_prop_keys::CLASS => nvkv::nvkv_read_string8(&value, &mut vt.class),
         vgpu_prop_keys::TYPE_ID => vt.vgpu_type_id = nvkv::nvkv_read_u32(&value),
@@ -789,17 +790,11 @@ mod bootload_keys {
     pub const KERNEL_LOG_SIZE: u16 = 0x100C;
 }
 
-// GMC engine type constants (ABI-stable)
-const NVGMC_ENGINE_GR0: u64 = 0;
-const NVGMC_ENGINE_CE0: u64 = 0x10;
-
-/// Convert NV2080 engine index to GMC engine type.
-fn nv2080_to_gmc_engine(idx: usize) -> Option<u64> {
-    match idx {
-        0 => Some(NVGMC_ENGINE_GR0),
-        1..=7 => Some(NVGMC_ENGINE_CE0 + (idx - 1) as u64),
-        _ => None,
-    }
+/// Build a 32-bit GMC engine ID from type and instance index.
+///
+/// Format: `type[15:0] | index[31:16]` per `gmcapi_engine_types.h`.
+fn gmc_engine_id(engine_type: usize, index: usize) -> u64 {
+    (engine_type as u64) | ((index as u64) << 16)
 }
 
 /// Send GMCAPI VGPU_BOOTLOAD with NVKV-encoded parameters.
@@ -807,7 +802,7 @@ pub(crate) fn bootload_plugin(
     cmdq: &Cmdq,
     bar: &Bar0,
     instance: &VgpuInstance,
-    engine_bitmap: &EngineBitmap,
+    engine_masks: &GmcEngineMasks,
     comm_layout: &CommBuffLayout,
 ) -> Result {
     let mut kvs: KVec<u64> = KVec::new();
@@ -827,14 +822,20 @@ pub(crate) fn bootload_plugin(
         instance.num_plugin_channels,
     )?;
 
-    // Channel mapping: [gmc_engine_id, chid_offset] pairs for active engines
+    // Channel mapping: [gmc_engine_id, chid_offset] pairs for active engines.
+    // Iterate GMC engine types directly — masks come pre-converted from GSP.
     let mut channel_map: KVec<u64> = KVec::new();
-    for i in 0..NV2080_GPU_MAX_ENGINES {
-        if engine_bitmap.has_engine(i) {
-            if let Some(gmc_id) = nv2080_to_gmc_engine(i) {
-                channel_map.push(gmc_id, GFP_KERNEL)?;
+    for engine_type in 1..gmc_engine_type::COUNT {
+        let mask = engine_masks.masks[engine_type];
+        let mut bit = 0u32;
+        let mut remaining = mask;
+        while remaining != 0 {
+            if remaining & 1 != 0 {
+                channel_map.push(gmc_engine_id(engine_type, bit as usize), GFP_KERNEL)?;
                 channel_map.push(u64::from(instance.chid_offset), GFP_KERNEL)?;
             }
+            remaining >>= 1;
+            bit += 1;
         }
     }
     nvkv::nvkv_push_seq64(&mut kvs, bootload_keys::CHANNEL_MAPPING, channel_map.as_slice())?;
@@ -953,7 +954,7 @@ fn nvidia_vgpu_open_inner(
         &gpu.mm, bar1, &mut chids, gfid, dbdf, vgpu_type, 0,
     )?;
 
-    bootload_plugin(cmdq, bar, &instance, &mgr.engine_bitmap, &mgr.comm_layout)?;
+    bootload_plugin(cmdq, bar, &instance, &mgr.engine_masks, &mgr.comm_layout)?;
 
     instance
         .plugin_rpc

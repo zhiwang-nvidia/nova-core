@@ -1,0 +1,34 @@
+[pipeline]
+name = "dev-verify-review"
+description = "Lightweight pipeline: develop → [verify + review], no push/test"
+
+[[stages]]
+name = "develop"
+type = "agent"
+role = "developer"
+description = "Apply patches or address comments, then compile kernel"
+inputs = ["manifest.yaml"]
+optional_inputs = ["reviews/maintainer-review.md", "verify-result.json"]
+outputs = ["src/", "build-result.json"]
+
+[[stages]]
+name = "verify"
+type = "gate"
+role = "verifier"
+description = "Independently verify build quality: LLVM, Clippy, rustfmt, warnings, config"
+parallel_group = "quality-gate"
+inputs = ["manifest.yaml", "build-result.json"]
+outputs = ["verify-result.json"]
+on_reject = "develop"
+max_iterations = 3
+
+[[stages]]
+name = "review"
+type = "gate"
+role = "reviewer"
+description = "Verify code quality and maintainer comments are properly addressed"
+parallel_group = "quality-gate"
+inputs = ["manifest.yaml", "src/"]
+outputs = ["reviews/maintainer-review.md"]
+on_reject = "develop"
+max_iterations = 5

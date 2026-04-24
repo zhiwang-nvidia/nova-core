@@ -1,0 +1,48 @@
+{
+  "verdict": "PASS",
+  "timestamp": "2026-04-08T02:19:43.882325+03:00",
+  "checks": [
+    {
+      "name": "config-flags",
+      "status": "PASS",
+      "detail": "All flags present",
+      "missing": []
+    },
+    {
+      "name": "rust-toolchain",
+      "status": "PASS",
+      "detail": "Rust is available!"
+    },
+    {
+      "name": "build-warnings",
+      "status": "PASS",
+      "warnings_in_changed_files": [],
+      "known_warnings": []
+    },
+    {
+      "name": "clippy",
+      "status": "PASS",
+      "warnings": [],
+      "known_warnings": []
+    },
+    {
+      "name": "rustfmt",
+      "status": "PASS",
+      "unformatted_files": []
+    },
+    {
+      "name": "checkpatch",
+      "status": "PASS",
+      "errors": [],
+      "warnings": [],
+      "known_warnings": [
+        "WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?",
+        "WARNING: Possible repeated word: 'type'",
+        "WARNING: Possible repeated word: 'type'",
+        "WARNING: Possible repeated word: 'type'",
+        "WARNING: Possible repeated word: 'type'",
+        "WARNING: Possible repeated word: 'type'"
+      ]
+    }
+  ]
+}

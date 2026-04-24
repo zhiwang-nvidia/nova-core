@@ -440,7 +440,7 @@ impl Gpu {
 
                     if ctx.vgpu_requested {
                         mgr.init_post_gsp_boot(
-                            &info.engine_caps,
+                            &info.gmc_engine_masks,
                             info.total_fb_end,
                         )?;
                         *chid_allocator.lock() = ChidAllocator::new(2048);

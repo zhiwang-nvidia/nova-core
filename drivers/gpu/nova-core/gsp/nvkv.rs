@@ -43,12 +43,22 @@ fn data_u64s(opcode: u32, count: u32) -> Result<usize> {
     }
 }
 
+fn header_index(hdr: u64) -> u16 {
+    ((hdr >> 16) & 0xFFF) as u16
+}
+
 /// GSP static config key constants.
 ///
 /// Open RM reference: `interface/gmcapi/gmcapi_gsp_config.h`
 pub(crate) mod gsp_config_key {
-    /// GPU name string (ARRAY8, null-terminated).
     pub(crate) const GPU_NAME_STRING: u16 = 0x2000;
+    pub(crate) const BAR1_PDE_BASE: u16 = 0x1020;
+    pub(crate) const ENGINE_MASK: u16 = 0x1100;
+    pub(crate) const FB_LENGTH: u16 = 0x1010;
+    pub(crate) const FB_REGION_COUNT: u16 = 0x0010;
+    pub(crate) const FB_REGION_BASE: u16 = 0x1011;
+    pub(crate) const FB_REGION_LIMIT: u16 = 0x1012;
+    pub(crate) const SRIOV_MAX_GFID: u16 = 0x0200;
 }
 
 /// Find a key in an NVKV-encoded byte buffer and return its raw data bytes.
@@ -109,12 +119,18 @@ pub(crate) enum NvkvValue<'a> {
     Seq64(&'a [u8]),
     /// ARRAY8: byte array.
     Array8(&'a [u8]),
+    /// ARRAY64: array of 64-bit values.
+    Array64(&'a [u8]),
 }
 
 /// Iterate over all key-value pairs in an NVKV payload, calling `f` for each.
+///
+/// The callback receives `(key, index, value)` where `index` is the NVKV
+/// entry index (bits 16:27 of the header). For most keys index is 0; for
+/// indexed arrays like `ENGINE_MASK` it indicates the starting element.
 pub(crate) fn nvkv_decode<F>(payload: &[u8], mut f: F) -> Result
 where
-    F: FnMut(u16, NvkvValue<'_>),
+    F: FnMut(u16, u16, NvkvValue<'_>),
 {
     if payload.len() % 8 != 0 {
         return Err(EINVAL);
@@ -133,6 +149,7 @@ where
 
         let opcode = header_opcode(hdr);
         let key = header_key(hdr);
+        let index = header_index(hdr);
         let count = header_count(hdr);
         let n_data = data_u64s(opcode, count)?;
 
@@ -143,18 +160,19 @@ where
         let data_bytes = &payload[pos * 8..(pos + n_data) * 8];
 
         match opcode {
-            OPCODE_IMM32 => f(key, NvkvValue::Imm32(count)),
-            OPCODE_SEQ32 => f(key, NvkvValue::Seq32(data_bytes)),
-            OPCODE_SEQ64 => f(key, NvkvValue::Seq64(data_bytes)),
+            OPCODE_IMM32 => f(key, index, NvkvValue::Imm32(count)),
+            OPCODE_SEQ32 => f(key, index, NvkvValue::Seq32(data_bytes)),
+            OPCODE_SEQ64 => f(key, index, NvkvValue::Seq64(data_bytes)),
             OPCODE_ARRAY8 => {
                 let byte_count = count as usize;
                 let byte_offset = pos * 8;
                 if byte_offset + byte_count > payload.len() {
                     return Err(EINVAL);
                 }
-                f(key, NvkvValue::Array8(&payload[byte_offset..byte_offset + byte_count]));
+                f(key, index, NvkvValue::Array8(&payload[byte_offset..byte_offset + byte_count]));
             }
-            _ => {} // skip unknown opcodes
+            OPCODE_ARRAY64 => f(key, index, NvkvValue::Array64(data_bytes)),
+            _ => {}
         }
 
         pos += n_data;
@@ -162,6 +180,7 @@ where
 
     Ok(())
 }
+
 
 /// Read a u32 from an NvkvValue (IMM32 or first element of SEQ32).
 pub(crate) fn nvkv_read_u32(val: &NvkvValue<'_>) -> u32 {
@@ -182,6 +201,26 @@ pub(crate) fn nvkv_read_u64(val: &NvkvValue<'_>) -> u64 {
         }
         NvkvValue::Imm32(v) => *v as u64,
         _ => 0,
+    }
+}
+
+/// Read ARRAY64 elements into a u64 slice, starting at `start_idx` offset.
+///
+/// `start_idx` is the NVKV index from the header (e.g. NVGMC_ENGINE_TYPE_GR=1).
+/// Each element is written to `dst[start_idx + i]` if within bounds.
+pub(crate) fn nvkv_read_array64(val: &NvkvValue<'_>, start_idx: usize, dst: &mut [u64]) {
+    if let NvkvValue::Array64(data) = val {
+        let count = data.len() / 8;
+        for i in 0..count {
+            let idx = start_idx + i;
+            if idx < dst.len() {
+                dst[idx] = u64::from_le_bytes(
+                    data[i * 8..(i + 1) * 8]
+                        .try_into()
+                        .unwrap_or([0; 8]),
+                );
+            }
+        }
     }
 }
 

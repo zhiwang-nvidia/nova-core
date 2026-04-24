@@ -294,15 +294,20 @@ impl super::Gsp {
         let chipset = ctx.chipset;
         let gsp_falcon = ctx.gsp_falcon;
 
+        dev_info!(dev, "DEBUG-FSP: loading FspFirmware\n");
         let fsp_fw = FspFirmware::new(dev, chipset)?;
+        dev_info!(dev, "DEBUG-FSP: FspFirmware loaded OK\n");
 
+        dev_info!(dev, "DEBUG-FSP: extracting FMC signatures\n");
         let signatures = Fsp::extract_fmc_signatures(
             dev,
             fsp_fw.fmc_hash.data(),
             fsp_fw.fmc_publickey.data(),
             fsp_fw.fmc_signature.data(),
         )?;
+        dev_info!(dev, "DEBUG-FSP: signatures extracted\n");
 
+        dev_info!(dev, "DEBUG-FSP: creating FmcBootArgs\n");
         let args = FmcBootArgs::new(
             dev,
             chipset,
@@ -313,11 +318,16 @@ impl super::Gsp {
             false,
             &signatures,
         )?;
+        dev_info!(dev, "DEBUG-FSP: FmcBootArgs created\n");
 
+        dev_info!(dev, "DEBUG-FSP: calling boot_fmc\n");
         Fsp::boot_fmc(dev, bar, &fsp_falcon, &args)?;
+        dev_info!(dev, "DEBUG-FSP: boot_fmc returned OK\n");
 
         let fmc_boot_params_addr = args.boot_params_dma_handle();
+        dev_info!(dev, "DEBUG-FSP: waiting for GSP lockdown release\n");
         Self::wait_for_gsp_lockdown_release(dev, bar, gsp_falcon, fmc_boot_params_addr)?;
+        dev_info!(dev, "DEBUG-FSP: GSP lockdown released\n");
 
         Ok(())
     }
@@ -368,17 +378,15 @@ impl super::Gsp {
             Architecture::Turing | Architecture::Ampere | Architecture::Ada
         );
 
-        // For FSP-based architectures (Hopper/Blackwell), refine the vGPU
-        // request by reading the PRC knob from FSP.
-        // SEC2-based architectures (Turing/Ampere/Ada) keep the initial
-        // request as-is.
+        // For FSP-based architectures (Hopper/Blackwell), skip PRC query
+        // and go straight to COT boot.
         if !uses_sec2 {
             let fsp_falcon = Falcon::<FspEngine>::new(ctx.dev(), chipset)?;
             Fsp::wait_secure_boot(ctx.dev(), bar, chipset.arch())?;
-            let vgpu_mode = Fsp::read_vgpu_mode(ctx.dev(), bar, &fsp_falcon)?;
-            dev_dbg!(ctx.dev(), "vGPU mode: {:?}\n", vgpu_mode);
+            // Skip PRC query - send COT directly after wait_secure_boot
+            dev_info!(ctx.dev(), "DEBUG: skipping PRC, going straight to COT\n");
             ctx.fsp_falcon = Some(fsp_falcon);
-            ctx.vgpu_requested &= vgpu_mode == crate::fsp::VgpuMode::Enabled;
+            ctx.vgpu_requested = false;
         }
 
         let dev = ctx.dev();

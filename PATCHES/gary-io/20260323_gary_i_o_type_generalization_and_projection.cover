@@ -1,0 +1,69 @@
+Subject: [PATCH 0/8] I/O type generalization and projection
+From: Gary Guo <gary@kernel.org>
+Date: Mon, 23 Mar 2026 15:37:52 +0000
+Message-Id: <20260323153807.1360705-1-gary@kernel.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+This series generalize `Mmio`/`MmioRaw` type from just an untyped region
+to typed representations (so `MmioRaw<T>` is `__iomem *T`). This allows
+us to remove the `IoKnownSize` trait; the information is sourced from
+just the pointer from the `KnownSize` trait instead.
+
+This enables us to implement `Io` trait for `Coherent<T>`, enabling
+unified handling of MMIO and DMA coherent memory. It also paves the way
+to uniformly support shared system memory, which Tyr will likely need
+[1].
+
+Built on this generalization, this series also add a `io::View` type
+which represents a subview of a bigger I/O region, and a `io_project!()`
+macro that provides a safe way to perform this. Some Nova code has been
+converted in this series to demonstrate cleanups possible with this
+addition.
+
+This series depend on the Coherent API rework series [2].
+
+Link: https://rust-for-linux.zulipchat.com/#narrow/channel/288089-General/topic/Generic.20I.2FO.20backends/near/572377073 [1]
+Link: https://lore.kernel.org/rust-for-linux/DH87CCNRR5EC.2SK3IT6N6Q8V5@nvidia.com/ [2]
+
+Gary Guo (8):
+  rust: io: generalize `MmioRaw` to pointer to arbitrary type
+  rust: io: generalize `Mmio` to arbitrary type
+  rust: io: use pointer types instead of address
+  rust: io: add view type
+  rust: dma: add methods to unsafely create reference from subview
+  rust: io: add `read_val` and `write_val` function on I/O view
+  gpu: nova-core: use I/O projection for cleaner encapsulation
+  rust: dma: drop `dma_read!` and `dma_write!` API
+
+ drivers/gpu/nova-core/gsp.rs      |  42 ++-
+ drivers/gpu/nova-core/gsp/cmdq.rs |  69 +++--
+ drivers/gpu/nova-core/gsp/fw.rs   |  84 ++---
+ rust/kernel/devres.rs             |  11 +-
+ rust/kernel/dma.rs                | 217 ++++++-------
+ rust/kernel/io.rs                 | 498 +++++++++++++++++++++++-------
+ rust/kernel/io/mem.rs             |  10 +-
+ rust/kernel/io/poll.rs            |   6 +-
+ rust/kernel/io/register.rs        |  19 +-
+ rust/kernel/pci/io.rs             |  88 ++++--
+ rust/kernel/ptr.rs                |   7 +
+ samples/rust/rust_dma.rs          |  21 +-
+ 12 files changed, 681 insertions(+), 391 deletions(-)
+
+
+base-commit: 785f0eb2f85decbe7c1ef9ae922931f0194ffc2e
+prerequisite-patch-id: 07a5643b01ce7f63ca42f1a322dcbdb5fc7fa9c2
+prerequisite-patch-id: abae47bddac0d45e32dd54ce2f935b0675a6ebdf
+prerequisite-patch-id: 7779e87914e4be91f0ced6760299ddf603943baf
+prerequisite-patch-id: 31c43ae681611b92f24cbd369fac5af5834dd80f
+prerequisite-patch-id: 60d56698d6bf30f31bed11375d5dc7eaeb359a0f
+prerequisite-patch-id: 013e064c8c9dc0b7b0ff558ef0d9d6e674c629ee
+prerequisite-patch-id: 5c5792a0435bdbdfd2aeb8a3d2dac79aa9ae7d6b
+prerequisite-patch-id: 1e8d93ee75c56eecac13859c4024ea13f3cc872c
+prerequisite-patch-id: b3a3589264ec10a5c33d4cea3ce69e9c6845d3dc
+-- 
+2.51.2
+
+
+

@@ -1,0 +1,121 @@
+{
+  "timestamp": "2026-04-08T10:00:00Z",
+  "baseline": "9c8fde7ecfcf",
+  "commit_count": 12,
+  "rustfmt": "PASS",
+  "clippy": "PASS",
+  "build": "PASS",
+  "rebase_exec": "PASS",
+  "fixes": [
+    {
+      "type": "rustfmt",
+      "file": "drivers/gpu/nova-core/driver.rs",
+      "description": "Collapse bar1 Arc::pin_init to single line",
+      "amended_into": "e33b2ba56b45 nova-core: persist BAR1 mapping in Gpu struct"
+    },
+    {
+      "type": "rustfmt",
+      "file": "drivers/gpu/nova-core/gpu.rs",
+      "description": "Reformat mock_bootload signature, method chains, and dev_info macro",
+      "amended_into": "9bd18a384466 gpu: nova-core: wire vGPU mock bootload into probe"
+    },
+    {
+      "type": "rustfmt",
+      "file": "drivers/gpu/nova-core/gsp/boot.rs",
+      "description": "Reformat send_gmc_and_receive call",
+      "amended_into": "be5b063771ee gpu: nova-core: query VMMU segment size and align buddy base"
+    },
+    {
+      "type": "rustfmt",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Collapse use/import blocks to single lines",
+      "amended_into": "d4b3b2ea13f1 gpu: nova-core: vgpu: add plugin bootload verification"
+    },
+    {
+      "type": "rustfmt",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Expand pr_err macro to multi-line",
+      "amended_into": "f007a0629851 gpu: nova-core: vgpu: add vGPU preludes."
+    },
+    {
+      "type": "rustfmt",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Reformat build_engine_bitmap signature and unsafe block",
+      "amended_into": "b7138fea6f26 gpu: nova-core: vgpu: add engine bitmap construction"
+    },
+    {
+      "type": "rustfmt",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Reformat release_chids method chain",
+      "amended_into": "c1f120cabda4 gpu: nova-core: vgpu: add channel ID allocator"
+    },
+    {
+      "type": "rustfmt",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Reformat bootload_plugin, send_gfid_command, shutdown_plugin, cleanup_plugin signatures",
+      "amended_into": "95b825325b06 gpu: nova-core: vgpu: bootstrap vGPU"
+    },
+    {
+      "type": "rustfmt",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Reformat upload_vgpu_type signature",
+      "amended_into": "19ee55f2c31a gpu: nova-core: vgpu: add L40-1Q vGPU type upload"
+    },
+    {
+      "type": "rustfmt",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Reformat destroy_instance signature",
+      "amended_into": "9dfc18135afd gpu: nova-core: vgpu: add vGPU instance lifecycle management"
+    },
+    {
+      "type": "rustfmt",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Reformat query_vmmu_segment_size signature",
+      "amended_into": "bc59dba3fe24 gpu: nova-core: vgpu: add post GSP boot initialization"
+    },
+    {
+      "type": "clippy",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Use NV2080_GPU_MAX_ENGINES.div_ceil(64) instead of manual (x+63)/64",
+      "amended_into": "f007a0629851 gpu: nova-core: vgpu: add vGPU preludes."
+    },
+    {
+      "type": "clippy",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Use total_fbmem_size.div_ceil(seg) instead of manual (x+seg-1)/seg",
+      "amended_into": "95b825325b06 gpu: nova-core: vgpu: bootstrap vGPU"
+    },
+    {
+      "type": "clippy",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Use comm_size.div_ceil(page_size) instead of manual (x+y-1)/y",
+      "amended_into": "d4b3b2ea13f1 gpu: nova-core: vgpu: add plugin bootload verification"
+    },
+    {
+      "type": "clippy",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Use u64::from(vgpu_type.max_instance) instead of max_instance as u64",
+      "amended_into": "95b825325b06 gpu: nova-core: vgpu: bootstrap vGPU"
+    },
+    {
+      "type": "clippy",
+      "file": "drivers/gpu/nova-core/vgpu.rs",
+      "description": "Use u32::from(pdev.dev_id()) instead of dev_id() as u32",
+      "amended_into": "9bd18a384466 gpu: nova-core: wire vGPU mock bootload into probe"
+    }
+  ],
+  "final_commits": [
+    "056eac0fcf1c gpu: nova-core: mm: add VramBlock and VRAM allocation helper",
+    "e33b2ba56b45 nova-core: persist BAR1 mapping in Gpu struct",
+    "f007a0629851 gpu: nova-core: vgpu: add vGPU preludes.",
+    "b7138fea6f26 gpu: nova-core: vgpu: add engine bitmap construction",
+    "c1f120cabda4 gpu: nova-core: vgpu: add channel ID allocator",
+    "95b825325b06 gpu: nova-core: vgpu: bootstrap vGPU",
+    "19ee55f2c31a gpu: nova-core: vgpu: add L40-1Q vGPU type upload",
+    "9dfc18135afd gpu: nova-core: vgpu: add vGPU instance lifecycle management",
+    "bc59dba3fe24 gpu: nova-core: vgpu: add post GSP boot initialization",
+    "d4b3b2ea13f1 gpu: nova-core: vgpu: add plugin bootload verification",
+    "be5b063771ee gpu: nova-core: query VMMU segment size and align buddy base",
+    "9bd18a384466 gpu: nova-core: wire vGPU mock bootload into probe"
+  ]
+}

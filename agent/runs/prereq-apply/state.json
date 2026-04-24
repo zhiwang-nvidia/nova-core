@@ -1,0 +1,31 @@
+{
+  "run_id": "prereq-apply",
+  "current_stage": "DONE",
+  "round": 1,
+  "stages_completed": [
+    {
+      "stage": "develop-p0",
+      "result": "PASS",
+      "summary": "Applied 23/23 Joel MM v11 patches + 1 rustfmt fixup. Conflicts resolved in gpu.rs (patches 22/23 context offset). Build OK, 6 clippy warnings (1 expected dead_code from P0, 5 pre-existing).",
+      "commits_added": 24
+    },
+    {
+      "stage": "verify-p0",
+      "result": "PASS",
+      "summary": "CLIPPY: 6 warnings (0 new). rustfmt: 3 files fixed, committed as fixup. Build: success."
+    },
+    {
+      "stage": "develop-p2",
+      "result": "PASS",
+      "summary": "Applied 8/8 Gary I/O patches + 1 Emem adaptation fixup. Conflicts resolved: dma.rs (extra imports from john tree), gsp.rs (buffer vs obj.0 naming + io_project! adaptation), gsp/cmdq.rs (import merge). Adapted FSP Emem to new Io trait (addr/maxsize → Type/as_ptr).",
+      "commits_added": 9
+    },
+    {
+      "stage": "verify-p2",
+      "result": "PASS",
+      "summary": "CLIPPY: 6 warnings (same as after P0, 0 new from P2). rustfmt: clean. Build: success (#40)."
+    }
+  ],
+  "history": [],
+  "last_error": null
+}

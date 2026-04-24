@@ -50,7 +50,6 @@ impl TransportHeader {
     /// single-packet and do not use request/response tag correlation).
     pub(crate) fn new(som: bool, eom: bool, seid: u8, deid: u8, seq: u8) -> Self {
         Self::zeroed()
-            .with_const_version::<1>()
             .with_som(som)
             .with_eom(eom)
             .with_seid(Bounded::try_new(u32::from(seid)).expect("seid overflow"))

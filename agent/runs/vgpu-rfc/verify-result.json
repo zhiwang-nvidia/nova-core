@@ -1,0 +1,77 @@
+{
+  "verdict": "PASS",
+  "timestamp": "2026-04-08T11:11:13.963984+03:00",
+  "checks": [
+    {
+      "name": "config-flags",
+      "status": "PASS",
+      "detail": "All flags present",
+      "missing": []
+    },
+    {
+      "name": "rust-toolchain",
+      "status": "PASS",
+      "detail": "Rust is available!"
+    },
+    {
+      "name": "build-warnings",
+      "status": "PASS",
+      "warnings_in_changed_files": [],
+      "known_warnings": [
+        "warning: lint `clippy::invalid_null_ptr_usage` has been renamed to `invalid_null_arguments`",
+        "warning: lint `clippy::invalid_null_ptr_usage` has been renamed to `invalid_null_arguments`",
+        "warning: `as` casting between raw pointers without changing their constness",
+        "warning: unsafe block missing a safety comment",
+        "warning: `as` casting between raw pointers without changing their constness",
+        "warning: unsafe block missing a safety comment",
+        "warning: unsafe block missing a safety comment",
+        "warning: unsafe block missing a safety comment",
+        "warning: unsafe block missing a safety comment",
+        "warning: macro has unnecessary safety comment",
+        "warning: macro has unnecessary safety comment",
+        "warning: macro has unnecessary safety comment",
+        "warning: 12 warnings emitted",
+        "warning: deref on an immutable reference",
+        "warning: statement has unnecessary safety comment",
+        "warning: 2 warnings emitted"
+      ]
+    },
+    {
+      "name": "clippy",
+      "status": "PASS",
+      "warnings": [],
+      "known_warnings": [
+        "warning: lint `clippy::invalid_null_ptr_usage` has been renamed to `invalid_null_arguments`",
+        "warning: lint `clippy::invalid_null_ptr_usage` has been renamed to `invalid_null_arguments`",
+        "warning: `as` casting between raw pointers without changing their constness",
+        "warning: unsafe block missing a safety comment",
+        "warning: `as` casting between raw pointers without changing their constness",
+        "warning: unsafe block missing a safety comment",
+        "warning: unsafe block missing a safety comment",
+        "warning: unsafe block missing a safety comment",
+        "warning: unsafe block missing a safety comment",
+        "warning: macro has unnecessary safety comment",
+        "warning: macro has unnecessary safety comment",
+        "warning: macro has unnecessary safety comment",
+        "warning: 12 warnings emitted",
+        "warning: deref on an immutable reference",
+        "warning: statement has unnecessary safety comment",
+        "warning: 2 warnings emitted"
+      ]
+    },
+    {
+      "name": "rustfmt",
+      "status": "PASS",
+      "unformatted_files": []
+    },
+    {
+      "name": "checkpatch",
+      "status": "PASS",
+      "errors": [],
+      "warnings": [],
+      "known_warnings": [
+        "WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?"
+      ]
+    }
+  ]
+}

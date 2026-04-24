@@ -184,6 +184,11 @@ const GMC_CMD_GSP_GET_STATIC_INFO: u32 = 0x0001_0001;
 /// Maximum response size for `GSP_GET_STATIC_INFO`.
 const GSP_GET_STATIC_INFO_MAX_RESPONSE: u32 = 8192;
 
+/// Number of GMC engine types (NONE through OFA).
+///
+/// Mirrors `NVGMC_ENGINE_TYPE_COUNT` from `gmcapi_engine_types.h`.
+pub(crate) const NVGMC_ENGINE_TYPE_COUNT: usize = 20;
+
 /// The reply from the GSP to the `GSP_GET_STATIC_INFO` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
@@ -193,9 +198,12 @@ pub(crate) struct GetGspStaticInfoReply {
     pub(crate) usable_fb_region: Range<u64>,
     /// End of VRAM.
     pub(crate) total_fb_end: u64,
-    /// Engine capability bitmap (96 bits).
-    // TODO: Extract from NVKV response once GSP exposes the key.
-    pub(crate) engine_caps: [u32; 3],
+    /// Per-GMC-engine-type bitmask of available engine instances.
+    ///
+    /// Indexed by `NVGMC_ENGINE_TYPE` (GR=1, COPY=2, ..., OFA=19).
+    /// Each `u64` is a bitmask where bit N means engine instance N exists.
+    /// Parsed from `NVGMC_SC_ENGINE_MASK` in the NVKV response.
+    pub(crate) gmc_engine_masks: [u64; NVGMC_ENGINE_TYPE_COUNT],
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -236,12 +244,20 @@ pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: &Bar0) -> Result<GetGspStaticInfoRe
     }
 
     let mut gpu_name = [0u8; 64];
-    if let Some(name_bytes) =
-        nvkv::find_array8(&response.payload, nvkv::gsp_config_key::GPU_NAME_STRING)?
-    {
-        let len = name_bytes.len().min(gpu_name.len());
-        gpu_name[..len].copy_from_slice(&name_bytes[..len]);
-    }
+    let mut bar1_pde_base = 0u64;
+    let mut gmc_engine_masks = [0u64; NVGMC_ENGINE_TYPE_COUNT];
+
+    nvkv::nvkv_decode(&response.payload, |key, index, value| {
+        use nvkv::gsp_config_key as k;
+        match key {
+            k::GPU_NAME_STRING => nvkv::nvkv_read_string8(&value, &mut gpu_name),
+            k::BAR1_PDE_BASE => bar1_pde_base = nvkv::nvkv_read_u64(&value),
+            k::ENGINE_MASK => {
+                nvkv::nvkv_read_array64(&value, index as usize, &mut gmc_engine_masks);
+            }
+            _ => {}
+        }
+    })?;
 
     // TODO: Extract usable FB region from NVKV response once the GSP firmware
     // exposes the fbRegionInfoParams key. For now, derive from BAR0 registers.
@@ -249,13 +265,11 @@ pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: &Bar0) -> Result<GetGspStaticInfoRe
         .read(regs::NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE)
         .usable_fb_size();
 
-    // TODO: Extract bar1_pde_base from NVKV response once the GSP firmware
-    // exposes the appropriate key.
     Ok(GetGspStaticInfoReply {
         gpu_name,
-        bar1_pde_base: 0,
+        bar1_pde_base,
         usable_fb_region: 0..usable_fb_size,
         total_fb_end: usable_fb_size,
-        engine_caps: [0; 3],
+        gmc_engine_masks,
     })
 }

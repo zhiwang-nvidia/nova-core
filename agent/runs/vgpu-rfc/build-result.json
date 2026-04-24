@@ -1,0 +1,37 @@
+{
+  "timestamp": "2026-04-08T12:00:00Z",
+  "commit": "06f6a70dc8e9",
+  "branch": "nova-core-blackwell-v000-firmware-CL_37745303",
+  "build_command": "make LLVM=1 -j$(nproc)",
+  "result": "PASS",
+  "kernel_image": "arch/x86/boot/bzImage",
+  "module": "drivers/gpu/nova-core/nova_core.ko",
+  "errors": 0,
+  "warnings": 0,
+  "fixes_applied": [
+    {
+      "id": 1,
+      "severity": "high",
+      "file": "drivers/gpu/nova-core/gsp/boot.rs",
+      "description": "Guard PRC query with if ctx.vgpu_requested to avoid unconditional FSP query on Hopper"
+    },
+    {
+      "id": 2,
+      "severity": "medium",
+      "file": "drivers/gpu/nova-core/gsp/boot.rs",
+      "description": "Reset vf_partition_count to 0 when PRC disables vGPU to prevent oversized WPR2 heap"
+    },
+    {
+      "id": 3,
+      "severity": "low",
+      "file": "drivers/gpu/nova-core/gsp/boot.rs",
+      "description": "Remove redundant Fsp::wait_secure_boot call from boot_via_fsp (already called in boot)"
+    },
+    {
+      "id": 4,
+      "severity": "low",
+      "file": "drivers/gpu/nova-core/gpu.rs",
+      "description": "Change pub bar to pub(crate) bar for visibility consistency in Gpu struct"
+    }
+  ]
+}

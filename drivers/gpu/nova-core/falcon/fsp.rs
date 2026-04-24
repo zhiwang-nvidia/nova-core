@@ -196,8 +196,55 @@ impl Falcon<Fsp> {
             return Err(EINVAL);
         }
 
+        // Read queue pointers before writing, to detect stale state
+        {
+            let qh = bar.read(regs::NV_PFSP_QUEUE_HEAD).address();
+            let qt = bar.read(regs::NV_PFSP_QUEUE_TAIL).address();
+            let mh = bar.read(regs::NV_PFSP_MSGQ_HEAD).address();
+            let mt = bar.read(regs::NV_PFSP_MSGQ_TAIL).address();
+            kernel::pr_info!(
+                "DEBUG-EMEM: pre-send queue state: QUEUE H={} T={}, MSGQ H={} T={}\n",
+                qh, qt, mh, mt,
+            );
+        }
+
         // Write message to EMEM at offset 0 (validates 4-byte alignment)
         self.write_emem(bar, 0, packet)?;
+
+        // Full readback verify for large messages
+        if packet.len() >= 12 {
+            let mut readback = [0u8; 12];
+            self.read_emem(bar, 0, &mut readback)?;
+            kernel::pr_info!(
+                "DEBUG-EMEM: wrote {} bytes, readback[0..12]: {:02x} {:02x} {:02x} {:02x}  {:02x} {:02x} {:02x} {:02x}  {:02x} {:02x} {:02x} {:02x}\n",
+                packet.len(),
+                readback[0], readback[1], readback[2], readback[3],
+                readback[4], readback[5], readback[6], readback[7],
+                readback[8], readback[9], readback[10], readback[11],
+            );
+
+            // Verify data integrity by comparing all written bytes
+            if packet.len() > 12 {
+                let round_len = packet.len() & !3;
+                let mut full_readback = [0u8; 868];
+                self.read_emem(bar, 0, &mut full_readback[..round_len])?;
+                let mut mismatches: u32 = 0;
+                let mut first_mismatch_off: usize = 0;
+                for i in 0..round_len {
+                    if full_readback[i] != packet[i] {
+                        if mismatches == 0 {
+                            first_mismatch_off = i;
+                        }
+                        mismatches += 1;
+                    }
+                }
+                kernel::pr_info!(
+                    "DEBUG-EMEM: readback verify: {} mismatches out of {} bytes (first at offset {})\n",
+                    mismatches, round_len,
+                    if mismatches > 0 { first_mismatch_off } else { 0 },
+                );
+            }
+        }
 
         // Update queue pointers - TAIL points at last DWORD written
         let tail_offset = u32::try_from(packet.len() - 4).map_err(|_| EINVAL)?;
