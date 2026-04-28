@@ -313,18 +313,14 @@ pub(crate) enum MsgFunction {
     GetStaticInfo = r570::NV_VGPU_MSG_FUNCTION_GET_STATIC_INFO,
     GspInitPostObjGpu = r570::NV_VGPU_MSG_FUNCTION_GSP_INIT_POST_OBJGPU,
     GspRmControl = r570::NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL,
-    GspSetSystemInfo = r570::NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO,
     Log = r570::NV_VGPU_MSG_FUNCTION_LOG,
     MapMemory = r570::NV_VGPU_MSG_FUNCTION_MAP_MEMORY,
     Nop = r570::NV_VGPU_MSG_FUNCTION_NOP,
     SetGuestSystemInfo = r570::NV_VGPU_MSG_FUNCTION_SET_GUEST_SYSTEM_INFO,
-    SetRegistry = r570::NV_VGPU_MSG_FUNCTION_SET_REGISTRY,
 
     // Event codes
     GspInitDone = r570::NV_VGPU_MSG_EVENT_GSP_INIT_DONE,
     GspLockdownNotice = r570::NV_VGPU_MSG_EVENT_GSP_LOCKDOWN_NOTICE,
-    GspLoadExecGenericBootloader = r000::NV_VGPU_MSG_EVENT_GSP_LOAD_EXEC_GENERIC_BOOTLOADER,
-    GspLoadExecHsBinary = r000::NV_VGPU_MSG_EVENT_GSP_LOAD_EXEC_HS_BINARY,
     GspPostNoCat = r570::NV_VGPU_MSG_EVENT_GSP_POST_NOCAT_RECORD,
     MmuFaultQueued = r570::NV_VGPU_MSG_EVENT_MMU_FAULT_QUEUED,
     OsErrorLog = r570::NV_VGPU_MSG_EVENT_OS_ERROR_LOG,
@@ -352,20 +348,14 @@ impl TryFrom<u32> for MsgFunction {
             r570::NV_VGPU_MSG_FUNCTION_GET_STATIC_INFO => Ok(MsgFunction::GetStaticInfo),
             r570::NV_VGPU_MSG_FUNCTION_GSP_INIT_POST_OBJGPU => Ok(MsgFunction::GspInitPostObjGpu),
             r570::NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL => Ok(MsgFunction::GspRmControl),
-            r570::NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO => Ok(MsgFunction::GspSetSystemInfo),
             r570::NV_VGPU_MSG_FUNCTION_LOG => Ok(MsgFunction::Log),
             r570::NV_VGPU_MSG_FUNCTION_MAP_MEMORY => Ok(MsgFunction::MapMemory),
             r570::NV_VGPU_MSG_FUNCTION_NOP => Ok(MsgFunction::Nop),
             r570::NV_VGPU_MSG_FUNCTION_SET_GUEST_SYSTEM_INFO => Ok(MsgFunction::SetGuestSystemInfo),
-            r570::NV_VGPU_MSG_FUNCTION_SET_REGISTRY => Ok(MsgFunction::SetRegistry),
 
             // Event codes
             r570::NV_VGPU_MSG_EVENT_GSP_INIT_DONE => Ok(MsgFunction::GspInitDone),
             r570::NV_VGPU_MSG_EVENT_GSP_LOCKDOWN_NOTICE => Ok(MsgFunction::GspLockdownNotice),
-            r000::NV_VGPU_MSG_EVENT_GSP_LOAD_EXEC_GENERIC_BOOTLOADER => {
-                Ok(MsgFunction::GspLoadExecGenericBootloader)
-            }
-            r000::NV_VGPU_MSG_EVENT_GSP_LOAD_EXEC_HS_BINARY => Ok(MsgFunction::GspLoadExecHsBinary),
             r570::NV_VGPU_MSG_EVENT_GSP_POST_NOCAT_RECORD => Ok(MsgFunction::GspPostNoCat),
             r570::NV_VGPU_MSG_EVENT_MMU_FAULT_QUEUED => Ok(MsgFunction::MmuFaultQueued),
             r570::NV_VGPU_MSG_EVENT_OS_ERROR_LOG => Ok(MsgFunction::OsErrorLog),
@@ -385,8 +375,6 @@ impl MsgFunction {
             self,
             Self::GspInitDone
                 | Self::GspLockdownNotice
-                | Self::GspLoadExecGenericBootloader
-                | Self::GspLoadExecHsBinary
                 | Self::PostEvent
                 | Self::RcTriggered
                 | Self::MmuFaultQueued
@@ -469,7 +457,7 @@ impl LibosMemoryRegionInitArgument {
 pub(crate) struct MsgqTxHeader(r570::msgqTxHeader);
 
 impl MsgqTxHeader {
-    /// Create a new TX queue header.
+    /// Create a new v0 TX queue header.
     ///
     /// # Arguments
     ///
@@ -478,6 +466,7 @@ impl MsgqTxHeader {
     ///   structure.
     /// * `msg_count` - Number of messages that can be sent, i.e. the number of memory pages
     ///   allocated for the message queue in the message queue structure.
+    #[expect(dead_code)]
     pub(crate) fn new(msgq_size: u32, rx_hdr_offset: u32, msg_count: u32) -> Self {
         Self(r570::msgqTxHeader {
             version: 0,
@@ -490,23 +479,13 @@ impl MsgqTxHeader {
             entryOff: num::usize_into_u32::<GSP_PAGE_SIZE>(),
         })
     }
-}
 
-// SAFETY: Padding is explicit and does not contain uninitialized data.
-unsafe impl AsBytes for MsgqTxHeader {}
-
-/// TX header for setting up a message queue with the GSP, msgq v2 layout.
-///
-/// Same wire size as [`MsgqTxHeader`] (32 bytes) with a different field
-/// layout: the v0 `writePtr`, `flags`, and `rxHdrOff` fields are gone, the
-/// `version` `u32` becomes split `versionMajor`/`versionMinor` `u16`s, and
-/// the trailing space holds three reserved `u32`s.
-#[repr(transparent)]
-pub(crate) struct MsgqTxHeaderV2(r000::msgqTxHeader);
-
-#[expect(dead_code)]
-impl MsgqTxHeaderV2 {
-    /// Creates a new v2 TX queue header.
+    /// Create a new v2 TX queue header.
+    ///
+    /// The msgq v2 layout drops the in-memory `writePtr`/`rxHdrOff`/`flags`
+    /// fields (the ring pointers live in BAR0 registers) and splits the
+    /// `version` word into `versionMajor`/`versionMinor`. The two layouts
+    /// occupy the same 32 bytes, so the wrapper byte-aliases either one.
     ///
     /// # Arguments
     ///
@@ -515,8 +494,8 @@ impl MsgqTxHeaderV2 {
     /// * `msg_count` - Number of message slots in the ring.
     /// * `entry_off` - Byte offset from the start of the queue at which the
     ///   message data array begins.
-    pub(crate) fn new(msgq_size: u32, msg_size: u32, msg_count: u32, entry_off: u32) -> Self {
-        Self(r000::msgqTxHeader {
+    pub(crate) fn new_v2(msgq_size: u32, msg_size: u32, msg_count: u32, entry_off: u32) -> Self {
+        let v2 = r000::msgqTxHeader {
             versionMajor: 2,
             versionMinor: 0,
             size: msgq_size,
@@ -524,18 +503,23 @@ impl MsgqTxHeaderV2 {
             msgCount: msg_count,
             entryOff: entry_off,
             reserved: [0; 3],
-        })
+        };
+        // SAFETY: `r000::msgqTxHeader` and `r570::msgqTxHeader` are both
+        // `repr(C)` POD with size 32 bytes. The wrapper holds a 32-byte
+        // chunk that the GSP reads as v2 once handed off via `dma_write!`.
+        Self(unsafe { core::mem::transmute::<r000::msgqTxHeader, r570::msgqTxHeader>(v2) })
     }
 }
 
 // SAFETY: Padding is explicit and does not contain uninitialized data.
-unsafe impl AsBytes for MsgqTxHeaderV2 {}
+unsafe impl AsBytes for MsgqTxHeader {}
 
 /// RX header for setting up a message queue with the GSP.
 #[repr(transparent)]
 pub(crate) struct MsgqRxHeader(r570::msgqRxHeader);
 
 /// Header for the message RX queue.
+#[expect(dead_code)]
 impl MsgqRxHeader {
     /// Creates a new RX queue header.
     pub(crate) fn new() -> Self {

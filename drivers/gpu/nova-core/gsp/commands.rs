@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use core::{
-    convert::Infallible,
     ffi::FromBytesUntilNulError,
     str::Utf8Error, //
 };
@@ -9,8 +8,7 @@ use core::{
 use kernel::{
     device,
     pci,
-    prelude::*,
-    transmute::AsBytes, //
+    prelude::*, //
 };
 
 use crate::{
@@ -20,140 +18,15 @@ use crate::{
         Chipset, //
     },
     gsp::{
-        cmdq::{
-            Cmdq,
-            CommandToGsp,
-            NoReply, //
-        },
-        fw::{
-            commands::*,
-            MsgFunction, //
-        },
+        cmdq::Cmdq,
         nvkv, //
     },
-    sbuffer::SBufferIter,
 };
 
-/// The `GspSetSystemInfo` command.
-pub(crate) struct SetSystemInfo<'a> {
-    pdev: &'a pci::Device<device::Bound>,
-    chipset: Chipset,
-}
+/// Maximum response size for the `GSP_INIT` reply.
+const GSP_INIT_MAX_RESPONSE_SIZE: u32 = 8192;
 
-impl<'a> SetSystemInfo<'a> {
-    /// Creates a new `GspSetSystemInfo` command using the parameters of `pdev`.
-    pub(crate) fn new(pdev: &'a pci::Device<device::Bound>, chipset: Chipset) -> Self {
-        Self { pdev, chipset }
-    }
-}
-
-impl<'a> CommandToGsp for SetSystemInfo<'a> {
-    const FUNCTION: MsgFunction = MsgFunction::GspSetSystemInfo;
-    const IS_ASYNC: bool = true;
-    type Command = GspSetSystemInfo;
-    type Reply = NoReply;
-    type InitError = Error;
-
-    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
-        GspSetSystemInfo::init(self.pdev, self.chipset)
-    }
-}
-
-struct RegistryEntry {
-    key: &'static str,
-    value: u32,
-}
-
-/// The `SetRegistry` command.
-pub(crate) struct SetRegistry {
-    entries: [RegistryEntry; Self::NUM_ENTRIES],
-}
-
-impl SetRegistry {
-    // For now we hard-code the registry entries. Future work will allow others to
-    // be added as module parameters.
-    const NUM_ENTRIES: usize = 3;
-
-    /// Creates a new `SetRegistry` command, using a set of hardcoded entries.
-    pub(crate) fn new() -> Self {
-        Self {
-            entries: [
-                // RMSecBusResetEnable - enables PCI secondary bus reset
-                RegistryEntry {
-                    key: "RMSecBusResetEnable",
-                    value: 1,
-                },
-                // RMForcePcieConfigSave - forces GSP-RM to preserve PCI configuration registers on
-                // any PCI reset.
-                RegistryEntry {
-                    key: "RMForcePcieConfigSave",
-                    value: 1,
-                },
-                // RMDevidCheckIgnore - allows GSP-RM to boot even if the PCI dev ID is not found
-                // in the internal product name database.
-                RegistryEntry {
-                    key: "RMDevidCheckIgnore",
-                    value: 1,
-                },
-            ],
-        }
-    }
-}
-
-impl CommandToGsp for SetRegistry {
-    const FUNCTION: MsgFunction = MsgFunction::SetRegistry;
-    const IS_ASYNC: bool = true;
-    type Command = PackedRegistryTable;
-    type Reply = NoReply;
-    type InitError = Infallible;
-
-    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
-        PackedRegistryTable::init(Self::NUM_ENTRIES as u32, self.variable_payload_len() as u32)
-    }
-
-    fn variable_payload_len(&self) -> usize {
-        let mut key_size = 0;
-        for i in 0..Self::NUM_ENTRIES {
-            key_size += self.entries[i].key.len() + 1; // +1 for NULL terminator
-        }
-        Self::NUM_ENTRIES * size_of::<PackedRegistryEntry>() + key_size
-    }
-
-    fn init_variable_payload(
-        &self,
-        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
-    ) -> Result {
-        let string_data_start_offset =
-            size_of::<PackedRegistryTable>() + Self::NUM_ENTRIES * size_of::<PackedRegistryEntry>();
-
-        // Array for string data.
-        let mut string_data = KVec::new();
-
-        for entry in self.entries.iter().take(Self::NUM_ENTRIES) {
-            dst.write_all(
-                PackedRegistryEntry::new(
-                    (string_data_start_offset + string_data.len()) as u32,
-                    entry.value,
-                )
-                .as_bytes(),
-            )?;
-
-            let key_bytes = entry.key.as_bytes();
-            string_data.extend_from_slice(key_bytes, GFP_KERNEL)?;
-            string_data.push(0, GFP_KERNEL)?;
-        }
-
-        dst.write_all(string_data.as_slice())
-    }
-}
-
-/// GMC command ID for `GSP_GET_STATIC_INFO`.
-const GMC_CMD_GSP_GET_STATIC_INFO: u32 = 0x0001_0001;
-
-/// Maximum response size for `GSP_GET_STATIC_INFO`.
-const GSP_GET_STATIC_INFO_MAX_RESPONSE: u32 = 8192;
-
-/// The reply from the GSP to the `GSP_GET_STATIC_INFO` GMC command.
+/// The reply from the GSP to the `GSP_INIT` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
 }
@@ -182,30 +55,6 @@ impl GetGspStaticInfoReply {
     }
 }
 
-/// Sends `GSP_GET_STATIC_INFO` via GMC and parses the NVKV response.
-pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: &Bar0) -> Result<GetGspStaticInfoReply> {
-    let response = cmdq.send_gmc_and_receive(
-        bar,
-        GMC_CMD_GSP_GET_STATIC_INFO,
-        &[],
-        GSP_GET_STATIC_INFO_MAX_RESPONSE,
-    )?;
-
-    if response.status != 0 {
-        return Err(EIO);
-    }
-
-    let mut gpu_name = [0u8; 64];
-    if let Some(name_bytes) =
-        nvkv::find_array8(&response.payload, nvkv::gsp_config_key::GPU_NAME_STRING)?
-    {
-        let len = name_bytes.len().min(gpu_name.len());
-        gpu_name[..len].copy_from_slice(&name_bytes[..len]);
-    }
-
-    Ok(GetGspStaticInfoReply { gpu_name })
-}
-
 /// GMC command id for `GSP_INIT`.
 ///
 /// Matches `GMCAPI_COMMANDS_GMCAPI_CMD_GSP_INIT` in the r000 bindings.
@@ -228,7 +77,6 @@ const REGISTRY_ENTRIES: &[(&str, u32)] = &[
 /// The blob carries the system-info keys with values the driver actually
 /// has, plus the registry entries from [`REGISTRY_ENTRIES`] as
 /// `REGKEY_NAME` plus `REGKEY_VALUE_U32` pairs.
-#[expect(dead_code)]
 pub(crate) fn build_gsp_init_payload(
     pdev: &pci::Device<device::Bound>,
     chipset: Chipset,
@@ -285,25 +133,50 @@ pub(crate) fn build_gsp_init_payload(
     Ok(nvkv.finish())
 }
 
-/// Sends `GSP_INIT` via GMC and parses the NVKV response.
+/// Sends `GSP_INIT` and drives the receive loop until the reply arrives.
 ///
 /// `payload` is the NVKV-encoded blob from [`build_gsp_init_payload`].
-#[expect(dead_code)]
-pub(crate) fn gsp_init(cmdq: &Cmdq, bar: &Bar0, payload: &[u8]) -> Result<GetGspStaticInfoReply> {
-    let response =
-        cmdq.send_gmc_and_receive(bar, CMD_GSP_INIT, payload, GSP_GET_STATIC_INFO_MAX_RESPONSE)?;
+/// GSP-RM may interleave boot events between the send and the reply, so the
+/// caller supplies an `on_boot_event` closure that handles those events.
+/// The loop terminates when a GMC message arrives whose command id matches
+/// [`CMD_GSP_INIT`]; the reply payload is decoded and returned.
+pub(crate) fn gsp_init(
+    cmdq: &Cmdq,
+    bar: &Bar0,
+    payload: &[u8],
+    mut on_boot_event: impl FnMut(u32, &[u8]) -> Result,
+) -> Result<GetGspStaticInfoReply> {
+    cmdq.send_gmc_no_wait(bar, CMD_GSP_INIT, payload, GSP_INIT_MAX_RESPONSE_SIZE)?;
 
-    if response.status != 0 {
-        return Err(EIO);
+    loop {
+        let reply = cmdq.receive_gmc_and_dispatch(
+            bar,
+            Cmdq::RECEIVE_TIMEOUT,
+            |id, status, p0, p1| -> Result<Option<GetGspStaticInfoReply>> {
+                if id == CMD_GSP_INIT {
+                    if status != 0 {
+                        return Err(EIO);
+                    }
+                    let mut blob = KVec::with_capacity(p0.len() + p1.len(), GFP_KERNEL)?;
+                    blob.extend_from_slice(p0, GFP_KERNEL)?;
+                    blob.extend_from_slice(p1, GFP_KERNEL)?;
+                    let mut gpu_name = [0u8; 64];
+                    if let Some(name_bytes) =
+                        nvkv::find_array8(&blob, nvkv::gsp_config_key::GPU_NAME_STRING)?
+                    {
+                        let len = name_bytes.len().min(gpu_name.len());
+                        gpu_name[..len].copy_from_slice(&name_bytes[..len]);
+                    }
+                    Ok(Some(GetGspStaticInfoReply { gpu_name }))
+                } else {
+                    on_boot_event(id, p0)?;
+                    Ok(None)
+                }
+            },
+        )??;
+
+        if let Some(reply) = reply {
+            return Ok(reply);
+        }
     }
-
-    let mut gpu_name = [0u8; 64];
-    if let Some(name_bytes) =
-        nvkv::find_array8(&response.payload, nvkv::gsp_config_key::GPU_NAME_STRING)?
-    {
-        let len = name_bytes.len().min(gpu_name.len());
-        gpu_name[..len].copy_from_slice(&name_bytes[..len]);
-    }
-
-    Ok(GetGspStaticInfoReply { gpu_name })
 }

@@ -102,16 +102,10 @@ pub(crate) struct Builder {
     bytes: KVec<u8>,
 }
 
-#[expect(dead_code)]
 impl Builder {
     /// Creates an empty NVKV builder.
     pub(crate) fn new() -> Self {
         Self { bytes: KVec::new() }
-    }
-
-    /// Returns the current encoded length in bytes.
-    pub(crate) fn len(&self) -> usize {
-        self.bytes.len()
     }
 
     /// Consumes the builder and returns the encoded byte buffer.

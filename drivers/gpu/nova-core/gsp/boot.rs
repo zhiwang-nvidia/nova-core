@@ -50,13 +50,9 @@ use crate::{
         Chipset, //
     },
     gsp::{
-        cmdq::Cmdq,
         commands,
         fw,
-        fw::{
-            LibosMemoryRegionInitArgument,
-            MsgFunction, //
-        },
+        fw::LibosMemoryRegionInitArgument,
         GspFwWprMeta, //
     },
     regs,
@@ -451,25 +447,27 @@ impl super::Gsp {
 
         dev_dbg!(dev, "RISC-V active? {}\n", gsp_falcon.is_riscv_active(bar));
 
-        // Send system info and registry RPCs now that GSP is active.
-        self.cmdq
-            .send_command_no_wait(bar, commands::SetSystemInfo::new(pdev, chipset))?;
-        self.cmdq
-            .send_command_no_wait(bar, commands::SetRegistry::new())?;
+        // GSP-RM discards any RPC seen before GSP_INIT, so the system-info
+        // and registry data ride inline in the GSP_INIT NVKV payload. The
+        // synchronous GSP_INIT reply arrives only after GSP-RM is fully up,
+        // and any LOAD_EXEC events GSP-RM raises in the meantime are
+        // dispatched inline by the GMC boot-event handler.
+        let init_payload = commands::build_gsp_init_payload(pdev, chipset)?;
+        let bootloader_app_version = gsp_fw.bootloader.app_version;
+        let libos_dma_handle = self.libos.dma_handle();
+        let info = commands::gsp_init(&self.cmdq, bar, &init_payload, |id, payload| {
+            Self::dispatch_gmc_boot_event(
+                id,
+                payload,
+                gsp_falcon,
+                sec2_falcon,
+                bar,
+                dev,
+                bootloader_app_version,
+                libos_dma_handle,
+            )
+        })?;
 
-        // Wait for GSP-RM to complete initialization, handling boot events inline.
-        Self::wait_gsp_boot_events(
-            &self.cmdq,
-            gsp_falcon,
-            sec2_falcon,
-            bar,
-            dev,
-            gsp_fw.bootloader.app_version,
-            self.libos.dma_handle(),
-        )?;
-
-        // Obtain and display basic GPU information.
-        let info = commands::get_gsp_info(&self.cmdq, bar)?;
         match info.gpu_name() {
             Ok(name) => dev_info!(dev, "GPU name: {}\n", name),
             Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
@@ -478,71 +476,11 @@ impl super::Gsp {
         Ok(())
     }
 
-    /// Wait for GSP boot to complete, handling load-and-execute events inline.
-    ///
-    /// r000 firmware replaces the CPU sequencer with structured boot events.
-    /// When the GSP sends a `LOAD_EXEC_GENERIC_BOOTLOADER` or `LOAD_EXEC_HS_BINARY`
-    /// event, the driver loads the requested firmware onto the GSP falcon, executes
-    /// it, and performs a core resume (reset GSP into RISCV, start SEC2-RTOS to
-    /// resume GSP-RM). The loop runs until `INIT_DONE` arrives.
-    #[allow(clippy::too_many_arguments)]
-    fn wait_gsp_boot_events(
-        cmdq: &Cmdq,
-        gsp_falcon: &Falcon<Gsp>,
-        sec2_falcon: &Falcon<Sec2>,
-        bar: &Bar0,
-        dev: &device::Device,
-        bootloader_app_version: u32,
-        libos_dma_handle: u64,
-    ) -> Result {
-        loop {
-            let done = cmdq.receive_and_dispatch(
-                Delta::from_secs(10),
-                |function, payload_0, _payload_1| -> Result<bool> {
-                    match function {
-                        MsgFunction::GspInitDone => Ok(true),
-                        MsgFunction::GspLoadExecGenericBootloader => {
-                            Self::handle_load_exec_bootloader(
-                                payload_0,
-                                gsp_falcon,
-                                sec2_falcon,
-                                bar,
-                                dev,
-                                bootloader_app_version,
-                                libos_dma_handle,
-                            )?;
-                            Ok(false)
-                        }
-                        MsgFunction::GspLoadExecHsBinary => {
-                            Self::handle_load_exec_hs_binary(
-                                payload_0,
-                                gsp_falcon,
-                                sec2_falcon,
-                                bar,
-                                dev,
-                                bootloader_app_version,
-                                libos_dma_handle,
-                            )?;
-                            Ok(false)
-                        }
-                        _ => Ok(false),
-                    }
-                },
-            )??;
-
-            if done {
-                return Ok(());
-            }
-        }
-    }
-
     /// Dispatch a single GMC boot event to the matching load-and-execute handler.
     ///
     /// The r000 boot path delivers load-and-execute steps as GMC events keyed by
-    /// command id rather than as VGPU-style RPC events keyed by [`MsgFunction`].
-    /// The payload after the GMC header has the same shape as the v0 path, so the
-    /// existing handlers are reused as-is.
-    #[expect(dead_code)]
+    /// command id. The payload after the GMC header is the same as in the prior
+    /// VGPU-style framing, so the existing handlers are reused as-is.
     #[allow(clippy::too_many_arguments)]
     fn dispatch_gmc_boot_event(
         command_id: u32,
