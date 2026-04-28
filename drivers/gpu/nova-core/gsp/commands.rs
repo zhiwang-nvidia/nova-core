@@ -12,8 +12,7 @@ use core::{
 use kernel::{
     device,
     pci,
-    prelude::*,
-    transmute::AsBytes, //
+    prelude::*, //
 };
 
 use crate::{
@@ -23,8 +22,7 @@ use crate::{
         cmdq::{
             Cmdq,
             CommandToGsp,
-            MessageFromGsp,
-            NoReply, //
+            MessageFromGsp, //
         },
         fw::{
             self,
@@ -36,145 +34,8 @@ use crate::{
     vgpu::VgpuState, //
 };
 
-/// The `GspSetSystemInfo` command.
-pub(crate) struct SetSystemInfo<'a> {
-    pdev: &'a pci::Device<device::Bound>,
-    chipset: Chipset,
-}
-
-impl<'a> SetSystemInfo<'a> {
-    /// Creates a new `GspSetSystemInfo` command using the parameters of `pdev`.
-    pub(crate) fn new(pdev: &'a pci::Device<device::Bound>, chipset: Chipset) -> Self {
-        Self { pdev, chipset }
-    }
-}
-
-impl<'a> CommandToGsp for SetSystemInfo<'a> {
-    const FUNCTION: MsgFunction = MsgFunction::GspSetSystemInfo;
-    const IS_ASYNC: bool = true;
-    type Command = fw::commands::GspSetSystemInfo;
-    type Reply = NoReply;
-    type InitError = Error;
-
-    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
-        Self::Command::init(self.pdev, self.chipset)
-    }
-}
-
-struct RegistryEntry {
-    key: &'static str,
-    value: u32,
-}
-
-/// The `SetRegistry` command.
-pub(crate) struct SetRegistry {
-    entries: KVec<RegistryEntry>,
-}
-
-impl SetRegistry {
-    /// Creates a new `SetRegistry` command, using a set of hardcoded entries.
-    pub(crate) fn new(vgpu_state: VgpuState) -> Result<Self> {
-        let mut entries = KVec::new();
-
-        // RMSecBusResetEnable - enables PCI secondary bus reset
-        entries.push(
-            RegistryEntry {
-                key: "RMSecBusResetEnable",
-                value: 1,
-            },
-            GFP_KERNEL,
-        )?;
-
-        // RMForcePcieConfigSave - forces GSP-RM to preserve PCI configuration registers on
-        // any PCI reset.
-        entries.push(
-            RegistryEntry {
-                key: "RMForcePcieConfigSave",
-                value: 1,
-            },
-            GFP_KERNEL,
-        )?;
-
-        // RMDevidCheckIgnore - allows GSP-RM to boot even if the PCI dev ID is not found
-        // in the internal product name database.
-        entries.push(
-            RegistryEntry {
-                key: "RMDevidCheckIgnore",
-                value: 1,
-            },
-            GFP_KERNEL,
-        )?;
-
-        if matches!(vgpu_state, VgpuState::Enabled { .. }) {
-            // RMSetSriovMode - required when vGPU is enabled.
-            entries.push(
-                RegistryEntry {
-                    key: "RMSetSriovMode",
-                    value: 1,
-                },
-                GFP_KERNEL,
-            )?;
-        }
-
-        Ok(Self { entries })
-    }
-}
-
-impl CommandToGsp for SetRegistry {
-    const FUNCTION: MsgFunction = MsgFunction::SetRegistry;
-    const IS_ASYNC: bool = true;
-    type Command = fw::commands::PackedRegistryTable;
-    type Reply = NoReply;
-    type InitError = Infallible;
-
-    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
-        Self::Command::init(
-            self.entries.len() as u32,
-            self.variable_payload_len() as u32,
-        )
-    }
-
-    fn variable_payload_len(&self) -> usize {
-        let mut key_size = 0;
-        for entry in self.entries.iter() {
-            key_size += entry.key.len() + 1; // +1 for NULL terminator
-        }
-        self.entries.len() * size_of::<fw::commands::PackedRegistryEntry>() + key_size
-    }
-
-    fn init_variable_payload(
-        &self,
-        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
-    ) -> Result {
-        let string_data_start_offset = size_of::<Self::Command>()
-            + self.entries.len() * size_of::<fw::commands::PackedRegistryEntry>();
-
-        // Array for string data.
-        let mut string_data = KVec::new();
-
-        for entry in self.entries.iter() {
-            dst.write_all(
-                fw::commands::PackedRegistryEntry::new(
-                    (string_data_start_offset + string_data.len()) as u32,
-                    entry.value,
-                )
-                .as_bytes(),
-            )?;
-
-            let key_bytes = entry.key.as_bytes();
-            string_data.extend_from_slice(key_bytes, GFP_KERNEL)?;
-            string_data.push(0, GFP_KERNEL)?;
-        }
-
-        dst.write_all(string_data.as_slice())
-    }
-}
-
-/// GMC command ID for `GSP_GET_STATIC_INFO`.
-const GMC_CMD_GSP_GET_STATIC_INFO: u32 = 0x0001_0001;
-
-/// Maximum response size for `GSP_GET_STATIC_INFO`.
-const GSP_GET_STATIC_INFO_MAX_RESPONSE: u32 = 8192;
+/// Maximum response size for the `GSP_INIT` reply.
+const GSP_INIT_MAX_RESPONSE_SIZE: u32 = 8192;
 
 /// GMC command id for `GSP_INIT`.
 ///
@@ -193,7 +54,7 @@ const REGISTRY_ENTRIES: &[(&[u8], u32)] = &[
     (b"RMDevidCheckIgnore\0", 1),
 ];
 
-/// The reply from the GSP to the `GSP_GET_STATIC_INFO` GMC command.
+/// The reply from the GSP to the `GSP_INIT` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
     /// Usable FB (VRAM) regions for driver memory allocation.
@@ -224,22 +85,6 @@ impl GetGspStaticInfoReply {
     }
 }
 
-/// Sends `GSP_GET_STATIC_INFO` via GMC and parses the NVKV response.
-pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: Bar0<'_>) -> Result<GetGspStaticInfoReply> {
-    let response = cmdq.send_gmc_and_receive(
-        bar,
-        GMC_CMD_GSP_GET_STATIC_INFO,
-        &[],
-        GSP_GET_STATIC_INFO_MAX_RESPONSE,
-    )?;
-
-    if response.status != 0 {
-        return Err(EIO);
-    }
-
-    decode_gsp_info(&response.payload)
-}
-
 /// Decodes the static GPU information returned by a GMC command.
 fn decode_gsp_info(payload: &[u8]) -> Result<GetGspStaticInfoReply> {
     let decoder = nvkv::Decoder::new(payload, nvkv::UnknownKeyPolicy::Ignore)?;
@@ -268,7 +113,6 @@ fn decode_gsp_info(payload: &[u8]) -> Result<GetGspStaticInfoReply> {
 /// The blob carries the system-info keys with values the driver actually
 /// has, plus the registry entries from [`REGISTRY_ENTRIES`] as
 /// `REGKEY_NAME` plus `REGKEY_VALUE_U32` pairs.
-#[expect(dead_code)]
 pub(crate) fn build_gsp_init_payload(
     pdev: &pci::Device<device::Bound>,
     chipset: Chipset,
@@ -314,23 +158,46 @@ pub(crate) fn build_gsp_init_payload(
     Ok(encoder.finish())
 }
 
-/// Sends `GSP_INIT` via GMC and parses the NVKV response.
+/// Sends `GSP_INIT` and drives the receive loop until the reply arrives.
 ///
 /// `payload` is the NVKV-encoded blob from [`build_gsp_init_payload`].
-#[expect(dead_code)]
+/// GSP-RM may interleave boot events between the send and the reply, so the
+/// caller supplies an `on_boot_event` closure that handles those events.
+/// The loop terminates when a GMC message arrives whose command id matches
+/// [`CMD_GSP_INIT`]; the reply payload is decoded and returned.
 pub(crate) fn gsp_init(
     cmdq: &Cmdq,
     bar: Bar0<'_>,
     payload: &[u8],
+    mut on_boot_event: impl FnMut(u32, &[u8]) -> Result,
 ) -> Result<GetGspStaticInfoReply> {
-    let response =
-        cmdq.send_gmc_and_receive(bar, CMD_GSP_INIT, payload, GSP_GET_STATIC_INFO_MAX_RESPONSE)?;
+    cmdq.send_gmc_no_wait(bar, CMD_GSP_INIT, payload, GSP_INIT_MAX_RESPONSE_SIZE)?;
 
-    if response.status != 0 {
-        return Err(EIO);
+    loop {
+        let reply = cmdq.receive_gmc_and_dispatch(
+            bar,
+            Cmdq::RECEIVE_TIMEOUT,
+            |id, status, p0, p1| -> Result<Option<GetGspStaticInfoReply>> {
+                if id == CMD_GSP_INIT {
+                    if status != 0 {
+                        return Err(EIO);
+                    }
+
+                    let mut blob = KVVec::with_capacity(p0.len() + p1.len(), GFP_KERNEL)?;
+                    blob.extend_from_slice(p0, GFP_KERNEL)?;
+                    blob.extend_from_slice(p1, GFP_KERNEL)?;
+                    Ok(Some(decode_gsp_info(&blob)?))
+                } else {
+                    on_boot_event(id, p0)?;
+                    Ok(None)
+                }
+            },
+        )??;
+
+        if let Some(reply) = reply {
+            return Ok(reply);
+        }
     }
-
-    decode_gsp_info(&response.payload)
 }
 
 pub(crate) use fw::commands::PowerStateLevel;

@@ -395,12 +395,30 @@ impl Gsp {
             }))
         })
     }
-
-    /// Query the GSP for the static GPU information.
-    pub(crate) fn get_static_info(&self, bar: Bar0<'_>) -> Result<commands::GetGspStaticInfoReply> {
-        commands::get_gsp_info(&self.cmdq, bar)
-    }
 }
 
 /// Opaque bundle required to unload the GSP. Created by [`Gsp::boot`], consumed by [`Gsp::unload`].
 pub(crate) struct UnloadBundle(KBox<dyn hal::UnloadBundle>);
+
+/// Resources produced by a successful GSP boot.
+pub(crate) struct BootResult {
+    unload_bundle: Option<UnloadBundle>,
+    pub(crate) static_info: commands::GetGspStaticInfoReply,
+}
+
+impl BootResult {
+    fn new(
+        unload_bundle: Option<UnloadBundle>,
+        static_info: commands::GetGspStaticInfoReply,
+    ) -> Self {
+        Self {
+            unload_bundle,
+            static_info,
+        }
+    }
+
+    /// Takes the unload resources during GSP teardown.
+    pub(crate) fn take_unload_bundle(&mut self) -> Option<UnloadBundle> {
+        self.unload_bundle.take()
+    }
+}
