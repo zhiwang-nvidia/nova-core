@@ -25,7 +25,6 @@ use crate::{
     fsp::Fsp,
     gsp::{
         self,
-        commands::GetGspStaticInfoReply,
         Gsp,
         GspBootContext, //
     },
@@ -273,16 +272,14 @@ struct GspResources<'gpu> {
     /// GSP runtime data.
     #[pin]
     gsp: Gsp,
-    /// GSP unload firmware bundle, if any.
-    unload_bundle: Option<gsp::UnloadBundle>,
+    /// Resources returned by the GSP boot sequence.
+    boot_result: gsp::BootResult,
 }
 
 /// Structure holding the resources required to operate the GPU.
 #[pin_data]
 pub(crate) struct Gpu<'gpu> {
     spec: Spec,
-    /// Static GPU information as provided by the GSP.
-    gsp_static_info: GetGspStaticInfoReply,
     /// GSP and its resources.
     #[pin]
     gsp_resources: GspResources<'gpu>,
@@ -300,7 +297,7 @@ impl PinnedDrop for GspResources<'_> {
         let this = self.project();
         let device = *this.device;
         let bar = *this.bar;
-        let bundle = this.unload_bundle.take();
+        let bundle = this.boot_result.take_unload_bundle();
 
         let _ = this
             .gsp
@@ -372,10 +369,10 @@ impl<'gpu> Gpu<'gpu> {
 
                 gsp <- Gsp::new(pdev, spec.chipset),
 
-                // This member must be initialized last, so the `UnloadBundle` can never be dropped
-                // from outside of the constructed `GspResources`, ensuring that the unload sequence
-                // is properly run in case of failure.
-                unload_bundle: gsp.boot(GspBootContext {
+                // This member must be initialized last, so the unload bundle can never be dropped
+                // from outside of the constructed `GspResources`, ensuring that the unload
+                // sequence is properly run in case of failure.
+                boot_result: gsp.boot(GspBootContext {
                     pdev,
                     bar,
                     chipset: spec.chipset,
@@ -386,9 +383,9 @@ impl<'gpu> Gpu<'gpu> {
                 })?,
             }),
 
-            gsp_static_info: {
-                // Obtain and display basic GPU information.
-                let info = gsp_resources.gsp.get_static_info(bar)?;
+            _: {
+                // GSP_INIT has already returned this information as its boot-completion reply.
+                let info = &gsp_resources.boot_result.static_info;
                 match info.gpu_name() {
                     Ok(name) => dev_info!(dev, "GPU name: {}\n", name),
                     Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
@@ -406,10 +403,8 @@ impl<'gpu> Gpu<'gpu> {
                         info.usable_fb_regions.iter().fold(0u64, |res, region| res
                             .saturating_add(region.end - region.start))
                             / u64::SZ_1M
-                    );
+                        );
                 }
-
-                info
             }
         })
     }
