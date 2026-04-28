@@ -744,6 +744,18 @@ impl Cmdq {
         self.inner.lock().receive_and_dispatch(timeout, handler)
     }
 
+    /// Receive the next GMC event from GSP and dispatch it through a handler.
+    ///
+    /// See [`CmdqInner::receive_gmc_and_dispatch`] for details.
+    #[expect(dead_code)]
+    pub(crate) fn receive_gmc_and_dispatch<R>(
+        &self,
+        timeout: Delta,
+        handler: impl FnOnce(u32, &[u8], &[u8]) -> R,
+    ) -> Result<R> {
+        self.inner.lock().receive_gmc_and_dispatch(timeout, handler)
+    }
+
     /// Sends a GMC API command to the GSP and waits for the response.
     ///
     /// The queue is locked for the entire send+receive cycle.
@@ -1223,5 +1235,40 @@ impl CmdqInner {
         )?);
 
         Ok(response)
+    }
+
+    /// Receive the next GMC event from GSP and dispatch it through a handler.
+    ///
+    /// The handler receives the GMC command id and the raw payload slices that follow the
+    /// `GmcApiHeader` (two slices because the circular buffer may wrap). The message is
+    /// consumed from the queue after the handler returns, regardless of the handler's result.
+    ///
+    /// This is the GMC counterpart to [`CmdqInner::receive_and_dispatch`]. Where
+    /// `receive_and_dispatch` handles RPC-style messages keyed by [`MsgFunction`], this method
+    /// handles GMC events keyed by command id, which is the form r000 firmware uses for boot
+    /// events.
+    fn receive_gmc_and_dispatch<R>(
+        &mut self,
+        timeout: Delta,
+        handler: impl FnOnce(u32, &[u8], &[u8]) -> R,
+    ) -> Result<R> {
+        let message = self.wait_for_gmc_msg(timeout)?;
+        let command_id = message.header.gmc.command_id;
+
+        dev_dbg!(
+            &self.dev,
+            "GSP GMC: event received: seq {}, command_id=0x{:x}, length=0x{:x}\n",
+            message.header.gmc.sequence,
+            command_id,
+            message.header.length(),
+        );
+
+        let result = handler(command_id, message.contents.0, message.contents.1);
+
+        self.gsp_mem.advance_cpu_read_ptr(u32::try_from(
+            message.header.length().div_ceil(GSP_PAGE_SIZE),
+        )?);
+
+        Ok(result)
     }
 }
