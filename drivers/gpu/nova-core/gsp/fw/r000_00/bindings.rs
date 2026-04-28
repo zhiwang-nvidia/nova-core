@@ -75,9 +75,79 @@ impl<T> ::core::cmp::PartialEq for __BindgenUnionField<T> {
 impl<T> ::core::cmp::Eq for __BindgenUnionField<T> {}
 pub const NV_VGPU_MSG_SIGNATURE_VALID: u32 = 1129337430;
 pub const REGISTRY_TABLE_ENTRY_TYPE_DWORD: u32 = 1;
+pub const NVGMC_SI_PCI_DEVICE_ID: u32 = 1;
+pub const NVGMC_SI_PCI_SUB_DEVICE_ID: u32 = 2;
+pub const NVGMC_SI_PCI_REVISION_ID: u32 = 3;
+pub const NVGMC_SI_PCI_CONFIG_MIRROR_BASE: u32 = 16;
+pub const NVGMC_SI_PCI_CONFIG_MIRROR_SIZE: u32 = 17;
+pub const NVGMC_SI_PCIE_ATOMICS_CPL_DEV_CAP_MASK: u32 = 32;
+pub const NVGMC_SI_CHIPSET: u32 = 48;
+pub const NVGMC_SI_CHIPSET_L1SS_ENABLE: u32 = 49;
+pub const NVGMC_SI_HYPERVISOR_TYPE: u32 = 64;
+pub const NVGMC_SI_VIRTUAL_CONFIG_BITS: u32 = 65;
+pub const NVGMC_SI_PCIE_POWER_CONTROL_VALUE: u32 = 80;
+pub const NVGMC_SI_PF0_DEVICE_CONTROL2_REG: u32 = 81;
+pub const NVGMC_SI_PCIE_LINK_CAP: u32 = 82;
+pub const NVGMC_SI_GRID_BUILD_CSP: u32 = 96;
+pub const NVGMC_SI_OOR_ARCH: u32 = 112;
+pub const NVGMC_SI_OOR_ARCH_NONE: u32 = 0;
+pub const NVGMC_SI_OOR_ARCH_X86_64: u32 = 1;
+pub const NVGMC_SI_OOR_ARCH_PPC64LE: u32 = 2;
+pub const NVGMC_SI_OOR_ARCH_ARM: u32 = 3;
+pub const NVGMC_SI_OOR_ARCH_AARCH64: u32 = 4;
+pub const NVGMC_SI_OOR_ARCH_RISCV64: u32 = 5;
+pub const NVGMC_SI_HOST_PAGE_SIZE: u32 = 120;
+pub const NVGMC_SI_VF_TOTAL_VFS: u32 = 128;
+pub const NVGMC_SI_VF_FIRST_VF_OFFSET: u32 = 129;
+pub const NVGMC_SI_FHB_BUSINFO_REVISION_ID: u32 = 144;
+pub const NVGMC_SI_CHIPSET_BUSINFO_REVISION_ID: u32 = 145;
+pub const NVGMC_SI_ACPI_DOD_STATUS: u32 = 512;
+pub const NVGMC_SI_ACPI_DOD_ACPI_IDS: u32 = 528;
+pub const NVGMC_SI_ACPI_JT_STATUS: u32 = 544;
+pub const NVGMC_SI_ACPI_JT_CAPS: u32 = 545;
+pub const NVGMC_SI_ACPI_JT_REV_ID: u32 = 546;
+pub const NVGMC_SI_ACPI_JT_B_SBIOS_CAPS: u32 = 547;
+pub const NVGMC_SI_ACPI_MUX_TABLE_LEN: u32 = 560;
+pub const NVGMC_SI_ACPI_MUX_MODE_ACPI_ID: u32 = 576;
+pub const NVGMC_SI_ACPI_MUX_MODE_MODE: u32 = 577;
+pub const NVGMC_SI_ACPI_MUX_MODE_STATUS: u32 = 578;
+pub const NVGMC_SI_ACPI_MUX_PART_ACPI_ID: u32 = 592;
+pub const NVGMC_SI_ACPI_MUX_PART_MODE: u32 = 593;
+pub const NVGMC_SI_ACPI_MUX_PART_STATUS: u32 = 594;
+pub const NVGMC_SI_ACPI_MUX_STATE_ACPI_ID: u32 = 608;
+pub const NVGMC_SI_ACPI_MUX_STATE_MODE: u32 = 609;
+pub const NVGMC_SI_ACPI_MUX_STATE_STATUS: u32 = 610;
+pub const NVGMC_SI_ACPI_CAPS_STATUS: u32 = 624;
+pub const NVGMC_SI_ACPI_CAPS_OPTIMUS_CAPS: u32 = 625;
+pub const NVGMC_SI_PCIE_FLAGS: u32 = 4096;
+pub const NVGMC_SI_PLATFORM_FLAGS: u32 = 4097;
+pub const NVGMC_SI_FEATURE_FLAGS: u32 = 4098;
+pub const NVGMC_SI_VF_FLAGS: u32 = 4099;
+pub const NVGMC_SI_GPU_PHYS_ADDR: u32 = 4112;
+pub const NVGMC_SI_GPU_PHYS_FB_ADDR: u32 = 4113;
+pub const NVGMC_SI_GPU_PHYS_INST_ADDR: u32 = 4114;
+pub const NVGMC_SI_GPU_PHYS_IO_ADDR: u32 = 4115;
+pub const NVGMC_SI_NV_DOMAIN_BUS_DEVICE_FUNC: u32 = 4128;
+pub const NVGMC_SI_SIM_ACCESS_BUF_PHYS_ADDR: u32 = 4129;
+pub const NVGMC_SI_NOTIFY_OP_SHARED_SURF_PHYS_ADDR: u32 = 4130;
+pub const NVGMC_SI_PCIE_ATOMICS_OP_MASK: u32 = 4144;
+pub const NVGMC_SI_CONSOLE_MEM_SIZE: u32 = 4145;
+pub const NVGMC_SI_MAX_USER_VA: u32 = 4146;
+pub const NVGMC_SI_SYS_TIMER_OFFSET_NS: u32 = 4160;
+pub const NVGMC_SI_VF_FIRST_BAR0_ADDRESS: u32 = 4176;
+pub const NVGMC_SI_VF_FIRST_BAR1_ADDRESS: u32 = 4177;
+pub const NVGMC_SI_VF_FIRST_BAR2_ADDRESS: u32 = 4178;
+pub const NVGMC_SI_FHB_BUSINFO: u32 = 4240;
+pub const NVGMC_SI_CHIPSET_BUSINFO: u32 = 4241;
+pub const NVGMC_SI_REGKEY_NAME: u32 = 12400;
+pub const NVGMC_SI_REGKEY_VALUE_U32: u32 = 12401;
+pub const NVGMC_SI_REGKEY_VALUE_STRING: u32 = 12402;
+pub const NVGMC_SI_REGKEY_VALUE_BINARY: u32 = 12403;
+pub const NVGMC_SI_REGKEY_NAME_MAX_LEN: u32 = 256;
 pub const GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS2: u32 = 0;
 pub const GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS3_BAREMETAL: u32 = 23068672;
 pub const GSP_FW_HEAP_PARAM_BASE_RM_SIZE_TU10X: u32 = 8388608;
+pub const GSP_FW_HEAP_PARAM_SIZE_PER_GB: u32 = 98304;
 pub const GSP_FW_HEAP_PARAM_CLIENT_ALLOC_SIZE: u32 = 100663296;
 pub const GSP_FW_HEAP_SIZE_VGPU_DEFAULT: u32 = 609222656;
 pub const GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS2_MIN_MB: u32 = 64;
@@ -86,6 +156,7 @@ pub const GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MIN_MB: u32 = 88;
 pub const GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MAX_MB: u32 = 280;
 pub const GSP_FW_WPR_META_REVISION: u32 = 1;
 pub const GSP_FW_WPR_META_MAGIC: i64 = -2577556379034558285;
+pub const NVGMC_SI_CL_FLAGS: u32 = 4147;
 pub type __u8 = ffi::c_uchar;
 pub type __u16 = ffi::c_ushort;
 pub type __u32 = ffi::c_uint;
@@ -326,7 +397,9 @@ pub const NV_VGPU_MSG_FUNCTION_CTRL_EXEC_PARTITIONS_EXPORT: _bindgen_ty_2 = 226;
 pub const NV_VGPU_MSG_FUNCTION_CTRL_CMD_INTERNAL_GPU_CHECK_CTS_ID_VALID: _bindgen_ty_2 = 227;
 pub const NV_VGPU_MSG_FUNCTION_INIT_GSP_TRACE_CRASH_BUFFER: _bindgen_ty_2 = 228;
 pub const NV_VGPU_MSG_FUNCTION_CTRL_GPU_SET_MIGRATION_BLOCK: _bindgen_ty_2 = 229;
-pub const NV_VGPU_MSG_FUNCTION_NUM_FUNCTIONS: _bindgen_ty_2 = 230;
+pub const NV_VGPU_MSG_FUNCTION_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT: _bindgen_ty_2 = 230;
+pub const NV_VGPU_MSG_FUNCTION_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE: _bindgen_ty_2 = 231;
+pub const NV_VGPU_MSG_FUNCTION_NUM_FUNCTIONS: _bindgen_ty_2 = 232;
 pub type _bindgen_ty_2 = ffi::c_uint;
 pub const NV_VGPU_MSG_EVENT_FIRST_EVENT: _bindgen_ty_3 = 4096;
 pub const NV_VGPU_MSG_EVENT_GSP_INIT_DONE: _bindgen_ty_3 = 4097;
@@ -570,9 +643,7 @@ pub struct GSP_PCIE_CONFIG_REG {
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
 pub struct EcidManufacturingInfo {
-    pub ecidLow: u32_,
-    pub ecidHigh: u32_,
-    pub ecidExtended: u32_,
+    pub info: [u64_; 2usize],
 }
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
@@ -607,18 +678,20 @@ pub struct GspStaticConfigInfo_t {
     pub bIsTitan: u8_,
     pub bIsTesla: u8_,
     pub bIsMobile: u8_,
+    pub bIsCmpSku: u8_,
     pub bIsGc6Rtd3Allowed: u8_,
     pub bIsGc8Rtd3Allowed: u8_,
     pub bIsGcOffRtd3Allowed: u8_,
     pub bIsGcoffLegacyAllowed: u8_,
     pub bIsMigSupported: u8_,
+    pub __bindgen_padding_3: u8,
     pub RTD3GC6TotalBoardPower: u16_,
     pub RTD3GC6PerstDelay: u16_,
-    pub __bindgen_padding_3: [u8; 6usize],
+    pub __bindgen_padding_4: [u8; 4usize],
     pub bar1PdeBase: u64_,
     pub bar2PdeBase: u64_,
     pub bVbiosValid: u8_,
-    pub __bindgen_padding_4: [u8; 3usize],
+    pub __bindgen_padding_5: [u8; 3usize],
     pub vbiosSubVendor: u32_,
     pub vbiosSubDevice: u32_,
     pub vbiosRevision: u32_,
@@ -626,7 +699,7 @@ pub struct GspStaticConfigInfo_t {
     pub bPageRetirementSupported: u8_,
     pub bSplitVasBetweenServerClientRm: u8_,
     pub bClRootportNeedsNosnoopWAR: u8_,
-    pub __bindgen_padding_5: u8,
+    pub __bindgen_padding_6: u8,
     pub hInternalClient: u32_,
     pub hInternalDevice: u32_,
     pub hInternalSubdevice: u32_,
@@ -635,12 +708,15 @@ pub struct GspStaticConfigInfo_t {
     pub bSysL2CacheCoherentMode: u8_,
     pub bIsGpuUefi: u8_,
     pub bIsEfiInit: u8_,
-    pub __bindgen_padding_6: [u8; 3usize],
+    pub __bindgen_padding_7: [u8; 7usize],
     pub ecidInfo: EcidManufacturingInfo,
     pub fwWprLayoutOffset: FW_WPR_LAYOUT_OFFSET,
     pub bBusResetRequired: u8_,
+    pub chipSubRev: u8_,
+    pub __bindgen_padding_8: [u8; 2usize],
+    pub emulationRev1: u32_,
     pub bGppBrandingOverrideApplied: u8_,
-    pub __bindgen_padding_7: [u8; 2usize],
+    pub __bindgen_padding_9: [u8; 3usize],
     pub gppOverriddenPciDeviceId: u32_,
 }
 impl Default for GspStaticConfigInfo_t {
@@ -758,6 +834,7 @@ pub struct GSP_ARGUMENTS_CACHED {
     pub sysmemHeapArgs: GSP_ARGUMENTS_CACHED__bindgen_ty_2,
     pub rmStateMonitorBufferArgs: GSP_ARGUMENTS_CACHED__bindgen_ty_3,
     pub bindataArgs: GSP_ARGUMENTS_CACHED__bindgen_ty_4,
+    pub vbiosOverrideArgs: GSP_ARGUMENTS_CACHED__bindgen_ty_5,
 }
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
@@ -781,6 +858,12 @@ pub struct GSP_ARGUMENTS_CACHED__bindgen_ty_3 {
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
 pub struct GSP_ARGUMENTS_CACHED__bindgen_ty_4 {
     pub radix3: u64_,
+    pub size: u64_,
+}
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
+pub struct GSP_ARGUMENTS_CACHED__bindgen_ty_5 {
+    pub pa: u64_,
     pub size: u64_,
 }
 #[repr(C)]
@@ -951,19 +1034,13 @@ pub struct LibosMemoryRegionInitArgument {
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
 pub struct msgqTxHeader {
-    pub version: u32_,
+    pub versionMajor: u16_,
+    pub versionMinor: u16_,
     pub size: u32_,
     pub msgSize: u32_,
     pub msgCount: u32_,
-    pub writePtr: u32_,
-    pub flags: u32_,
-    pub rxHdrOff: u32_,
     pub entryOff: u32_,
-}
-#[repr(C)]
-#[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
-pub struct msgqRxHeader {
-    pub readPtr: u32_,
+    pub reserved: [u32_; 3usize],
 }
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
@@ -1019,3 +1096,69 @@ impl Default for GSP_MSG_QUEUE_ELEMENT {
         }
     }
 }
+#[repr(C)]
+#[derive(MaybeZeroable)]
+pub struct GMCAPI_HEADER {
+    pub command_id: u32_,
+    pub reserved1: u32_,
+    pub sequence: u64_,
+    pub __bindgen_anon_1: GMCAPI_HEADER__bindgen_ty_1,
+    pub reserved2: u64_,
+    pub data: __IncompleteArrayField<u8_>,
+}
+#[repr(C)]
+#[derive(Copy, Clone, MaybeZeroable)]
+pub union GMCAPI_HEADER__bindgen_ty_1 {
+    pub request: GMCAPI_HEADER__bindgen_ty_1__bindgen_ty_1,
+    pub response: GMCAPI_HEADER__bindgen_ty_1__bindgen_ty_2,
+}
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
+pub struct GMCAPI_HEADER__bindgen_ty_1__bindgen_ty_1 {
+    pub size: u32_,
+    pub max_response_size: u32_,
+}
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
+pub struct GMCAPI_HEADER__bindgen_ty_1__bindgen_ty_2 {
+    pub status: u32_,
+    pub size: u32_,
+}
+impl Default for GMCAPI_HEADER__bindgen_ty_1 {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+impl Default for GMCAPI_HEADER {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_RESERVED_LAST: GMCAPI_COMMANDS = 65535;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_GSP_INIT: GMCAPI_COMMANDS = 65537;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER: GMCAPI_COMMANDS = 126977;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_EXEC_HS_BINARY: GMCAPI_COMMANDS = 126978;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_DUMMY_INCREMENT: GMCAPI_COMMANDS = 4294945741;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_DUMMY_DECREMENT_GSP: GMCAPI_COMMANDS = 4294945742;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_ADD_VGPU_TYPE: GMCAPI_COMMANDS = 268435457;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_QUERY_SUPPORTED_VGPU_TYPES: GMCAPI_COMMANDS = 268435458;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_QUERY_CREATABLE_VGPU_TYPES: GMCAPI_COMMANDS = 268435459;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_ASSIGN_VGPU_TYPE: GMCAPI_COMMANDS = 268435460;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_DEASSIGN_VGPU_TYPE: GMCAPI_COMMANDS = 268435461;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_QUERY_VGPU_PROPERTIES: GMCAPI_COMMANDS = 268435462;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_QUERY_ASSIGNED_VF_VGPU_TYPE: GMCAPI_COMMANDS = 268435463;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_BOOTLOAD_GSP_VGPU_PLUGIN_TASK: GMCAPI_COMMANDS = 268435488;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_SHUTDOWN_GSP_VGPU_PLUGIN_TASK: GMCAPI_COMMANDS = 268435489;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_SHUTDOWN_GSP_VGPU_PLUGIN_TASK_COMPLETE: GMCAPI_COMMANDS =
+    268435490;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_CLEANUP_GSP_VGPU_PLUGIN_RESOURCES: GMCAPI_COMMANDS = 268435491;
+pub const GMCAPI_COMMANDS_GMCAPI_CMD_INVALID: GMCAPI_COMMANDS = 4294967295;
+pub type GMCAPI_COMMANDS = ffi::c_uint;
