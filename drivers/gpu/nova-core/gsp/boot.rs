@@ -68,6 +68,17 @@ use crate::{
 const GSP_LOCKDOWN_PATTERN: u32 = 0xbadf4100;
 const GSP_LOCKDOWN_MASK: u32 = 0xffffff00;
 
+/// GMC command id for the `LOAD_EXEC_GENERIC_BOOTLOADER` boot event.
+///
+/// Matches `GMCAPI_COMMANDS_GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER` in the
+/// r000 bindings.
+const CMD_EXEC_GENERIC_BOOTLOADER: u32 = 0x0001_F001;
+
+/// GMC command id for the `LOAD_EXEC_HS_BINARY` boot event.
+///
+/// Matches `GMCAPI_COMMANDS_GMCAPI_CMD_EXEC_HS_BINARY` in the r000 bindings.
+const CMD_EXEC_HS_BINARY: u32 = 0x0001_F002;
+
 /// GSP falcon mailbox state, used to track lockdown release status.
 struct GspMbox {
     mbox0: u32,
@@ -521,6 +532,54 @@ impl super::Gsp {
 
             if done {
                 return Ok(());
+            }
+        }
+    }
+
+    /// Dispatch a single GMC boot event to the matching load-and-execute handler.
+    ///
+    /// The r000 boot path delivers load-and-execute steps as GMC events keyed by
+    /// command id rather than as VGPU-style RPC events keyed by [`MsgFunction`].
+    /// The payload after the GMC header has the same shape as the v0 path, so the
+    /// existing handlers are reused as-is.
+    #[expect(dead_code)]
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_gmc_boot_event(
+        command_id: u32,
+        payload: &[u8],
+        gsp_falcon: &Falcon<Gsp>,
+        sec2_falcon: &Falcon<Sec2>,
+        bar: &Bar0,
+        dev: &device::Device,
+        bootloader_app_version: u32,
+        libos_dma_handle: u64,
+    ) -> Result {
+        match command_id {
+            CMD_EXEC_GENERIC_BOOTLOADER => Self::handle_load_exec_bootloader(
+                payload,
+                gsp_falcon,
+                sec2_falcon,
+                bar,
+                dev,
+                bootloader_app_version,
+                libos_dma_handle,
+            ),
+            CMD_EXEC_HS_BINARY => Self::handle_load_exec_hs_binary(
+                payload,
+                gsp_falcon,
+                sec2_falcon,
+                bar,
+                dev,
+                bootloader_app_version,
+                libos_dma_handle,
+            ),
+            _ => {
+                dev_err!(
+                    dev,
+                    "Unexpected GMC boot event: command_id={:#010x}\n",
+                    command_id
+                );
+                Err(EINVAL)
             }
         }
     }
