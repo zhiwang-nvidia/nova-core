@@ -176,6 +176,23 @@ const GMC_CMD_GSP_GET_STATIC_INFO: u32 = 0x0001_0001;
 /// Maximum response size for `GSP_GET_STATIC_INFO`.
 const GSP_GET_STATIC_INFO_MAX_RESPONSE: u32 = 8192;
 
+/// GMC command id for `GSP_INIT`.
+///
+/// Matches `GMCAPI_COMMANDS_GMCAPI_CMD_GSP_INIT` in the r000 bindings.
+const CMD_GSP_INIT: u32 = 0x0001_0001;
+
+/// Hardcoded registry entries the driver always sends to GSP-RM.
+///
+/// `RMSecBusResetEnable` enables PCI secondary bus reset. `RMForcePcieConfigSave`
+/// forces GSP-RM to preserve PCI configuration registers across any PCI reset.
+/// `RMDevidCheckIgnore` allows GSP-RM to boot even if the PCI device id is not
+/// found in its internal product name database.
+const REGISTRY_ENTRIES: &[(&[u8], u32)] = &[
+    (b"RMSecBusResetEnable\0", 1),
+    (b"RMForcePcieConfigSave\0", 1),
+    (b"RMDevidCheckIgnore\0", 1),
+];
+
 /// The reply from the GSP to the `GSP_GET_STATIC_INFO` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
@@ -220,7 +237,12 @@ pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: Bar0<'_>) -> Result<GetGspStaticInf
         return Err(EIO);
     }
 
-    let decoder = nvkv::Decoder::new(&response.payload, nvkv::UnknownKeyPolicy::Ignore)?;
+    decode_gsp_info(&response.payload)
+}
+
+/// Decodes the static GPU information returned by a GMC command.
+fn decode_gsp_info(payload: &[u8]) -> Result<GetGspStaticInfoReply> {
+    let decoder = nvkv::Decoder::new(payload, nvkv::UnknownKeyPolicy::Ignore)?;
     let decoded = KBox::try_init(
         decoder.decode(nvkv::GspInitResponseSchema::default())?,
         GFP_KERNEL,
@@ -239,6 +261,76 @@ pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: Bar0<'_>) -> Result<GetGspStaticInf
         gpu_name,
         usable_fb_regions,
     })
+}
+
+/// Builds an NVKV-encoded `GSP_INIT` request payload.
+///
+/// The blob carries the system-info keys with values the driver actually
+/// has, plus the registry entries from [`REGISTRY_ENTRIES`] as
+/// `REGKEY_NAME` plus `REGKEY_VALUE_U32` pairs.
+#[expect(dead_code)]
+pub(crate) fn build_gsp_init_payload(
+    pdev: &pci::Device<device::Bound>,
+    chipset: Chipset,
+    vgpu_state: VgpuState,
+) -> Result<KVVec<u8>> {
+    let mirror = chipset.pci_config_mirror_range();
+    let mirror_size = mirror.end.checked_sub(mirror.start).ok_or(EINVAL)?;
+    let oor_arch = if cfg!(target_arch = "x86_64") {
+        nvkv::OorArch::X86_64
+    } else if cfg!(target_arch = "aarch64") {
+        nvkv::OorArch::Aarch64
+    } else if cfg!(target_arch = "powerpc64") {
+        nvkv::OorArch::Ppc64le
+    } else if cfg!(target_arch = "arm") {
+        nvkv::OorArch::Arm
+    } else if cfg!(target_arch = "riscv64") {
+        nvkv::OorArch::Riscv64
+    } else {
+        nvkv::OorArch::None
+    };
+
+    let mut regkeys = KVVec::new();
+    for &(name, value) in REGISTRY_ENTRIES {
+        regkeys.push(nvkv::RegKey::new(name, value), GFP_KERNEL)?;
+    }
+    if matches!(vgpu_state, VgpuState::Enabled { .. }) {
+        regkeys.push(nvkv::RegKey::new(b"RMSetSriovMode\0", 1), GFP_KERNEL)?;
+    }
+
+    let request = nvkv::GspInitRequest::new(
+        (u32::from(pdev.device_id()) << 16) | u32::from(pdev.vendor_id().as_raw()),
+        (u32::from(pdev.subsystem_device_id()) << 16) | u32::from(pdev.subsystem_vendor_id()),
+        u32::from(pdev.revision_id()),
+        mirror.start,
+        mirror_size,
+        oor_arch,
+        u64::from(pdev.dev_id()),
+        regkeys,
+    );
+    let mut encoder = nvkv::Encoder::new();
+    nvkv::Encodeable::encode(&request, &mut encoder)?;
+
+    Ok(encoder.finish())
+}
+
+/// Sends `GSP_INIT` via GMC and parses the NVKV response.
+///
+/// `payload` is the NVKV-encoded blob from [`build_gsp_init_payload`].
+#[expect(dead_code)]
+pub(crate) fn gsp_init(
+    cmdq: &Cmdq,
+    bar: Bar0<'_>,
+    payload: &[u8],
+) -> Result<GetGspStaticInfoReply> {
+    let response =
+        cmdq.send_gmc_and_receive(bar, CMD_GSP_INIT, payload, GSP_GET_STATIC_INFO_MAX_RESPONSE)?;
+
+    if response.status != 0 {
+        return Err(EIO);
+    }
+
+    decode_gsp_info(&response.payload)
 }
 
 pub(crate) use fw::commands::PowerStateLevel;
