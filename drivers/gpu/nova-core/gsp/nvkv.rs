@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! NVKV key/value decoder for GMC API responses.
+//! NVKV key/value codec for GMC API payloads.
 //!
 //! NVKV is a pushbuffer-like encoding used by GSP-RM to transmit structured
 //! data as an array of `u64` values. Each entry starts with a header `u64`
 //! containing the opcode, key, index, and count (or immediate value),
 //! followed by zero or more data `u64`s.
 //!
-//! Open RM reference: `inc/libraries/nvkv/nvkv.h`
+//! Open RM reference: `inc/libraries/nvkv/nvkv.h`.
 
 use kernel::prelude::*;
 
@@ -30,6 +30,14 @@ fn header_count(hdr: u64) -> u32 {
     (hdr >> 32) as u32
 }
 
+/// Builds the leading header `u64` for an NVKV entry.
+///
+/// `count_or_value` carries the byte count for `ARRAY*` opcodes and the
+/// immediate value for `IMM32`.
+fn make_header(opcode: u32, key: u16, count_or_value: u32) -> u64 {
+    (key as u64) | ((opcode as u64 & 0xF) << 28) | ((count_or_value as u64) << 32)
+}
+
 /// Number of data `u64`s that follow a given header.
 fn data_u64s(opcode: u32, count: u32) -> Result<usize> {
     match opcode {
@@ -45,10 +53,99 @@ fn data_u64s(opcode: u32, count: u32) -> Result<usize> {
 
 /// GSP static config key constants.
 ///
-/// Open RM reference: `interface/gmcapi/gmcapi_gsp_config.h`
+/// Open RM reference: `interface/gmcapi/gmcapi_gsp_config.h`.
 pub(crate) mod gsp_config_key {
-    /// GPU name string (ARRAY8, null-terminated).
+    /// GPU name string (`ARRAY8`, null-terminated).
     pub(crate) const GPU_NAME_STRING: u16 = 0x2000;
+}
+
+/// System-info key constants for `GMCAPI_CMD_GSP_INIT`.
+///
+/// Values match the `NVGMC_SI_*` `#define`s in r000 bindings
+/// (`interface/gmcapi/gmcapi_system_info.h` and
+/// `gmcapi_system_info_unstable.h`). Kept narrow to the keys the kernel
+/// actually emits.
+#[expect(dead_code)]
+pub(crate) mod sys_info_key {
+    pub(crate) const PCI_DEVICE_ID: u16 = 1;
+    pub(crate) const PCI_SUB_DEVICE_ID: u16 = 2;
+    pub(crate) const PCI_REVISION_ID: u16 = 3;
+    pub(crate) const PCI_CONFIG_MIRROR_BASE: u16 = 16;
+    pub(crate) const PCI_CONFIG_MIRROR_SIZE: u16 = 17;
+    pub(crate) const OOR_ARCH: u16 = 112;
+    pub(crate) const GPU_PHYS_ADDR: u16 = 4112;
+    pub(crate) const GPU_PHYS_FB_ADDR: u16 = 4113;
+    pub(crate) const GPU_PHYS_INST_ADDR: u16 = 4114;
+    pub(crate) const NV_DOMAIN_BUS_DEVICE_FUNC: u16 = 4128;
+    pub(crate) const MAX_USER_VA: u16 = 4146;
+    pub(crate) const REGKEY_NAME: u16 = 12400;
+    pub(crate) const REGKEY_VALUE_U32: u16 = 12401;
+}
+
+/// `NVGMC_SI_OOR_ARCH` wire values.
+///
+/// Source: `NVGMC_SI_OOR_ARCH_*` in r000 bindings.
+#[expect(dead_code)]
+pub(crate) mod oor_arch {
+    pub(crate) const NONE: u32 = 0;
+    pub(crate) const X86_64: u32 = 1;
+    pub(crate) const PPC64LE: u32 = 2;
+    pub(crate) const ARM: u32 = 3;
+    pub(crate) const AARCH64: u32 = 4;
+    pub(crate) const RISCV64: u32 = 5;
+}
+
+/// Incremental builder for an NVKV-encoded payload.
+///
+/// Each `push_*` call appends one entry. The output is a `KVec<u8>` whose
+/// length is always a multiple of 8.
+pub(crate) struct Builder {
+    bytes: KVec<u8>,
+}
+
+#[expect(dead_code)]
+impl Builder {
+    /// Creates an empty NVKV builder.
+    pub(crate) fn new() -> Self {
+        Self { bytes: KVec::new() }
+    }
+
+    /// Returns the current encoded length in bytes.
+    pub(crate) fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Consumes the builder and returns the encoded byte buffer.
+    pub(crate) fn finish(self) -> KVec<u8> {
+        self.bytes
+    }
+
+    fn push_u64(&mut self, value: u64) -> Result {
+        self.bytes
+            .extend_from_slice(&value.to_le_bytes(), GFP_KERNEL)?;
+        Ok(())
+    }
+
+    /// Appends an `OPCODE_IMM32` entry carrying a 32-bit immediate value.
+    pub(crate) fn push_imm32(&mut self, key: u16, value: u32) -> Result {
+        self.push_u64(make_header(OPCODE_IMM32, key, value))
+    }
+
+    /// Appends an `OPCODE_ARRAY8` entry whose payload is `data`.
+    ///
+    /// The header records the byte count exactly. The payload bytes are
+    /// followed by zero-padding so the next entry starts on an 8-byte
+    /// boundary.
+    pub(crate) fn push_array8(&mut self, key: u16, data: &[u8]) -> Result {
+        let count = u32::try_from(data.len()).map_err(|_| EINVAL)?;
+        self.push_u64(make_header(OPCODE_ARRAY8, key, count))?;
+        self.bytes.extend_from_slice(data, GFP_KERNEL)?;
+        let pad = (8 - data.len() % 8) % 8;
+        for _ in 0..pad {
+            self.bytes.push(0, GFP_KERNEL)?;
+        }
+        Ok(())
+    }
 }
 
 /// Find a key in an NVKV-encoded byte buffer and return its raw data bytes.
