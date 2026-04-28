@@ -15,7 +15,10 @@ use kernel::{
 
 use crate::{
     driver::Bar0,
-    gpu::Chipset,
+    gpu::{
+        Architecture,
+        Chipset, //
+    },
     gsp::{
         cmdq::{
             Cmdq,
@@ -187,6 +190,108 @@ pub(crate) fn get_gsp_info(cmdq: &Cmdq, bar: &Bar0) -> Result<GetGspStaticInfoRe
         &[],
         GSP_GET_STATIC_INFO_MAX_RESPONSE,
     )?;
+
+    if response.status != 0 {
+        return Err(EIO);
+    }
+
+    let mut gpu_name = [0u8; 64];
+    if let Some(name_bytes) =
+        nvkv::find_array8(&response.payload, nvkv::gsp_config_key::GPU_NAME_STRING)?
+    {
+        let len = name_bytes.len().min(gpu_name.len());
+        gpu_name[..len].copy_from_slice(&name_bytes[..len]);
+    }
+
+    Ok(GetGspStaticInfoReply { gpu_name })
+}
+
+/// GMC command id for `GSP_INIT`.
+///
+/// Matches `GMCAPI_COMMANDS_GMCAPI_CMD_GSP_INIT` in the r000 bindings.
+const CMD_GSP_INIT: u32 = 0x0001_0001;
+
+/// Hardcoded registry entries the driver always sends to GSP-RM.
+///
+/// `RMSecBusResetEnable` enables PCI secondary bus reset. `RMForcePcieConfigSave`
+/// forces GSP-RM to preserve PCI configuration registers across any PCI reset.
+/// `RMDevidCheckIgnore` allows GSP-RM to boot even if the PCI device id is not
+/// found in its internal product name database.
+const REGISTRY_ENTRIES: &[(&str, u32)] = &[
+    ("RMSecBusResetEnable", 1),
+    ("RMForcePcieConfigSave", 1),
+    ("RMDevidCheckIgnore", 1),
+];
+
+/// Builds an NVKV-encoded `GSP_INIT` request payload.
+///
+/// The blob carries the system-info keys with values the driver actually
+/// has, plus the registry entries from [`REGISTRY_ENTRIES`] as
+/// `REGKEY_NAME` plus `REGKEY_VALUE_U32` pairs.
+#[expect(dead_code)]
+pub(crate) fn build_gsp_init_payload(
+    pdev: &pci::Device<device::Bound>,
+    chipset: Chipset,
+) -> Result<KVec<u8>> {
+    let mut nvkv = nvkv::Builder::new();
+
+    nvkv.push_imm32(
+        nvkv::sys_info_key::PCI_DEVICE_ID,
+        (u32::from(pdev.device_id()) << 16) | u32::from(pdev.vendor_id().as_raw()),
+    )?;
+    nvkv.push_imm32(
+        nvkv::sys_info_key::PCI_SUB_DEVICE_ID,
+        (u32::from(pdev.subsystem_device_id()) << 16) | u32::from(pdev.subsystem_vendor_id()),
+    )?;
+    nvkv.push_imm32(
+        nvkv::sys_info_key::PCI_REVISION_ID,
+        u32::from(pdev.revision_id()),
+    )?;
+
+    // Hopper, Blackwell, and later moved the PCI config mirror window to
+    // 0x092000. Older architectures continue to use the legacy 0x088000.
+    let mirror_base = match chipset.arch() {
+        Architecture::Turing | Architecture::Ampere | Architecture::Ada => 0x088000,
+        Architecture::Hopper | Architecture::BlackwellGB10x | Architecture::BlackwellGB20x => {
+            0x092000
+        }
+    };
+    nvkv.push_imm32(nvkv::sys_info_key::PCI_CONFIG_MIRROR_BASE, mirror_base)?;
+    nvkv.push_imm32(nvkv::sys_info_key::PCI_CONFIG_MIRROR_SIZE, 0x001000)?;
+
+    let oor_arch = if cfg!(target_arch = "x86_64") {
+        nvkv::oor_arch::X86_64
+    } else if cfg!(target_arch = "aarch64") {
+        nvkv::oor_arch::AARCH64
+    } else if cfg!(target_arch = "powerpc64") {
+        nvkv::oor_arch::PPC64LE
+    } else if cfg!(target_arch = "arm") {
+        nvkv::oor_arch::ARM
+    } else if cfg!(target_arch = "riscv64") {
+        nvkv::oor_arch::RISCV64
+    } else {
+        nvkv::oor_arch::NONE
+    };
+    nvkv.push_imm32(nvkv::sys_info_key::OOR_ARCH, oor_arch)?;
+
+    for (name, value) in REGISTRY_ENTRIES {
+        let mut name_bytes = KVec::with_capacity(name.len() + 1, GFP_KERNEL)?;
+        name_bytes.extend_from_slice(name.as_bytes(), GFP_KERNEL)?;
+        name_bytes.push(0, GFP_KERNEL)?;
+        nvkv.push_array8(nvkv::sys_info_key::REGKEY_NAME, &name_bytes)?;
+        nvkv.push_imm32(nvkv::sys_info_key::REGKEY_VALUE_U32, *value)?;
+    }
+
+    Ok(nvkv.finish())
+}
+
+/// Sends `GSP_INIT` via GMC and parses the NVKV response.
+///
+/// `payload` is the NVKV-encoded blob from [`build_gsp_init_payload`].
+#[expect(dead_code)]
+pub(crate) fn gsp_init(cmdq: &Cmdq, bar: &Bar0, payload: &[u8]) -> Result<GetGspStaticInfoReply> {
+    let response =
+        cmdq.send_gmc_and_receive(bar, CMD_GSP_INIT, payload, GSP_GET_STATIC_INFO_MAX_RESPONSE)?;
 
     if response.status != 0 {
         return Err(EIO);

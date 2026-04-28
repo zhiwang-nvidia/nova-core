@@ -85,7 +85,6 @@ pub(crate) mod sys_info_key {
 /// `NVGMC_SI_OOR_ARCH` wire values.
 ///
 /// Source: `NVGMC_SI_OOR_ARCH_*` in r000 bindings.
-#[expect(dead_code)]
 pub(crate) mod oor_arch {
     pub(crate) const NONE: u32 = 0;
     pub(crate) const X86_64: u32 = 1;
