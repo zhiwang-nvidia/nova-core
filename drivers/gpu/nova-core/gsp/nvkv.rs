@@ -59,7 +59,7 @@ impl From<OorArch> for u32 {
 }
 
 nvkv_encode! {
-    struct RegKey {
+    pub(super) struct RegKey {
         key_name: Key<&'static [u8], { Self::REGKEY_NAME_KEY }>,
         key_value: Key<u32, { Self::REGKEY_VALUE_U32_KEY }>,
     }
@@ -68,6 +68,13 @@ nvkv_encode! {
 impl RegKey {
     const REGKEY_NAME_KEY: KeyId = 0x3070;
     const REGKEY_VALUE_U32_KEY: KeyId = 0x3071;
+
+    pub(super) fn new(key_name: &'static [u8], key_value: u32) -> Self {
+        Self {
+            key_name: key_name.into(),
+            key_value: key_value.into(),
+        }
+    }
 }
 
 impl Encodeable for KVVec<RegKey> {
@@ -100,7 +107,7 @@ impl VfInfo {
 }
 
 nvkv_encode! {
-    struct GspInitRequest {
+    pub(super) struct GspInitRequest {
         pci_device_id: Key<u32, { Self::PCI_DEVICE_ID_KEY }>,
         pci_sub_device_id: Key<u32, { Self::PCI_SUBDEVICE_ID_KEY }>,
         pci_revision_id: Key<u32, { Self::PCI_REVISION_ID_KEY }>,
@@ -121,6 +128,30 @@ impl GspInitRequest {
     const PCI_CONFIG_MIRROR_SIZE_KEY: KeyId = 0x0011;
     const OOR_ARCH_KEY: KeyId = 0x0070;
     const NV_DOMAIN_BUS_DEVICE_FUNC_KEY: KeyId = 0x1020;
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new(
+        pci_device_id: u32,
+        pci_sub_device_id: u32,
+        pci_revision_id: u32,
+        pci_config_mirror_base: u32,
+        pci_config_mirror_size: u32,
+        oor_arch: OorArch,
+        bus_device_func: u64,
+        regkeys: KVVec<RegKey>,
+    ) -> Self {
+        Self {
+            pci_device_id: pci_device_id.into(),
+            pci_sub_device_id: pci_sub_device_id.into(),
+            pci_revision_id: pci_revision_id.into(),
+            pci_config_mirror_base: pci_config_mirror_base.into(),
+            pci_config_mirror_size: pci_config_mirror_size.into(),
+            oor_arch: oor_arch.into(),
+            bus_device_func: bus_device_func.into(),
+            regkeys,
+            vf_info: None,
+        }
+    }
 }
 
 // vGPU related:
