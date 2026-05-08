@@ -158,4 +158,13 @@ impl pci::Driver for NovaCoreDriver {
             }))
         })
     }
+    #[cfg(CONFIG_PCI_IOV)]
+    fn sriov_configure(dev: &pci::Device<Core<'_>>, nr_virtfn: i32) -> Result<i32> {
+        if nr_virtfn == 0 {
+            dev.disable_sriov();
+        } else {
+            dev.enable_sriov(nr_virtfn)?;
+        }
+        Ok(nr_virtfn)
+    }
 }
