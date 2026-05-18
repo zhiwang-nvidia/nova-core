@@ -479,6 +479,14 @@ impl GspInitResponse {
     const MAX_FIFO_ENGINES: usize = 64;
     const FB_REGION_TAG_NONE: u32 = 0;
 
+    /// Returns the BAR1 Page Directory Entry base address.
+    ///
+    /// This is the root page table address for BAR1 virtual memory,
+    /// set up by GSP-RM firmware.
+    pub(super) fn bar1_pde_base(&self) -> u64 {
+        self.bar1_pde_base
+    }
+
     pub(super) fn gpu_name(&self) -> &[u8] {
         self.gpu_name.as_slice()
     }
