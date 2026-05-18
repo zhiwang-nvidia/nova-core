@@ -61,6 +61,9 @@ const REGISTRY_ENTRIES: &[(&[u8], u32)] = &[
 /// The reply from the GSP to the `GSP_INIT` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
+    /// BAR1 Page Directory Entry base address.
+    #[expect(dead_code)]
+    pub(crate) bar1_pde_base: u64,
     /// Usable FB (VRAM) regions for driver memory allocation.
     pub(crate) usable_fb_regions: KVec<Range<u64>>,
     /// End of VRAM.
@@ -111,6 +114,7 @@ fn decode_gsp_info(payload: &[u8]) -> Result<GetGspStaticInfoReply> {
 
     Ok(GetGspStaticInfoReply {
         gpu_name,
+        bar1_pde_base: decoded.bar1_pde_base(),
         usable_fb_regions,
         total_fb_end,
     })
