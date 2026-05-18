@@ -31,6 +31,10 @@ use crate::{
         GspBootContext, //
     },
     irq::SubtreeVectors,
+    mm::{
+        GpuMm,
+        VramAddress, //
+    },
     regs,
     vgpu::VgpuManager, //
 };
@@ -283,6 +287,11 @@ struct GspResources<'gpu> {
 #[pin_data]
 pub(crate) struct Gpu<'gpu> {
     spec: Spec,
+    /// GPU memory manager owning memory management resources.
+    ///
+    /// Must be kept declared *before* `gsp_resources`, so that its components are dropped while
+    /// the GSP is still operational.
+    mm: GpuMm<'gpu>,
     /// GSP and its resources.
     #[pin]
     gsp_resources: GspResources<'gpu>,
@@ -431,7 +440,14 @@ impl<'gpu> Gpu<'gpu> {
                             / u64::SZ_1M
                     );
                 }
-            }
+            },
+
+            // Create GPU memory manager owning memory management resources.
+            mm: GpuMm::new(
+                bar,
+                gsp_resources.spec.chipset,
+                VramAddress::from_raw(gsp_resources.boot_result.static_info.total_fb_end),
+            )?,
         })
     }
 }
