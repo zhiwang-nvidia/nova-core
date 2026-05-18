@@ -31,10 +31,61 @@ macro_rules! impl_pfn_bounded {
     };
 }
 
+use core::ops::Range;
+
 use kernel::{
+    bitfield,
     num::Bounded,
     prelude::*, //
 };
+
+bitfield! {
+    /// Physical VRAM address in GPU video memory.
+    pub(crate) struct VramAddress(u64) {
+        /// Offset within 4KB page.
+        11:0    offset;
+        /// Physical frame number.
+        63:12   frame_number => Pfn;
+    }
+}
+
+impl VramAddress {
+    /// Create a new VRAM address from a raw value.
+    pub(crate) const fn new(addr: u64) -> Self {
+        Self::from_raw(addr)
+    }
+
+    /// Get the raw address value as `u64`.
+    pub(crate) const fn raw(&self) -> u64 {
+        self.into_raw()
+    }
+}
+
+// Allow VRAM addresses to be printed with the `{:#x}` format specifier.
+impl core::fmt::LowerHex for VramAddress {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::LowerHex::fmt(&self.raw(), f)
+    }
+}
+
+impl From<Pfn> for VramAddress {
+    fn from(pfn: Pfn) -> Self {
+        Self::zeroed().with_frame_number(pfn)
+    }
+}
+
+/// Extension trait to convert a `Range<u64>` of byte addresses into a
+/// `Range<VramAddress>`.
+pub(crate) trait IntoVramRange {
+    /// Convert this range of byte addresses into a `Range<VramAddress>`.
+    fn into_vram_range(self) -> Range<VramAddress>;
+}
+
+impl IntoVramRange for Range<u64> {
+    fn into_vram_range(self) -> Range<VramAddress> {
+        VramAddress::new(self.start)..VramAddress::new(self.end)
+    }
+}
 
 /// Physical Frame Number.
 ///
@@ -52,6 +103,12 @@ impl Pfn {
     /// Get the raw frame number.
     pub(crate) const fn raw(self) -> u64 {
         self.0
+    }
+}
+
+impl From<VramAddress> for Pfn {
+    fn from(addr: VramAddress) -> Self {
+        addr.frame_number()
     }
 }
 
