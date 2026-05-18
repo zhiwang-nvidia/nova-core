@@ -32,11 +32,16 @@ macro_rules! impl_pfn_bounded {
 }
 
 pub(crate) mod pramin;
+pub(super) mod tlb;
 
 use core::ops::Range;
 
 use kernel::{
     bitfield,
+    gpu::buddy::{
+        GpuBuddy,
+        GpuBuddyParams, //
+    },
     num::Bounded,
     prelude::*,
     sizes::SZ_4K, //
@@ -47,14 +52,21 @@ use crate::{
     gpu::Chipset, //
 };
 
+pub(crate) use tlb::Tlb;
+
 /// GPU Memory Manager - owns all core MM components.
 ///
 /// Provides centralized ownership of memory management resources:
+/// - [`GpuBuddy`] allocators for VRAM page table allocation.
 /// - [`pramin::Pramin`] for direct VRAM access.
+/// - [`Tlb`] manager for translation buffer flush operations.
 #[pin_data]
 pub(crate) struct GpuMm<'gpu> {
+    buddies: KVec<GpuBuddy>,
     #[pin]
     pramin: pramin::Pramin<'gpu>,
+    #[pin]
+    tlb: Tlb<'gpu>,
 }
 
 impl<'gpu> GpuMm<'gpu> {
@@ -65,18 +77,41 @@ impl<'gpu> GpuMm<'gpu> {
     pub(crate) fn new(
         bar: Bar0<'gpu>,
         chipset: Chipset,
+        buddy_params: KVec<GpuBuddyParams>,
         pramin_vram_region: Range<VramAddress>,
     ) -> Result<impl PinInit<Self> + 'gpu> {
+        if buddy_params.is_empty() {
+            return Err(EINVAL);
+        }
+
+        let mut buddies = KVec::new();
+        for params in buddy_params {
+            buddies.push(GpuBuddy::new(params)?, GFP_KERNEL)?;
+        }
+
         let pramin_init = pramin::Pramin::new(bar, chipset, pramin_vram_region)?;
+        let tlb_init = Tlb::new(bar);
 
         Ok(pin_init!(Self {
+            buddies,
             pramin <- pramin_init,
+            tlb <- tlb_init,
         }))
+    }
+
+    /// Access the [`GpuBuddy`] allocators.
+    pub(crate) fn buddies(&self) -> &[GpuBuddy] {
+        &self.buddies
     }
 
     /// Access the [`pramin::Pramin`].
     pub(crate) fn pramin(&self) -> &pramin::Pramin<'gpu> {
         &self.pramin
+    }
+
+    /// Access the [`Tlb`] manager.
+    pub(crate) fn tlb(&self) -> &Tlb<'gpu> {
+        &self.tlb
     }
 }
 

@@ -6,11 +6,16 @@ use kernel::{
     device,
     dma::Device,
     fmt,
+    gpu::buddy::GpuBuddyParams,
     io::Io,
     num::Bounded,
     pci,
     prelude::*,
-    sizes::SizeConstants,
+    ptr::Alignment,
+    sizes::{
+        SizeConstants,
+        SZ_4K, //
+    },
     sync::Arc, //
 };
 
@@ -418,11 +423,34 @@ impl<'gpu> Gpu<'gpu> {
 
             // Create GPU memory manager owning memory management resources.
             mm <- {
+                let info = &gsp_resources.boot_result.static_info;
+                let mut buddy_params = KVec::new();
+                for region in &info.usable_fb_regions {
+                    dev_info!(
+                        dev,
+                        "Using FB region: {:#x}..{:#x}\n",
+                        region.start,
+                        region.end
+                    );
+                    buddy_params.push(
+                        GpuBuddyParams {
+                            base_offset: region.start,
+                            size: region.end - region.start,
+                            chunk_size: Alignment::new::<SZ_4K>(),
+                        },
+                        GFP_KERNEL,
+                    )?;
+                }
+
                 // PRAMIN covers all physical VRAM (including GSP-reserved areas
                 // above the usable region, e.g. the BAR1 page directory).
-                let pramin_vram_region =
-                    (0..gsp_resources.boot_result.static_info.total_fb_end).into_vram_range();
-                GpuMm::new(bar, gsp_resources.spec.chipset, pramin_vram_region)?
+                let pramin_vram_region = (0..info.total_fb_end).into_vram_range();
+                GpuMm::new(
+                    bar,
+                    gsp_resources.spec.chipset,
+                    buddy_params,
+                    pramin_vram_region,
+                )?
             },
 
             _: {
