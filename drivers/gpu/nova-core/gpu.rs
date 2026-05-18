@@ -416,6 +416,11 @@ impl<'gpu> Gpu<'gpu> {
                     Ok(name) => dev_info!(dev, "GPU name: {}\n", name),
                     Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
                 }
+                dev_info!(
+                    dev,
+                    "Total physical VRAM: {} MiB\n",
+                    info.total_fb_end / u64::SZ_1M
+                );
 
                 if !info.usable_fb_regions.is_empty() {
                     dev_dbg!(dev, "Usable FB regions:\n");
