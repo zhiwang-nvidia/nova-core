@@ -36,8 +36,11 @@ use crate::{
         GspBootContext, //
     },
     mm::{
+        bar_user::BarUser,
+        pagetable::MmuVersion,
         GpuMm,
-        IntoVramRange, //
+        IntoVramRange,
+        VramAddress, //
     },
     regs,
     vgpu::VgpuManager, //
@@ -148,6 +151,11 @@ impl Chipset {
     /// Returns the address range of the PCI config mirror space.
     pub(crate) fn pci_config_mirror_range(self) -> Range<u32> {
         hal::gpu_hal(self).pci_config_mirror_range()
+    }
+
+    /// Returns the MMU version for this chipset.
+    pub(crate) fn mmu_version(self) -> MmuVersion {
+        MmuVersion::from(self.arch())
     }
 }
 
@@ -291,6 +299,9 @@ struct GspResources<'gpu> {
 #[pin_data]
 pub(crate) struct Gpu<'gpu> {
     spec: Spec,
+    /// BAR1 user interface for CPU access to GPU virtual memory.
+    #[pin]
+    bar_user: BarUser<'gpu>,
     /// GPU memory manager owning memory management resources.
     #[pin]
     mm: GpuMm<'gpu>,
@@ -450,6 +461,20 @@ impl<'gpu> Gpu<'gpu> {
                     gsp_resources.spec.chipset,
                     buddy_params,
                     pramin_vram_region,
+                )?
+            },
+
+            // Create BAR1 user interface for CPU access to GPU virtual memory.
+            bar_user <- {
+                let info = &gsp_resources.boot_result.static_info;
+                let bar1_idx = crate::driver::bar1_resource_index(pdev)?;
+                let bar1_size = pdev.resource_len(bar1_idx)?;
+                let bar1 = pdev.iomap_region(bar1_idx, c"nova-core/bar1")?;
+                BarUser::new(
+                    VramAddress::new(info.bar1_pde_base),
+                    gsp_resources.spec.chipset,
+                    bar1_size,
+                    bar1,
                 )?
             },
 
