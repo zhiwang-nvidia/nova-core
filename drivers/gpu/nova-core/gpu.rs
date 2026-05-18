@@ -30,6 +30,10 @@ use crate::{
         Gsp,
         GspBootContext, //
     },
+    mm::{
+        GpuMm,
+        IntoVramRange, //
+    },
     regs,
     vgpu::VgpuManager, //
 };
@@ -282,6 +286,9 @@ struct GspResources<'gpu> {
 #[pin_data]
 pub(crate) struct Gpu<'gpu> {
     spec: Spec,
+    /// GPU memory manager owning memory management resources.
+    #[pin]
+    mm: GpuMm<'gpu>,
     /// GSP and its resources.
     #[pin]
     gsp_resources: GspResources<'gpu>,
@@ -408,6 +415,15 @@ impl<'gpu> Gpu<'gpu> {
                     vgpu,
                 })?,
             }),
+
+            // Create GPU memory manager owning memory management resources.
+            mm <- {
+                // PRAMIN covers all physical VRAM (including GSP-reserved areas
+                // above the usable region, e.g. the BAR1 page directory).
+                let pramin_vram_region =
+                    (0..gsp_resources.boot_result.static_info.total_fb_end).into_vram_range();
+                GpuMm::new(bar, gsp_resources.spec.chipset, pramin_vram_region)?
+            },
 
             _: {
                 // GSP_INIT has already returned this information as its boot-completion reply.
