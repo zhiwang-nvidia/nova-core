@@ -452,6 +452,11 @@ impl GspInitResponse {
         self.gpu_name.as_slice()
     }
 
+    /// Returns the BAR1 page-directory base address.
+    pub(crate) fn bar1_pde_base(&self) -> u64 {
+        self.bar1_pde_base
+    }
+
     /// Iterates over the FB regions the driver may allocate from.
     ///
     /// A region qualifies when it is untagged, unprotected, and supports both compression and
