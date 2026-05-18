@@ -502,15 +502,22 @@ impl<'gpu> Gpu<'gpu> {
     pub(crate) fn run_selftests(self: Pin<&mut Self>, pdev: &pci::Device<device::Bound>) {
         let this = self.project();
         let dev = pdev.as_ref();
-        let regions = &this
+        let info = &this
             .gsp_resources
             .as_ref()
             .get_ref()
             .boot_result
-            .static_info
-            .usable_fb_regions;
+            .static_info;
+        let regions = &info.usable_fb_regions;
 
-        if let Err(err) = crate::mm::selftest::run(dev, this.mm, regions) {
+        if let Err(err) = crate::mm::selftest::run(
+            dev,
+            this.mm,
+            regions,
+            this.bar_user,
+            info.bar1_pde_base,
+            this.spec.chipset,
+        ) {
             dev_err!(dev, "self-tests failed: {:?}\n", err);
         }
     }
