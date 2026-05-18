@@ -57,6 +57,8 @@
 //!         hi:lo field_2 => ConvertedType;
 //!         // `field_3` documentation.
 //!         hi:lo field_3 ?=> ConvertedType;
+//!         // `field_4` documentation.
+//!         hi:lo field_4 as Bounded<TargetType, RES> shl SHIFT;
 //!         ...
 //!     }
 //! }
@@ -67,6 +69,8 @@
 //! - `hi:lo`: Bit range (inclusive), where `hi >= lo`.
 //! - `=> Type`: Optional infallible conversion (see [below](#infallible-conversion-)).
 //! - `?=> Type`: Optional fallible conversion (see [below](#fallible-conversion-)).
+//! - `as Bounded<T, RES> shl SHIFT`: Optional cast-and-shift accessor (see
+//!   [below](#cast-and-shift-accessors-as-bounded-t-res-shl-shift)).
 //! - Documentation strings and attributes are optional.
 //!
 //! # Generated code
@@ -354,6 +358,7 @@ macro_rules! bitfield {
         $($(#[doc = $doc:expr])* $hi:literal:$lo:literal $field:ident
             $(?=> $try_into_type:ty)?
             $(=> $into_type:ty)?
+            $(as Bounded<$target:ty, $res:literal> shl $shift:literal)?
         ;
         )*
     }
@@ -366,6 +371,7 @@ macro_rules! bitfield {
             @public_field_accessors $(#[doc = $doc])* $vis $name $storage : $hi:$lo $field
             $(?=> $try_into_type)?
             $(=> $into_type)?
+            $(as Bounded<$target, $res> shl $shift)?
         );
         )*
         }
@@ -532,6 +538,43 @@ macro_rules! bitfield {
         );
     };
 
+    // Public accessors for fields cast to a wider type and left-shifted, exposing them as
+    // `Bounded<$target, $res>` where `$res == ($hi + 1 - $lo) + $shift`.
+    (
+        @public_field_accessors $(#[doc = $doc:expr])* $vis:vis $name:ident $storage:ty :
+            $hi:literal:$lo:literal $field:ident
+            as Bounded<$target:ty, $res:literal> shl $shift:literal
+    ) => {
+        ::kernel::macros::paste!(
+
+        $(#[doc = $doc])*
+        #[doc = "Returns the value of this field, cast to the target type and shifted left."]
+        #[inline(always)]
+        $vis fn $field(self) -> ::kernel::num::Bounded<$target, $res> {
+            $crate::const_assert!($res == ($hi + 1 - $lo) + $shift);
+
+            self.[<__ $field>]()
+                .cast::<$target>()
+                .shl::<$shift, $res>()
+        }
+
+        $(#[doc = $doc])*
+        #[doc = "Sets this field from a target-typed, pre-shifted `Bounded` value."]
+        #[inline(always)]
+        $vis fn [<with_ $field>](
+            self,
+            value: ::kernel::num::Bounded<$target, $res>,
+        ) -> Self {
+            $crate::const_assert!($res == ($hi + 1 - $lo) + $shift);
+
+            self.[<__with_ $field>](
+                value.shr::<$shift, { $hi + 1 - $lo }>().cast::<$storage>()
+            )
+        }
+
+        );
+    };
+
     // `Debug` implementation.
     (@debug $name:ident { $($field:ident;)* }) => {
         impl ::kernel::fmt::Debug for $name {
@@ -640,6 +683,15 @@ mod tests {
             3:2       field_3_2;
             1:1       field_1;
             0:0       field_0;
+        }
+    }
+
+    // Mirrors the PRAMIN window register pattern: a 24-bit field in a `u32` storage that
+    // represents bits 16..40 of a 40-bit address. The accessor exposes it as the full
+    // 40-bit `Bounded<u64, 40>`.
+    bitfield! {
+        struct TestWindowReg(u32) {
+            23:0      window_base as Bounded<u64, 40> shl 16;
         }
     }
 
@@ -859,5 +911,20 @@ mod tests {
         assert_eq!(val.field_3_2(), 0x3);
         assert_eq!(val.field_7_4(), 0xA);
         assert_eq!(val.field_7_0(), 0xAF);
+    }
+
+    #[test]
+    fn test_cast_shift_accessor() {
+        // Set a value via the pre-shifted setter and read it back via the getter.
+        let addr = Bounded::<u64, 40>::new::<0x12_3456_0000>();
+        let reg = TestWindowReg::zeroed().with_window_base(addr);
+        assert_eq!(reg.window_base().get(), 0x12_3456_0000u64);
+        assert_eq!(u32::from(reg), 0x0012_3456u32);
+
+        // Setting and reading the largest 40-bit aligned value.
+        let max_addr = Bounded::<u64, 40>::new::<0xFF_FFFF_0000>();
+        let reg = TestWindowReg::zeroed().with_window_base(max_addr);
+        assert_eq!(reg.window_base().get(), 0xFF_FFFF_0000u64);
+        assert_eq!(u32::from(reg), 0x00FF_FFFFu32);
     }
 }
