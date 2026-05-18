@@ -19,6 +19,7 @@ mod gpu;
 mod gsp;
 mod irq;
 mod mctp;
+mod mm;
 #[macro_use]
 mod num;
 mod regs;
