@@ -7,6 +7,10 @@ use kernel::{
         register::WithBase,
         Io, //
     },
+    num::{
+        Bounded,
+        TryIntoBounded, //
+    },
     prelude::*,
     sizes::SizeConstants,
     time, //
@@ -31,6 +35,10 @@ use crate::{
     gpu::{
         Architecture,
         Chipset, //
+    },
+    mm::{
+        pramin::Bar0WindowTarget,
+        VramAddress, //
     },
 };
 
@@ -113,6 +121,15 @@ register! {
     /// Scratch register 0xe used as FRTS firmware error code.
     pub(crate) NV_PBUS_SW_SCRATCH_0E_FRTS_ERR(u32) => NV_PBUS_SW_SCRATCH[0xe] {
         31:16   frts_err_code;
+    }
+}
+
+register! {
+    /// BAR0 window control for PRAMIN access.
+    pub(crate) NV_PBUS_BAR0_WINDOW(u32) @ 0x00001700 {
+        25:24   target ?=> Bar0WindowTarget;
+        /// PRAMIN window base byte address (40-bit FB addr; bits 39:16 stored in 23:0).
+        23:0    window_base as Bounded<u64, 40> shl 16;
     }
 }
 
@@ -683,6 +700,12 @@ pub(crate) mod gh100 {
         pub(crate) NV_THERM_I2CS_SCRATCH_FSP_BOOT_COMPLETE(u32) => NV_THERM_I2CS_SCRATCH {
             31:0    fsp_boot_complete;
         }
+
+        /// Hopper register for PRAMIN window.
+        pub(crate) NV_XAL_EP_BAR0_WINDOW(u32) @ 0x0010_fd40 {
+            /// PRAMIN window base byte address (38-bit FB addr; bits 37:16 stored in 21:0).
+            21:0    window_base as Bounded<u64, 38> shl 16;
+        }
     }
 }
 
@@ -699,6 +722,99 @@ pub(crate) mod gb202 {
         // Alias to `NV_THERM_I2CS_SCRATCH` when used to check for FSP boot completion.
         pub(crate) NV_THERM_I2CS_SCRATCH_FSP_BOOT_COMPLETE(u32) => NV_THERM_I2CS_SCRATCH {
             31:0    fsp_boot_complete;
+        }
+    }
+}
+
+pub(crate) mod gb100 {
+    use kernel::io::register;
+
+    register! {
+        /// Blackwell+ register for PRAMIN window.
+        pub(crate) NV_XAL_EP_BAR0_WINDOW(u32) @ 0x0010_fd40 {
+            /// PRAMIN window base byte address (39-bit FB addr; bits 38:16 stored in 22:0).
+            22:0    window_base as Bounded<u64, 39> shl 16;
+        }
+    }
+}
+
+/// Common interface for all PRAMIN window registers across GPU architectures.
+pub(crate) trait PraminWindow {
+    /// Reads the current PRAMIN window base address from this register.
+    fn read_base(bar: Bar0<'_>) -> VramAddress;
+
+    /// Writes a new PRAMIN window base address into this register.
+    fn write_base(bar: Bar0<'_>, base: VramAddress) -> Result;
+}
+
+impl PraminWindow for NV_PBUS_BAR0_WINDOW {
+    fn read_base(bar: Bar0<'_>) -> VramAddress {
+        VramAddress::new(bar.read(NV_PBUS_BAR0_WINDOW).window_base().into())
+    }
+
+    fn write_base(bar: Bar0<'_>, base: VramAddress) -> Result {
+        let bounded: Bounded<u64, 40> = base.raw().try_into_bounded().ok_or(EINVAL)?;
+        bar.write_reg(
+            NV_PBUS_BAR0_WINDOW::zeroed()
+                .with_target(Bar0WindowTarget::Vram)
+                .with_window_base(bounded),
+        );
+        Ok(())
+    }
+}
+
+impl PraminWindow for gh100::NV_XAL_EP_BAR0_WINDOW {
+    fn read_base(bar: Bar0<'_>) -> VramAddress {
+        VramAddress::new(bar.read(gh100::NV_XAL_EP_BAR0_WINDOW).window_base().into())
+    }
+
+    fn write_base(bar: Bar0<'_>, base: VramAddress) -> Result {
+        let bounded: Bounded<u64, 38> = base.raw().try_into_bounded().ok_or(EINVAL)?;
+        bar.write_reg(gh100::NV_XAL_EP_BAR0_WINDOW::zeroed().with_window_base(bounded));
+        Ok(())
+    }
+}
+
+impl PraminWindow for gb100::NV_XAL_EP_BAR0_WINDOW {
+    fn read_base(bar: Bar0<'_>) -> VramAddress {
+        VramAddress::new(bar.read(gb100::NV_XAL_EP_BAR0_WINDOW).window_base().into())
+    }
+
+    fn write_base(bar: Bar0<'_>, base: VramAddress) -> Result {
+        let bounded: Bounded<u64, 39> = base.raw().try_into_bounded().ok_or(EINVAL)?;
+        bar.write_reg(gb100::NV_XAL_EP_BAR0_WINDOW::zeroed().with_window_base(bounded));
+        Ok(())
+    }
+}
+
+/// Reads the current BAR0 PRAMIN window base address, dispatching to the
+/// register variant appropriate for `arch`.
+pub(crate) fn pramin_window_read_base(arch: Architecture, bar: Bar0<'_>) -> VramAddress {
+    match arch {
+        Architecture::Turing | Architecture::Ampere | Architecture::Ada => {
+            NV_PBUS_BAR0_WINDOW::read_base(bar)
+        }
+        Architecture::Hopper => gh100::NV_XAL_EP_BAR0_WINDOW::read_base(bar),
+        Architecture::BlackwellGB10x | Architecture::BlackwellGB20x => {
+            gb100::NV_XAL_EP_BAR0_WINDOW::read_base(bar)
+        }
+    }
+}
+
+/// Writes a new BAR0 PRAMIN window base address, dispatching to the register
+/// variant appropriate for `arch`.
+pub(crate) fn pramin_window_write_base(
+    arch: Architecture,
+    bar: Bar0<'_>,
+    base: VramAddress,
+) -> Result {
+    match arch {
+        Architecture::Turing | Architecture::Ampere | Architecture::Ada => {
+            NV_PBUS_BAR0_WINDOW::write_base(bar, base)
+        }
+        Architecture::Hopper => gh100::NV_XAL_EP_BAR0_WINDOW::write_base(bar, base),
+        Architecture::BlackwellGB10x | Architecture::BlackwellGB20x => {
+            gb100::NV_XAL_EP_BAR0_WINDOW::write_base(bar, base)
         }
     }
 }
