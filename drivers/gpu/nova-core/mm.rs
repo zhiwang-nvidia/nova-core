@@ -59,6 +59,38 @@ impl VramAddress {
     pub(crate) const fn raw(&self) -> u64 {
         self.into_raw()
     }
+
+    /// Align the address down to the given power-of-two `alignment`.
+    pub(crate) const fn align_down(self, alignment: u64) -> Self {
+        Self::new(self.raw() & !(alignment - 1))
+    }
+
+    /// Add `rhs` to this address, returning `None` on overflow.
+    pub(crate) fn checked_add<O: IntoVramOffset>(self, rhs: O) -> Option<Self> {
+        self.raw()
+            .checked_add(rhs.into_vram_offset())
+            .map(Self::new)
+    }
+}
+
+/// Lossless conversion into a `u64` byte offset, for use as a [`VramAddress`] `checked_add()`
+/// operand which can be either a `u64` or a `usize`.
+pub(crate) trait IntoVramOffset {
+    /// Convert `self` into a `u64` byte offset.
+    fn into_vram_offset(self) -> u64;
+}
+
+impl IntoVramOffset for u64 {
+    fn into_vram_offset(self) -> u64 {
+        self
+    }
+}
+
+impl IntoVramOffset for usize {
+    fn into_vram_offset(self) -> u64 {
+        use crate::num::IntoSafeCast;
+        self.into_safe_cast()
+    }
 }
 
 // Allow VRAM addresses to be printed with the `{:#x}` format specifier.
@@ -68,9 +100,37 @@ impl core::fmt::LowerHex for VramAddress {
     }
 }
 
+impl PartialOrd for VramAddress {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for VramAddress {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.into_raw().cmp(&other.into_raw())
+    }
+}
+
 impl From<Pfn> for VramAddress {
     fn from(pfn: Pfn) -> Self {
         Self::zeroed().with_frame_number(pfn)
+    }
+}
+
+impl core::ops::Add<u64> for VramAddress {
+    type Output = Self;
+
+    fn add(self, rhs: u64) -> Self {
+        Self::new(self.raw() + rhs)
+    }
+}
+
+impl core::ops::Sub<VramAddress> for VramAddress {
+    type Output = u64;
+
+    fn sub(self, rhs: VramAddress) -> u64 {
+        self.raw() - rhs.raw()
     }
 }
 
