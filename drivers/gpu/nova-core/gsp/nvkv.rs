@@ -488,6 +488,15 @@ impl GspInitResponse {
             }
         })
     }
+
+    /// Compute the end of physical VRAM from all valid FB regions.
+    pub(super) fn total_fb_end(&self) -> Option<u64> {
+        self.fb_regions
+            .iter()
+            .filter(|region| region.limit >= region.base)
+            .filter_map(|region| region.limit.checked_add(1))
+            .max()
+    }
 }
 
 nvkv_decode! {
