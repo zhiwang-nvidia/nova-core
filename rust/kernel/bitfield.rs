@@ -455,7 +455,7 @@ macro_rules! bitfield {
         #[doc = "Returns the value of this field."]
         #[inline(always)]
         $vis fn $field(self) ->
-            Result<
+            ::core::result::Result<
                 $try_into_type,
                 <$try_into_type as ::core::convert::TryFrom<
                     ::kernel::num::Bounded<$storage, { $hi + 1 - $lo }>
@@ -508,7 +508,7 @@ macro_rules! bitfield {
             self,
             value: T,
         ) -> Self
-            where T: Into<::kernel::num::Bounded<$storage, { $hi + 1 - $lo }>>,
+            where T: ::core::convert::Into<::kernel::num::Bounded<$storage, { $hi + 1 - $lo }>>,
         {
             self.[<__with_ $field>](value.into())
         }
