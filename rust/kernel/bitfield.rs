@@ -385,6 +385,7 @@ macro_rules! bitfield {
         );
 
         ::kernel::macros::paste!(
+        #[inline(always)]
         fn [<__ $field>](self) ->
             ::kernel::num::Bounded<$storage, { $hi + 1 - $lo }> {
             // Left shift to align the field's MSB with the storage MSB.
@@ -400,6 +401,7 @@ macro_rules! bitfield {
             val.shr::<ALIGN_BOTTOM, { $hi + 1 - $lo } >()
         }
 
+        #[inline(always)]
         const fn [<__with_ $field>](
             mut self,
             value: ::kernel::num::Bounded<$storage, { $hi + 1 - $lo }>,
