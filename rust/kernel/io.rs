@@ -1332,6 +1332,7 @@ pub use crate::io_project;
 /// # Ok::<(), Error>(()) }
 #[macro_export]
 #[doc(hidden)]
+#[expect(clippy::unnecessary_safety_comment)]
 macro_rules! io_read {
     ($io:expr, $($proj:tt)*) => {
         $crate::io_project!($io, $($proj)*).read_val()
@@ -1364,6 +1365,7 @@ pub use crate::io_read;
 /// # Ok::<(), Error>(()) }
 #[macro_export]
 #[doc(hidden)]
+#[expect(clippy::unnecessary_safety_comment)]
 macro_rules! io_write {
     (@parse [$io:expr] [$($proj:tt)*] [, $val:expr]) => {
         $crate::io_project!($io, $($proj)*).write_val($val)
