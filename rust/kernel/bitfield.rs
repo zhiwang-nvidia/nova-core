@@ -57,6 +57,8 @@
 //!         hi:lo field_2 => ConvertedType;
 //!         // `field_3` documentation.
 //!         hi:lo field_3 ?=> ConvertedType;
+//!         // `field_4` documentation.
+//!         hi:lo field_4 as Bounded<TargetType, RES> shl SHIFT;
 //!         ...
 //!     }
 //! }
@@ -67,6 +69,8 @@
 //! - `hi:lo`: Bit range (inclusive), where `hi >= lo`.
 //! - `=> Type`: Optional infallible conversion (see [below](#infallible-conversion-)).
 //! - `?=> Type`: Optional fallible conversion (see [below](#fallible-conversion-)).
+//! - `as Bounded<T, RES> shl SHIFT`: Optional cast-and-shift accessor (see
+//!   [below](#cast-and-shift-accessors-as-bounded-t-res-shl-shift)).
 //! - Documentation strings and attributes are optional.
 //!
 //! # Generated code
@@ -354,6 +358,7 @@ macro_rules! bitfield {
         $($(#[doc = $doc:expr])* $hi:literal:$lo:literal $field:ident
             $(?=> $try_into_type:ty)?
             $(=> $into_type:ty)?
+            $(as Bounded<$target:ty, $res:literal> shl $shift:literal)?
         ;
         )*
     }
@@ -366,6 +371,7 @@ macro_rules! bitfield {
             @public_field_accessors $(#[doc = $doc])* $vis $name $storage : $hi:$lo $field
             $(?=> $try_into_type)?
             $(=> $into_type)?
+            $(as Bounded<$target, $res> shl $shift)?
         );
         )*
         }
@@ -526,6 +532,43 @@ macro_rules! bitfield {
                 self.[<__with_ $field>](
                     value.try_into_bounded().ok_or(::kernel::error::code::EOVERFLOW)?
                 )
+            )
+        }
+
+        );
+    };
+
+    // Public accessors for fields cast to a wider type and left-shifted, exposing them as
+    // `Bounded<$target, $res>` where `$res == ($hi + 1 - $lo) + $shift`.
+    (
+        @public_field_accessors $(#[doc = $doc:expr])* $vis:vis $name:ident $storage:ty :
+            $hi:literal:$lo:literal $field:ident
+            as Bounded<$target:ty, $res:literal> shl $shift:literal
+    ) => {
+        ::kernel::macros::paste!(
+
+        $(#[doc = $doc])*
+        #[doc = "Returns the value of this field, cast to the target type and shifted left."]
+        #[inline(always)]
+        $vis fn $field(self) -> ::kernel::num::Bounded<$target, $res> {
+            $crate::const_assert!($res == ($hi + 1 - $lo) + $shift);
+
+            self.[<__ $field>]()
+                .cast::<$target>()
+                .shl::<$shift, $res>()
+        }
+
+        $(#[doc = $doc])*
+        #[doc = "Sets this field from a target-typed, pre-shifted `Bounded` value."]
+        #[inline(always)]
+        $vis fn [<with_ $field>](
+            self,
+            value: ::kernel::num::Bounded<$target, $res>,
+        ) -> Self {
+            $crate::const_assert!($res == ($hi + 1 - $lo) + $shift);
+
+            self.[<__with_ $field>](
+                value.shr::<$shift, { $hi + 1 - $lo }>().cast::<$storage>()
             )
         }
 
