@@ -73,6 +73,8 @@ pub(crate) mod gsp_config_key {
     pub(crate) const FB_REGION_TAG: u16 = 0x0013;
     /// Tag value indicating no reservation.
     pub(crate) const FB_REGION_TAG_NONE: u32 = 0;
+    /// BAR1 Page Directory Entry base address (`SEQ64`, index 0).
+    pub(crate) const BAR1_PDE_BASE: u16 = 0x1020;
 }
 
 /// System-info key constants for `GMCAPI_CMD_GSP_INIT`.
