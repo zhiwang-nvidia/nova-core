@@ -30,6 +30,9 @@ const GSP_INIT_MAX_RESPONSE_SIZE: u32 = 8192;
 /// The reply from the GSP to the `GSP_INIT` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
+    /// BAR1 Page Directory Entry base address.
+    #[expect(dead_code)]
+    pub(crate) bar1_pde_base: u64,
     /// Usable FB (VRAM) region for driver memory allocation.
     pub(crate) usable_fb_region: Range<u64>,
     /// End of physical VRAM (exclusive), covering all FB regions.
@@ -172,6 +175,12 @@ pub(crate) fn gsp_init(
                         let len = name_bytes.len().min(gpu_name.len());
                         gpu_name[..len].copy_from_slice(&name_bytes[..len]);
                     }
+                    let bar1_pde_base = nvkv::find_seq64_indexed(
+                        &blob,
+                        nvkv::gsp_config_key::BAR1_PDE_BASE,
+                        0,
+                    )?
+                    .ok_or(ENODEV)?;
                     let usable_fb_region = first_usable_fb_region(&blob)?
                         .ok_or(ENODEV)?;
                     let total_fb_end = total_fb_end(&blob)?
@@ -179,6 +188,7 @@ pub(crate) fn gsp_init(
 
                     Ok(Some(GetGspStaticInfoReply {
                         gpu_name,
+                        bar1_pde_base,
                         usable_fb_region,
                         total_fb_end,
                     }))
