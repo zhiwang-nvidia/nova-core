@@ -63,11 +63,10 @@ const fn fsp_secure_boot_timeout_ms(arch: crate::gpu::Architecture) -> i64 {
     }
 }
 
-/// GSP FMC initialization parameters.
+/// GSP FMC initialization parameters (chips_a: GSP_FMC_INIT_PARAMS).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 struct GspFmcInitParams {
-    /// CC initialization "registry keys".
     regkeys: u32,
 }
 
@@ -76,22 +75,19 @@ unsafe impl AsBytes for GspFmcInitParams {}
 // SAFETY: All bit patterns are valid for the primitive fields.
 unsafe impl FromBytes for GspFmcInitParams {}
 
-/// GSP ACR (Authenticated Code RAM) boot parameters.
+/// GSP ACR boot parameters (chips_a: GSP_ACR_BOOT_GSP_RM_PARAMS).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 struct GspAcrBootGspRmParams {
-    /// Physical memory aperture through which gspRmDescPa is accessed.
     target: u32,
-    /// Size in bytes of the GSP-RM descriptor structure.
     gsp_rm_desc_size: u32,
-    /// Physical offset in the target aperture of the GSP-RM descriptor structure.
     gsp_rm_desc_offset: u64,
-    /// Physical offset in FB to set the start of the WPR containing GSP-RM.
     wpr_carveout_offset: u64,
-    /// Size in bytes of the WPR containing GSP-RM.
     wpr_carveout_size: u32,
-    /// Whether to boot GSP-RM or GSP-Proxy through ACR.
-    b_is_gsp_rm_boot: u32,
+    b_is_gsp_rm_boot: u8,
+    b_inst_in_sys_mode: u8,
+    _reserved0: u8,
+    b_scrub_cbc_sr: u8,
 }
 
 // SAFETY: GspAcrBootGspRmParams is a simple C struct with only primitive types.
@@ -99,13 +95,12 @@ unsafe impl AsBytes for GspAcrBootGspRmParams {}
 // SAFETY: All bit patterns are valid for the primitive fields.
 unsafe impl FromBytes for GspAcrBootGspRmParams {}
 
-/// GSP RM boot parameters.
+/// GSP RM boot parameters (chips_a: GSP_RM_PARAMS).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 struct GspRmParams {
-    /// Physical memory aperture through which bootArgsOffset is accessed.
     target: u32,
-    /// Physical offset in the memory aperture that will be passed to GSP-RM.
+    reserved: u32,
     boot_args_offset: u64,
 }
 
@@ -114,31 +109,18 @@ unsafe impl AsBytes for GspRmParams {}
 // SAFETY: All bit patterns are valid for the primitive fields.
 unsafe impl FromBytes for GspRmParams {}
 
-/// GSP SPDM (Security Protocol and Data Model) parameters.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-struct GspSpdmParams {
-    /// Physical memory aperture through which all addresses are accessed.
-    target: u32,
-    /// Physical offset in the memory aperture where SPDM payload buffer is stored.
-    payload_buffer_offset: u64,
-    /// Size of the above payload buffer.
-    payload_buffer_size: u32,
-}
-
-// SAFETY: GspSpdmParams is a simple C struct with only primitive types.
-unsafe impl AsBytes for GspSpdmParams {}
-// SAFETY: All bit patterns are valid for the primitive fields.
-unsafe impl FromBytes for GspSpdmParams {}
-
-/// Complete GSP FMC boot parameters passed to FSP.
+/// Complete GSP FMC boot parameters passed to FSP (chips_a: GSP_FMC_BOOT_PARAMS).
+///
+/// Layout matches chips_a gspifpub.h with NV_ABI_STABLE header and reserved
+/// padding between each sub-struct section.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct GspFmcBootParams {
     init_params: GspFmcInitParams,
+    _pad0: u32,
     boot_gsp_rm_params: GspAcrBootGspRmParams,
     gsp_rm_params: GspRmParams,
-    gsp_spdm_params: GspSpdmParams,
+    _reserved: [u8; 32],
 }
 
 // SAFETY: GspFmcBootParams is composed of C structs with only primitive types.
@@ -252,19 +234,19 @@ impl<'a> FmcBootArgs<'a> {
 
         let mut fmc_boot_params = CoherentBox::<GspFmcBootParams>::zeroed(dev, GFP_KERNEL)?;
 
-        // Blackwell FSP expects wpr_carveout_offset and wpr_carveout_size to be zero;
-        // it obtains WPR info from other sources.
         fmc_boot_params.boot_gsp_rm_params = GspAcrBootGspRmParams {
             target: GSP_DMA_TARGET_COHERENT_SYSTEM,
             gsp_rm_desc_size: wpr_meta_size,
             gsp_rm_desc_offset: wpr_meta_addr,
             b_is_gsp_rm_boot: 1,
+            b_scrub_cbc_sr: u8::from(!resume),
             ..Default::default()
         };
 
         fmc_boot_params.gsp_rm_params = GspRmParams {
             target: GSP_DMA_TARGET_NONCOHERENT_SYSTEM,
             boot_args_offset: libos_addr,
+            ..Default::default()
         };
 
         let fmc_boot_params: Coherent<GspFmcBootParams> = fmc_boot_params.into();
