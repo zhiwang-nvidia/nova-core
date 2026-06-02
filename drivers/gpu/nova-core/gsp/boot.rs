@@ -50,7 +50,10 @@ use crate::{
         Chipset, //
     },
     gsp::{
-        commands,
+        commands::{
+            self,
+            GetGspStaticInfoReply, //
+        },
         fw,
         fw::LibosMemoryRegionInitArgument,
         GspFwWprMeta, //
@@ -371,7 +374,7 @@ impl super::Gsp {
         chipset: Chipset,
         gsp_falcon: &Falcon<Gsp>,
         sec2_falcon: &Falcon<Sec2>,
-    ) -> Result {
+    ) -> Result<GetGspStaticInfoReply> {
         let dev = pdev.as_ref();
         let uses_sec2 = matches!(
             chipset.arch(),
@@ -467,14 +470,15 @@ impl super::Gsp {
                 bootloader_app_version,
                 libos_dma_handle,
             )
-        })?;
+        })
+        .inspect_err(|e| dev_err!(dev, "Failed to obtain GSP static info ({:?})\n", e))?;
 
         match info.gpu_name() {
             Ok(name) => dev_info!(dev, "GPU name: {}\n", name),
             Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
         }
 
-        Ok(())
+        Ok(info)
     }
 
     /// Dispatch a single GMC boot event to the matching load-and-execute handler.
