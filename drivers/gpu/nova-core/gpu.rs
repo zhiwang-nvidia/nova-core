@@ -347,19 +347,13 @@ impl Gpu {
                 gsp <- Gsp::new(pdev, chipset, build_id.as_ref()),
 
                 _: {
-                    // SAFETY: `gsp.cmdq` is pinned inside `Gsp` which is owned by
-                    // this `Gpu`, and the fwctl `Devres` registration is torn down
-                    // before `Gsp` is dropped. Use `get_unchecked_mut` + `addr_of!`
-                    // to extract the pointer without consuming the pin-init field
-                    // reference. Store it in `cmdq_cell` because pin-init blocks
-                    // capture by move and cannot share mutable locals.
-                    // SAFETY: We do not move the pinned `Gsp`; `addr_of!` only
-                    // computes the address.
                     cmdq_cell.set(core::ptr::addr_of!(gsp.as_ref().get_ref().cmdq));
                     gsp.boot(pdev, bar, chipset, gsp_falcon, sec2_falcon)?;
                 },
 
                 _fwctl_reg <- {
+                    // SAFETY: `cmdq_cell` was set above from the pinned `Gsp`
+                    // which outlives this fwctl registration.
                     let fwctl_data = unsafe {
                         crate::fwctl::NovaCoreFwCtlData::new(
                             devres_bar.clone(),

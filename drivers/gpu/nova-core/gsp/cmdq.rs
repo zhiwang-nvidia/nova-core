@@ -959,7 +959,7 @@ impl CmdqInner {
 
         let msg_element = GspGmcMsgElement::init(
             command_id,
-            self.seq as u64,
+            u64::from(self.seq),
             payload.len(),
             max_response_size,
         );
