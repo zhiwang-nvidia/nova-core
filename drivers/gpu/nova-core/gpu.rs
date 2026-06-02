@@ -9,10 +9,13 @@ use kernel::{
     },
     fmt,
     fwctl,
+    gpu::buddy::GpuBuddyParams,
     io::Io,
     num::Bounded,
     pci,
     prelude::*,
+    ptr::Alignment,
+    sizes::SZ_4K,
     sync::Arc, //
 };
 
@@ -362,6 +365,13 @@ impl Gpu {
 
                     dev_info!(
                         pdev.as_ref(),
+                        "Using FB region: {:#x}..{:#x}\n",
+                        info.usable_fb_region.start,
+                        info.usable_fb_region.end
+                    );
+
+                    dev_info!(
+                        pdev.as_ref(),
                         "Total physical VRAM: {} MiB\n",
                         info.total_fb_end >> 20
                     );
@@ -370,12 +380,20 @@ impl Gpu {
                 },
 
                 mm: {
+                    let usable_vram = &gsp_static_info.usable_fb_region;
+
                     let pramin_vram_region = (0..gsp_static_info.total_fb_end).into_vram_range();
+                    let buddy_params = GpuBuddyParams {
+                        base_offset: usable_vram.start,
+                        size: usable_vram.end - usable_vram.start,
+                        chunk_size: Alignment::new::<SZ_4K>(),
+                    };
                     Arc::pin_init(
                         GpuMm::new(
                             devres_bar.clone(),
                             pdev.as_ref(),
                             chipset,
+                            buddy_params,
                             pramin_vram_region,
                         )?,
                         GFP_KERNEL,
