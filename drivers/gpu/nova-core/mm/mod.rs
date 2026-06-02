@@ -2,7 +2,7 @@
 
 //! Memory management subsystems for nova-core.
 
-#![expect(dead_code)]
+#![allow(dead_code)]
 
 /// Implements `From` conversions between a frame-number type and `Bounded<u64, N>`.
 ///
@@ -37,9 +37,51 @@ use core::ops::Range;
 
 use kernel::{
     bitfield,
+    device,
+    devres::Devres,
     num::Bounded,
-    prelude::*, //
+    prelude::*,
+    sync::Arc, //
 };
+
+use crate::{
+    driver::Bar0,
+    gpu::Chipset, //
+};
+
+/// GPU Memory Manager - owns all core MM components.
+///
+/// Provides centralized ownership of memory management resources:
+/// - [`pramin::Pramin`] for direct VRAM access.
+#[pin_data]
+pub(crate) struct GpuMm {
+    #[pin]
+    pramin: pramin::Pramin,
+}
+
+impl GpuMm {
+    /// Create a pin-initializer for `GpuMm`.
+    ///
+    /// `pramin_vram_region` is the full physical VRAM range (including GSP-reserved
+    /// areas). PRAMIN window accesses are validated against this range.
+    pub(crate) fn new(
+        bar: Arc<Devres<Bar0>>,
+        dev: &device::Device<device::Bound>,
+        chipset: Chipset,
+        pramin_vram_region: Range<VramAddress>,
+    ) -> Result<impl PinInit<Self>> {
+        let pramin_init = pramin::Pramin::new(bar, dev, chipset, pramin_vram_region)?;
+
+        Ok(pin_init!(Self {
+            pramin <- pramin_init,
+        }))
+    }
+
+    /// Access the [`pramin::Pramin`].
+    pub(crate) fn pramin(&self) -> &pramin::Pramin {
+        &self.pramin
+    }
+}
 
 bitfield! {
     /// Physical VRAM address in GPU video memory.

@@ -31,6 +31,10 @@ use crate::{
         commands::GetGspStaticInfoReply,
         Gsp, //
     },
+    mm::{
+        GpuMm,
+        IntoVramRange, //
+    },
     regs,
 };
 
@@ -295,6 +299,8 @@ pub(crate) struct Gpu {
     gsp_falcon: Falcon<GspFalcon>,
     /// SEC2 falcon instance, used for GSP boot up and cleanup.
     sec2_falcon: Falcon<Sec2Falcon>,
+    /// GPU memory manager owning memory management resources.
+    mm: Arc<GpuMm>,
     /// GSP runtime data. Temporarily an empty placeholder.
     #[pin]
     gsp: Gsp,
@@ -361,6 +367,19 @@ impl Gpu {
                     );
 
                     info
+                },
+
+                mm: {
+                    let pramin_vram_region = (0..gsp_static_info.total_fb_end).into_vram_range();
+                    Arc::pin_init(
+                        GpuMm::new(
+                            devres_bar.clone(),
+                            pdev.as_ref(),
+                            chipset,
+                            pramin_vram_region,
+                        )?,
+                        GFP_KERNEL,
+                    )?
                 },
 
                 _fwctl_reg <- {
