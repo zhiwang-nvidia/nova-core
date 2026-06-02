@@ -877,56 +877,147 @@ pub(crate) enum GspDmaTarget {
     NoncoherentSystem = r570::GSP_DMA_TARGET_GSP_DMA_TARGET_NONCOHERENT_SYSTEM,
 }
 
-type GspAcrBootGspRmParams = r570::GSP_ACR_BOOT_GSP_RM_PARAMS;
+/// GSP FMC initialization parameters in the compact r000 ABI.
+#[repr(C)]
+#[derive(Zeroable)]
+struct GspFmcInitParams {
+    regkeys: u32,
+}
+
+/// GSP ACR boot parameters in the compact r000 ABI.
+#[repr(C)]
+#[derive(Zeroable)]
+struct GspAcrBootGspRmParams {
+    target: u32,
+    gsp_rm_desc_size: u32,
+    gsp_rm_desc_offset: u64,
+    wpr_carveout_offset: u64,
+    wpr_carveout_size: u32,
+    b_is_gsp_rm_boot: u8,
+    b_inst_in_sys_mode: u8,
+    _reserved0: u8,
+    b_scrub_cbc_sr: u8,
+}
 
 impl GspAcrBootGspRmParams {
-    fn new(target: GspDmaTarget, wpr_meta_addr: u64) -> impl Init<Self> {
-        let params = init!(Self {
+    fn new(target: GspDmaTarget, wpr_meta_addr: u64, resume: bool) -> impl Init<Self> {
+        init!(Self {
             target: target as u32,
-            gspRmDescSize: num::usize_into_u32::<{ size_of::<GspFwWprMeta>() }>(),
-            gspRmDescOffset: wpr_meta_addr,
-            bIsGspRmBoot: 1,
-            wprCarveoutOffset: 0,
-            wprCarveoutSize: 0,
-            __bindgen_padding_0: Default::default(),
-        });
-
-        params
+            gsp_rm_desc_size: num::usize_into_u32::<{ size_of::<GspFwWprMeta>() }>(),
+            gsp_rm_desc_offset: wpr_meta_addr,
+            b_is_gsp_rm_boot: 1,
+            // Scrub CBC save/restore state on cold boot, but preserve it across resume.
+            b_scrub_cbc_sr: u8::from(!resume),
+            ..Zeroable::init_zeroed()
+        })
     }
 }
 
-type GspRmParams = r570::GSP_RM_PARAMS;
+/// GSP-RM boot parameters in the compact r000 ABI.
+#[repr(C)]
+#[derive(Zeroable)]
+struct GspRmParams {
+    target: u32,
+    reserved: u32,
+    boot_args_offset: u64,
+}
 
 impl GspRmParams {
     fn new(target: GspDmaTarget, libos_addr: u64) -> impl Init<Self> {
-        let params = init!(Self {
+        init!(Self {
             target: target as u32,
-            bootArgsOffset: libos_addr,
-            __bindgen_padding_0: Default::default(),
-        });
-
-        params
+            boot_args_offset: libos_addr,
+            ..Zeroable::init_zeroed()
+        })
     }
 }
 
-pub(crate) type GspFmcBootParams = r570::GSP_FMC_BOOT_PARAMS;
+/// FMC boot parameters consumed by development r000 firmware.
+#[repr(C)]
+#[derive(Zeroable)]
+pub(crate) struct GspFmcBootParams {
+    init_params: GspFmcInitParams,
+    _pad0: u32,
+    boot_gsp_rm_params: GspAcrBootGspRmParams,
+    gsp_rm_params: GspRmParams,
+    _reserved: [u8; 32],
+}
 
-// SAFETY: Padding is explicit and will not contain uninitialized data.
+static_assert!(size_of::<GspFmcInitParams>() == 4);
+static_assert!(core::mem::offset_of!(GspFmcInitParams, regkeys) == 0);
+
+static_assert!(size_of::<GspAcrBootGspRmParams>() == 32);
+static_assert!(core::mem::offset_of!(GspAcrBootGspRmParams, target) == 0);
+static_assert!(core::mem::offset_of!(GspAcrBootGspRmParams, gsp_rm_desc_size) == 4);
+static_assert!(core::mem::offset_of!(GspAcrBootGspRmParams, gsp_rm_desc_offset) == 8);
+static_assert!(core::mem::offset_of!(GspAcrBootGspRmParams, wpr_carveout_offset) == 16);
+static_assert!(core::mem::offset_of!(GspAcrBootGspRmParams, wpr_carveout_size) == 24);
+static_assert!(core::mem::offset_of!(GspAcrBootGspRmParams, b_is_gsp_rm_boot) == 28);
+static_assert!(core::mem::offset_of!(GspAcrBootGspRmParams, b_inst_in_sys_mode) == 29);
+static_assert!(core::mem::offset_of!(GspAcrBootGspRmParams, _reserved0) == 30);
+static_assert!(core::mem::offset_of!(GspAcrBootGspRmParams, b_scrub_cbc_sr) == 31);
+
+static_assert!(size_of::<GspRmParams>() == 16);
+static_assert!(core::mem::offset_of!(GspRmParams, target) == 0);
+static_assert!(core::mem::offset_of!(GspRmParams, reserved) == 4);
+static_assert!(core::mem::offset_of!(GspRmParams, boot_args_offset) == 8);
+
+static_assert!(size_of::<GspFmcBootParams>() == 88);
+static_assert!(align_of::<GspFmcBootParams>() == 8);
+static_assert!(core::mem::offset_of!(GspFmcBootParams, init_params) == 0);
+static_assert!(core::mem::offset_of!(GspFmcBootParams, _pad0) == 4);
+static_assert!(core::mem::offset_of!(GspFmcBootParams, boot_gsp_rm_params) == 8);
+static_assert!(core::mem::offset_of!(GspFmcBootParams, gsp_rm_params) == 40);
+static_assert!(core::mem::offset_of!(GspFmcBootParams, _reserved) == 56);
+static_assert!(
+    core::mem::offset_of!(GspFmcBootParams, boot_gsp_rm_params)
+        + core::mem::offset_of!(GspAcrBootGspRmParams, gsp_rm_desc_size)
+        == 12
+);
+static_assert!(
+    core::mem::offset_of!(GspFmcBootParams, boot_gsp_rm_params)
+        + core::mem::offset_of!(GspAcrBootGspRmParams, b_is_gsp_rm_boot)
+        == 36
+);
+static_assert!(
+    core::mem::offset_of!(GspFmcBootParams, boot_gsp_rm_params)
+        + core::mem::offset_of!(GspAcrBootGspRmParams, b_inst_in_sys_mode)
+        == 37
+);
+static_assert!(
+    core::mem::offset_of!(GspFmcBootParams, boot_gsp_rm_params)
+        + core::mem::offset_of!(GspAcrBootGspRmParams, _reserved0)
+        == 38
+);
+static_assert!(
+    core::mem::offset_of!(GspFmcBootParams, boot_gsp_rm_params)
+        + core::mem::offset_of!(GspAcrBootGspRmParams, b_scrub_cbc_sr)
+        == 39
+);
+static_assert!(
+    core::mem::offset_of!(GspFmcBootParams, gsp_rm_params)
+        + core::mem::offset_of!(GspRmParams, boot_args_offset)
+        == 48
+);
+
+// SAFETY: The size and offset assertions above prove that the compact ABI structure has no
+// implicit padding, and all fields are initialized.
 unsafe impl AsBytes for GspFmcBootParams {}
-// SAFETY: This struct only contains integer types for which all bit patterns are valid.
+// SAFETY: The structure contains only integer fields, for which every bit pattern is valid.
 unsafe impl FromBytes for GspFmcBootParams {}
 
 impl GspFmcBootParams {
-    pub(crate) fn new(wpr_meta_addr: u64, libos_addr: u64) -> impl Init<Self> {
-        let init = init!(Self {
+    pub(crate) fn new(wpr_meta_addr: u64, libos_addr: u64, resume: bool) -> impl Init<Self> {
+        init!(Self {
             // Blackwell FSP obtains WPR info from other sources, so
-            // wprCarveoutOffset and wprCarveoutSize are left zero.
-            bootGspRmParams <- GspAcrBootGspRmParams::new(GspDmaTarget::CoherentSystem,
-                wpr_meta_addr),
-            gspRmParams <- GspRmParams::new(GspDmaTarget::NoncoherentSystem, libos_addr),
+            // wpr_carveout_offset and wpr_carveout_size are left zero.
+            boot_gsp_rm_params <- GspAcrBootGspRmParams::new(
+                GspDmaTarget::CoherentSystem,
+                wpr_meta_addr,
+                resume,
+            ),
+            gsp_rm_params <- GspRmParams::new(GspDmaTarget::NoncoherentSystem, libos_addr),
             ..Zeroable::init_zeroed()
-        });
-
-        init
+        })
     }
 }

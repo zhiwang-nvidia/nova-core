@@ -350,7 +350,7 @@ impl<'a> FmcBootArgs<'a> {
         libos: &'a Coherent<[LibosMemoryRegionInitArgument]>,
         resume: bool,
     ) -> Result<Self> {
-        let init = GspFmcBootParams::new(wpr_meta.dma_handle(), libos.dma_handle());
+        let init = GspFmcBootParams::new(wpr_meta.dma_handle(), libos.dma_handle(), resume);
 
         Ok(Self {
             chipset,
