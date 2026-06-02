@@ -32,6 +32,31 @@ macro_rules! build_error {
     }};
 }
 
+/// Asserts that a boolean expression is `true` at compile time, in generic context.
+///
+/// Unlike [`static_assert!`], this macro can refer to generic parameters and const generics.
+/// Unlike [`build_assert!`], this macro cannot refer to variables.
+///
+/// # Examples
+///
+/// ```
+/// use kernel::const_assert;
+///
+/// fn foo<const N: usize>() {
+///     const_assert!(N > 1);
+/// }
+///
+/// fn bar<T>() {
+///     const_assert!(size_of::<T>() > 0, "T cannot be ZST");
+/// }
+/// ```
+#[macro_export]
+macro_rules! const_assert {
+    ($condition:expr $(,$arg:literal)?) => {
+        const { ::core::assert!($condition $(,$arg)?) };
+    };
+}
+
 /// Asserts that a boolean expression is `true` at compile time.
 ///
 /// If the condition is evaluated to `false` in const context, `build_assert!`
