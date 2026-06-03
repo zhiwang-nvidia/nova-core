@@ -4,8 +4,10 @@ use core::num::NonZero;
 
 use kernel::{
     device,
+    new_mutex,
     pci,
-    prelude::*, //
+    prelude::*,
+    sync::Mutex, //
 };
 
 use crate::{
@@ -23,6 +25,7 @@ use crate::{
 mod commands;
 mod fw;
 mod hal;
+mod instance;
 mod vram;
 
 /// vGPU state detected during GPU construction.
@@ -88,9 +91,13 @@ impl VgpuState {
     }
 }
 
+use self::instance::VgpuInstances;
+
 /// Runtime resources for an enabled vGPU boot.
+#[pin_data]
 pub(crate) struct VgpuManager<'gpu> {
-    #[expect(dead_code)]
+    #[pin]
+    instances: Mutex<VgpuInstances<'gpu>>,
     chid_pool: &'gpu ChannelIdPool,
     vmmu_segment_size: u64,
     total_channels: u32,
@@ -104,22 +111,22 @@ impl<'gpu> VgpuManager<'gpu> {
         fifo_engine_list: &FifoEngineList,
         vmmu_segment_size: u64,
         total_channels: u32,
-    ) -> Self {
-        Self {
+    ) -> impl PinInit<Self> + use<'gpu> {
+        let fifo_engine_list = *fifo_engine_list;
+        pin_init!(Self {
+            instances <- new_mutex!(VgpuInstances::new(), "nova-core::vgpu-instances"),
             chid_pool,
             vmmu_segment_size,
             total_channels,
-            fifo_engine_list: *fifo_engine_list,
-        }
+            fifo_engine_list,
+        })
     }
 
     /// Returns the VMMU segment size in bytes, or zero if GSP-RM omitted it.
-    #[expect(dead_code)]
     const fn vmmu_segment_size(&self) -> u64 {
         self.vmmu_segment_size
     }
 
-    #[expect(dead_code)]
     const fn total_channels(&self) -> u32 {
         self.total_channels
     }

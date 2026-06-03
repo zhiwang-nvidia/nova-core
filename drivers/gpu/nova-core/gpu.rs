@@ -54,14 +54,16 @@ use crate::{
     },
 };
 
-#[cfg_attr(not(CONFIG_KUNIT = "y"), expect(dead_code))]
 mod channel;
 mod hal;
 mod regs;
 
 use self::channel::TOTAL_CHANNELS;
 
-pub(crate) use self::channel::ChannelIdPool;
+pub(crate) use self::channel::{
+    ChannelIdPool,
+    ChannelIdReservation, //
+};
 
 macro_rules! define_chipset {
     ({ $($variant:ident = $value:expr),* $(,)* }) =>
@@ -313,7 +315,7 @@ struct GspResources<'gpu> {
 #[pin_data]
 pub(crate) struct Gpu<'gpu> {
     spec: Spec,
-    vgpu: Option<VgpuManager<'gpu>>,
+    vgpu: Option<Pin<KBox<VgpuManager<'gpu>>>>,
     /// GSP event interrupt registration.
     ///
     /// Declared before `gsp_resources` so it is dropped first: `free_irq` runs, waiting out any
@@ -444,7 +446,7 @@ impl<'gpu> Gpu<'gpu> {
                 let info = &gsp_resources.boot_result.static_info;
                 match gsp_resources.vgpu_state {
                     VgpuState::Disabled => None,
-                    VgpuState::Enabled { .. } => Some(VgpuManager::new(
+                    VgpuState::Enabled { .. } => Some(KBox::pin_init(VgpuManager::new(
                         // SAFETY: `chid_pool` is initialized above at its final pinned address.
                         // The private manager and its pool borrow cannot escape this `Gpu`.
                         // Completed field drop order drops the manager before the pool; on failure,
@@ -453,7 +455,7 @@ impl<'gpu> Gpu<'gpu> {
                         &info.fifo_engine_list,
                         info.vmmu_segment_size,
                         TOTAL_CHANNELS,
-                    )),
+                    ), GFP_KERNEL)?),
                 }
             },
 

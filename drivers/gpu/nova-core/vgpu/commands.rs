@@ -43,7 +43,6 @@ pub(super) fn query_assigned_vf_type(cmdq: &Cmdq<'_>, dbdf: Dbdf) -> Result<u32>
 }
 
 /// Query and decode the firmware properties of one vGPU type.
-#[expect(dead_code)]
 pub(super) fn query_vgpu_properties(cmdq: &Cmdq<'_>, type_id: u32) -> Result<KBox<VgpuProperties>> {
     let response = cmdq.send_gmc_and_receive(
         GMCAPI_CMD_QUERY_VGPU_PROPERTIES,
