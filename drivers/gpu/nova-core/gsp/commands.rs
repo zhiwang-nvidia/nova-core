@@ -13,6 +13,10 @@ use kernel::{
     device,
     pci,
     prelude::*,
+    time::{
+        Instant,
+        Monotonic, //
+    },
     transmute::AsBytes, //
 };
 
@@ -420,11 +424,17 @@ pub(crate) fn gsp_init(
         GSP_INIT_MAX_RESPONSE_SIZE,
     )?;
 
+    let deadline = Instant::<Monotonic>::now() + Cmdq::RECEIVE_TIMEOUT;
     loop {
-        let reply = cmdq.receive_gmc_and_dispatch(
+        let remaining = deadline - Instant::<Monotonic>::now();
+        if remaining.is_negative() {
+            return Err(ETIMEDOUT);
+        }
+
+        let reply = match cmdq.receive_gmc_and_dispatch(
             bar,
-            Cmdq::RECEIVE_TIMEOUT,
-            |command_id, max_resp_or_status, payload_0, payload_1| {
+            remaining,
+            |command_id, max_resp_or_status, _sequence, payload_0, payload_1| {
                 if command_id == GMCAPI_CMD_GSP_INIT {
                     (
                         Some(decode_gsp_init_reply(
@@ -444,7 +454,11 @@ pub(crate) fn gsp_init(
                     }
                 }
             },
-        )?;
+        ) {
+            Ok(reply) => reply,
+            Err(ERANGE) => continue,
+            Err(error) => return Err(error),
+        };
 
         if let Some(reply) = reply {
             return reply;

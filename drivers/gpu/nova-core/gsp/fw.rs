@@ -613,6 +613,11 @@ impl GspMsgElement {
         self.mctp_magic == MCTP_MAGIC
     }
 
+    /// Returns `true` if the NVDM header routes this element to the RM RPC dispatcher.
+    pub(crate) fn is_rm_rpc(&self) -> bool {
+        self.nvdm_header.validate(NvdmType::RmRpc)
+    }
+
     // Returns the sequence number of the message.
     pub(crate) fn sequence(&self) -> u32 {
         self.rpc.sequence
@@ -663,7 +668,7 @@ pub(crate) struct GmcApiHeader {
 
 /// Command identifier bits of [`GmcApiHeader::command`], matching Open RM's
 /// `GMCAPI_HEADER_COMMAND_ID_MASK`. The remaining byte carries flags.
-const GMCAPI_COMMAND_ID_MASK: u32 = 0x00ff_ffff;
+pub(crate) const GMCAPI_COMMAND_ID_MASK: u32 = 0x00ff_ffff;
 
 /// GMC command that hands GSP-RM its system information and registry keys and returns the static
 /// GPU configuration. Its reply is also what signals that GSP-RM has finished starting.
