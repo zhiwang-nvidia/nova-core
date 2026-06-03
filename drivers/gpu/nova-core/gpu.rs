@@ -50,7 +50,10 @@ use crate::{
         VramAddress, //
     },
     regs,
-    vgpu::VgpuManager,
+    vgpu::{
+        ChidAllocator,
+        VgpuManager, //
+    },
 };
 
 mod hal;
@@ -334,6 +337,9 @@ pub(crate) struct Gpu {
     /// vGPU state (SR-IOV / FSP PRC), behind Mutex for FFI concurrency.
     #[pin]
     pub(crate) vgpu: Mutex<VgpuManager>,
+    /// Channel ID allocator for vGPU instances.
+    #[pin]
+    pub(crate) chid_allocator: Mutex<ChidAllocator>,
     /// Static GPU information from GSP.
     gsp_static_info: GetGspStaticInfoReply,
     /// BAR1 user interface for CPU access to GPU virtual memory.
@@ -388,6 +394,8 @@ impl Gpu {
                 sec2_falcon: Falcon::new(pdev.as_ref(), chipset)?,
 
                 vgpu <- new_mutex!(VgpuManager::new(pdev, chipset.arch())?, "vgpu_manager"),
+
+                chid_allocator <- new_mutex!(ChidAllocator::new(0), "chid_allocator"),
 
                 gsp <- Gsp::new(pdev, chipset, build_id.as_ref()),
 
