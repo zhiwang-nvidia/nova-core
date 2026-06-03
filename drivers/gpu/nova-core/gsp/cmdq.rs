@@ -905,7 +905,6 @@ impl Cmdq {
     }
 
     /// Sends a synchronous GMC command whose reply has no payload.
-    #[expect(dead_code)]
     pub(crate) fn send_gmc_no_response(
         &self,
         bar: Bar0<'_>,
@@ -926,7 +925,6 @@ impl Cmdq {
     /// event, preventing another transaction from consuming its completion.
     /// Interleaved GMC messages are passed to `handler`. The timeout is shared
     /// by the complete operation.
-    #[expect(dead_code)]
     pub(crate) fn send_gmc_and_wait_event(
         &self,
         bar: Bar0<'_>,

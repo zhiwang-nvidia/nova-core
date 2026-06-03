@@ -261,6 +261,13 @@ bitfield! {
 
 impl ChannelMapEntry {
     const KEY: KeyId = 0x1001;
+
+    pub(crate) fn new(engine_type: usize, index: u32, chid_offset: u32) -> Result<Self> {
+        Self::zeroed()
+            .try_with_engine_type(u64::try_from(engine_type).map_err(|_| EOVERFLOW)?)
+            .and_then(|entry| entry.try_with_index(u64::from(index)))
+            .and_then(|entry| entry.try_with_chid_offset(u64::from(chid_offset)))
+    }
 }
 
 impl Encodeable for KVVec<ChannelMapEntry> {
@@ -331,6 +338,59 @@ impl VgpuBootloadRequest {
     const KERNEL_LOG_SIZE_KEY: KeyId = 0x100C;
     const MIG_RM_HEAP_PHYS_ADDR_KEY: KeyId = 0x100D;
     const MIG_RM_HEAP_LENGTH_KEY: KeyId = 0x100E;
+}
+
+/// Encode a `VGPU_BOOTLOAD` request using the typed request schema.
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn encode_vgpu_bootload(
+    dbdf: Dbdf,
+    gfid: u32,
+    vgpu_type: u32,
+    vm_pid: u32,
+    num_channels: u32,
+    num_plugin_channels: u32,
+    channel_mapping: KVVec<ChannelMapEntry>,
+    guest_fb_address: u64,
+    guest_fb_length: u64,
+    plugin_heap_address: u64,
+    plugin_heap_length: u64,
+    ctrl_buffer_offset: u64,
+    init_log_address: u64,
+    init_log_size: u64,
+    vgpu_log_address: u64,
+    vgpu_log_size: u64,
+    kernel_log_address: u64,
+    kernel_log_size: u64,
+) -> Result<KVVec<u8>> {
+    let request = VgpuBootloadRequest {
+        dbdf: dbdf.into(),
+        gfid: gfid.into(),
+        vgpu_type: vgpu_type.into(),
+        vm_pid: vm_pid.into(),
+        swizz_id: SwizzId::WHOLE_GPU.into(),
+        num_channels: num_channels.into(),
+        num_plugin_channels: num_plugin_channels.into(),
+        guest_fb_segment_count: 1.into(),
+        options: VgpuBootloadOptions::zeroed().into(),
+        channel_mapping,
+        guest_fb_segment_phys_addr: Array::new(&[guest_fb_address])?,
+        guest_fb_segment_length: Array::new(&[guest_fb_length])?,
+        plugin_heap_phys_addr: plugin_heap_address.into(),
+        plugin_heap_length: plugin_heap_length.into(),
+        ctrl_buff_offset: ctrl_buffer_offset.into(),
+        init_task_log_offset: init_log_address.into(),
+        init_task_log_size: init_log_size.into(),
+        vgpu_task_log_offset: vgpu_log_address.into(),
+        vgpu_task_log_size: vgpu_log_size.into(),
+        kernel_log_offset: kernel_log_address.into(),
+        kernel_log_size: kernel_log_size.into(),
+        mig_rm_heap_phys_addr: 0.into(),
+        mig_rm_heap_length: 0.into(),
+    };
+
+    let mut encoder = Encoder::new();
+    request.encode(&mut encoder)?;
+    Ok(encoder.finish())
 }
 
 // VGPU_MGMT_QUERY_PROPERTIES
