@@ -2,8 +2,6 @@
 
 //! VRAM slot allocation for vGPU instances.
 
-#![expect(dead_code)]
-
 use kernel::{
     bitmap::BitmapVec,
     prelude::*,

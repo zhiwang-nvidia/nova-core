@@ -377,27 +377,33 @@ impl VgpuPropertiesSchema {
     const FB_RESERVATION_KEY: KeyId = 0x310F;
 }
 
-struct VgpuProperties {
-    name: ArrayVec<u8, { Self::STRING_LEN }>,
-    class: ArrayVec<u8, { Self::STRING_LEN }>,
-    type_id: u32,
-    bar1_length: u64,
-    max_instance: u32,
-    ecc: u32,
-    profile_size: u64,
-    max_fps: u32,
-    num_heads: u32,
-    max_res_x: u32,
-    max_res_y: u32,
-    dev_id: u32,
-    subsystem_id: u32,
-    fb_length: u64,
-    gsp_heap_size: u64,
-    fb_reservation: u64,
+pub(crate) struct VgpuProperties {
+    pub(crate) name: ArrayVec<u8, { Self::STRING_LEN }>,
+    pub(crate) class: ArrayVec<u8, { Self::STRING_LEN }>,
+    pub(crate) type_id: u32,
+    pub(crate) bar1_length: u64,
+    pub(crate) max_instance: u32,
+    pub(crate) ecc: u32,
+    pub(crate) profile_size: u64,
+    pub(crate) max_fps: u32,
+    pub(crate) num_heads: u32,
+    pub(crate) max_res_x: u32,
+    pub(crate) max_res_y: u32,
+    pub(crate) dev_id: u32,
+    pub(crate) subsystem_id: u32,
+    pub(crate) fb_length: u64,
+    pub(crate) gsp_heap_size: u64,
+    pub(crate) fb_reservation: u64,
 }
 
 impl VgpuProperties {
     const STRING_LEN: usize = 64;
+
+    /// Decode a vGPU properties reply with the typed NVKV schema.
+    pub(crate) fn decode(payload: &[u8]) -> Result<KBox<Self>> {
+        let decoder = Decoder::new(payload, UnknownKeyPolicy::Ignore)?;
+        KBox::try_init(decoder.decode(VgpuPropertiesSchema::default())?, GFP_KERNEL)
+    }
 }
 
 // SETUP_CONFIG_PARAMS_AND_INIT
