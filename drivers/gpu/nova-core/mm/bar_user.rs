@@ -218,7 +218,6 @@ impl Drop for BarUserAccess {
 /// [`BarUser`].  CPU accesses go through `bar1[gpu_va_addr + off]`.
 /// Must be explicitly destroyed via [`Bar1Map::destroy()`] to release the
 /// GPU page table mapping.
-#[expect(dead_code)]
 pub(crate) struct Bar1Map {
     bar_user: Arc<BarUser>,
     mapped: MappedRange,
@@ -232,7 +231,6 @@ pub(crate) struct Bar1Map {
     pub gpu_va_size: u64,
 }
 
-#[expect(dead_code)]
 impl Bar1Map {
     pub(crate) fn new(
         bar_user: &Arc<BarUser>,
