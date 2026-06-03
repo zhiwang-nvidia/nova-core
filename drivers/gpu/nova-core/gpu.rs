@@ -455,6 +455,8 @@ impl<'gpu> Gpu<'gpu> {
                         &info.fifo_engine_list,
                         info.vmmu_segment_size,
                         TOTAL_CHANNELS,
+                        gsp_resources.spec.chipset,
+                        gsp_resources.gsp.build_id(),
                     ), GFP_KERNEL)?),
                 }
             },

@@ -4,10 +4,12 @@
 use core::num::NonZeroUsize;
 
 use kernel::{
+    debugfs,
     device,
     prelude::*,
     ptr::Alignment,
-    sizes::SizeConstants, //
+    sizes::SizeConstants,
+    str::CString, //
     time::{
         delay::fsleep,
         Delta,
@@ -23,7 +25,11 @@ use crate::gsp::{
 
 use crate::{
     driver::Bar0,
-    gpu::ChannelIdReservation,
+    firmware::BuildId,
+    gpu::{
+        ChannelIdReservation,
+        Chipset, //
+    },
     mm::{
         bar_user::BarUser,
         GpuMm, //
@@ -31,8 +37,12 @@ use crate::{
 };
 
 use super::{
-    gsp_plugin_comm::CommBufferRegion,
+    gsp_plugin_comm::{
+        CommBufferRegion,
+        MappedPluginLogBuffers, //
+    },
     gsp_plugin_rpc::PluginRpc,
+    log::VgpuLogBuffers,
     scrubber::CeUtils,
     vram::{
         VgpuVramLayout,
@@ -143,6 +153,7 @@ pub(super) struct VgpuInstance<'gpu> {
     vm_pid: u32,
     chids: ChannelIdReservation<'gpu>,
     num_plugin_channels: u32,
+    debugfs_logs: Option<Pin<KBox<debugfs::Scope<VgpuLogBuffers<'gpu>>>>>,
     vram_slot: VgpuVramSlot,
     pub(super) plugin_rpc: PluginRpc<'gpu, 'gpu>,
     ceutils: Option<CeUtils>,
@@ -246,6 +257,39 @@ impl InstanceInfo {
     }
 }
 
+fn create_debugfs_logs<'gpu>(
+    buffers: MappedPluginLogBuffers<'gpu>,
+    dbdf: Dbdf,
+    chipset: Chipset,
+    build_id: Option<&BuildId>,
+) -> Result<Pin<KBox<debugfs::Scope<VgpuLogBuffers<'gpu>>>>> {
+    let logs = VgpuLogBuffers::new(buffers, chipset, build_id);
+    let raw_dbdf = dbdf.into_raw();
+    let domain = raw_dbdf >> 16;
+    let bus = (raw_dbdf >> 8) & 0xff;
+    let device = (raw_dbdf >> 3) & 0x1f;
+    let function = raw_dbdf & 0x07;
+    let directory = CString::try_from_fmt(fmt!(
+        "{:04x}:{:02x}:{:02x}.{:x}-vgpu",
+        domain,
+        bus,
+        device,
+        function,
+    ))?;
+
+    #[allow(static_mut_refs)]
+    // SAFETY: The root is initialized before driver registration and cleared
+    // only after driver unregistration has drained all users.
+    let root = unsafe { crate::DEBUGFS_ROOT.as_ref() }.ok_or(ENODEV)?;
+
+    KBox::pin_init(
+        root.scope(logs, &directory, |logs, directory| {
+            VgpuLogBuffers::register_debugfs(logs, directory);
+        }),
+        GFP_KERNEL,
+    )
+}
+
 /// Registry of live vGPU instances.
 pub(super) struct VgpuInstances<'gpu> {
     instances: KVec<VgpuInstance<'gpu>>,
@@ -287,10 +331,12 @@ impl<'gpu> VgpuInstances<'gpu> {
 
     fn release_instance(&mut self, instance: VgpuInstance<'gpu>, mm: &mut GpuMm<'_>) -> Result {
         let VgpuInstance {
+            debugfs_logs,
             plugin_rpc,
             vram_slot,
             ..
         } = instance;
+        drop(debugfs_logs);
         let result = plugin_rpc.destroy(mm);
         self.release_vram_slot(vram_slot)?;
         result
@@ -369,6 +415,7 @@ impl<'gpu> VgpuInstances<'gpu> {
             vm_pid,
             chids,
             num_plugin_channels: 3,
+            debugfs_logs: None,
             vram_slot,
             plugin_rpc: PluginRpc::new(comm),
             ceutils: None,
@@ -413,7 +460,7 @@ impl<'gpu> VgpuInstances<'gpu> {
         cmdq: &Cmdq<'_>,
         bar0: Bar0<'_>,
         gfid: Gfid,
-        fifo_engine_list: &FifoEngineList,
+        vgpu: &VgpuManager<'gpu>,
     ) -> Result {
         let instance = self
             .instances
@@ -423,12 +470,37 @@ impl<'gpu> VgpuInstances<'gpu> {
         if !instance.initialized {
             return Err(EINVAL);
         }
-        instance.bootload(dev, cmdq, fifo_engine_list)?;
+        instance.bootload(dev, cmdq, vgpu.fifo_engine_list())?;
 
         instance.plugin_rpc.init_rpc()?;
         negotiate_plugin_version(dev, bar0, gfid, &mut instance.plugin_rpc)?;
         instance.configure_plugin(dev, bar0)?;
-        set_plugin_bme(dev, bar0, gfid, &mut instance.plugin_rpc, true)
+        set_plugin_bme(dev, bar0, gfid, &mut instance.plugin_rpc, true)?;
+
+        if instance.debugfs_logs.is_none() {
+            match instance
+                .plugin_rpc
+                .comm()
+                .mapped_plugin_logs()
+                .and_then(|buffers| {
+                    create_debugfs_logs(
+                        buffers,
+                        instance.dbdf,
+                        vgpu.chipset,
+                        vgpu.build_id.as_ref(),
+                    )
+                }) {
+                Ok(logs) => instance.debugfs_logs = Some(logs),
+                Err(error) => dev_warn!(
+                    dev,
+                    "debugfs logs unavailable for gfid={}: {:?}\n",
+                    gfid.0,
+                    error,
+                ),
+            }
+        }
+
+        Ok(())
     }
 
     /// Stop the plugin and release the instance's firmware and host resources.

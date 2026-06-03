@@ -11,6 +11,7 @@ use kernel::{
 };
 
 use crate::{
+    firmware::BuildId,
     fsp::{
         Fsp,
         VgpuMode, //
@@ -28,6 +29,7 @@ mod gsp_plugin_comm;
 mod gsp_plugin_rpc;
 mod hal;
 mod instance;
+mod log;
 mod scrubber;
 mod vram;
 
@@ -105,6 +107,8 @@ pub(crate) struct VgpuManager<'gpu> {
     vmmu_segment_size: u64,
     total_channels: u32,
     fifo_engine_list: FifoEngineList,
+    chipset: Chipset,
+    build_id: Option<BuildId>,
 }
 
 impl<'gpu> VgpuManager<'gpu> {
@@ -114,6 +118,8 @@ impl<'gpu> VgpuManager<'gpu> {
         fifo_engine_list: &FifoEngineList,
         vmmu_segment_size: u64,
         total_channels: u32,
+        chipset: Chipset,
+        build_id: Option<BuildId>,
     ) -> impl PinInit<Self> + use<'gpu> {
         let fifo_engine_list = *fifo_engine_list;
         pin_init!(Self {
@@ -122,6 +128,8 @@ impl<'gpu> VgpuManager<'gpu> {
             vmmu_segment_size,
             total_channels,
             fifo_engine_list,
+            chipset,
+            build_id,
         })
     }
 
@@ -134,7 +142,6 @@ impl<'gpu> VgpuManager<'gpu> {
         self.total_channels
     }
 
-    #[expect(dead_code)]
     fn fifo_engine_list(&self) -> &FifoEngineList {
         &self.fifo_engine_list
     }
