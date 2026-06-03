@@ -799,6 +799,11 @@ impl Cmdq {
     }
 
     /// Sends an asynchronous GMC command and waits atomically for its event.
+    ///
+    /// The command queue remains locked from the send through the matching
+    /// event, preventing another transaction from consuming its completion.
+    /// Interleaved GMC messages are passed to `handler`. The timeout is shared
+    /// by the complete operation.
     pub(crate) fn send_gmc_and_wait_event(
         &self,
         bar: Bar0<'_>,

@@ -55,6 +55,8 @@ use crate::{
 };
 
 pub(crate) use fw::commands::{
+    encode_vgpu_bootload,
+    ChannelMapEntry,
     Dbdf,
     VgpuProperties, //
 };

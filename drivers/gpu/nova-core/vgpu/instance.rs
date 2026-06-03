@@ -6,7 +6,8 @@ use kernel::{
     device,
     prelude::*,
     ptr::Alignment,
-    sizes::SizeConstants, //
+    sizes::SizeConstants,
+    sync::Arc, //
 };
 
 use crate::{
@@ -17,12 +18,23 @@ use crate::{
         commands::{
             decode_vgpu_properties,
             Dbdf,
+            FifoEngineList,
             VgpuProperties, //
         }, //
     },
-    mm::GpuMm,
+    mm::{
+        bar_user::BarUser,
+        GpuMm, //
+    },
     vgpu::{
+        bootload::{
+            bootload,
+            cleanup,
+            shutdown, //
+        },
         consts::gmc,
+        fw::CommBufferRegion,
+        plugin_rpc::PluginRpc,
         vram::{
             VgpuVramLayout,
             VgpuVramSlot,
@@ -100,6 +112,7 @@ pub(crate) struct VgpuInstance<'gpu> {
     pub(crate) chids: ChannelIdReservation<'gpu>,
     pub(crate) num_plugin_channels: u32,
     pub(crate) vram_slot: VgpuVramSlot,
+    pub(crate) plugin_rpc: PluginRpc<'gpu>,
 }
 
 /// Identity and firmware profile used to allocate an instance.
@@ -174,11 +187,12 @@ impl<'gpu> VgpuInstances<'gpu> {
         allocator.free(index)
     }
 
-    /// Allocate resources for a new inactive vGPU instance.
+    /// Allocate resources and map the management communication region.
     pub(crate) fn allocate_instance(
         &mut self,
         dev: &device::Device<device::Bound>,
-        mm: &GpuMm<'_>,
+        bar_user: &Arc<BarUser<'gpu>>,
+        mm: &mut GpuMm<'_>,
         vgpu: &VgpuManager<'gpu>,
         info: InstanceInfo,
     ) -> Result<VgpuInstance<'gpu>> {
@@ -229,6 +243,21 @@ impl<'gpu> VgpuInstances<'gpu> {
             fb_align: vgpu.vmmu_segment_size().ok_or(ENODEV)?,
         };
         let vram_slot = self.alloc_vram_slot(mm, layout)?;
+        let comm = match CommBufferRegion::new(bar_user, mm, &vram_slot.mgmt_heap) {
+            Ok(comm) => comm,
+            Err(error) => {
+                // A failed page-table update may have installed a partial mapping without
+                // returning a handle that can unmap it. Keep the slot reserved so its backing
+                // VRAM cannot be reused while stale BAR1 PTEs may still reference it.
+                dev_err!(
+                    dev,
+                    "allocate_instance: retaining slot {} after BAR1 map error {:?}\n",
+                    vram_slot.index,
+                    error,
+                );
+                return Err(error);
+            }
+        };
         let fbmem = &vram_slot.fbmem;
         let mgmt = &vram_slot.mgmt_heap;
 
@@ -256,13 +285,17 @@ impl<'gpu> VgpuInstances<'gpu> {
             chids,
             num_plugin_channels: 3,
             vram_slot,
+            plugin_rpc: PluginRpc::new(comm),
         })
     }
 
-    /// Remove an instance and release its channel and VRAM reservations.
+    /// Shut down and remove an instance, then release its reservations.
     pub(crate) fn destroy_instance(
         &mut self,
         dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+        mm: &mut GpuMm<'_>,
         gfid: Gfid,
     ) -> Result {
         let index = self
@@ -270,6 +303,11 @@ impl<'gpu> VgpuInstances<'gpu> {
             .iter()
             .position(|instance| instance.gfid == gfid)
             .ok_or(ENOENT)?;
+
+        shutdown(dev, cmdq, bar, gfid)?;
+        cleanup(dev, cmdq, bar, gfid)?;
+        self.instances[index].plugin_rpc.destroy(mm)?;
+
         let instance = self.instances.remove(index).map_err(|_| EIO)?;
         let slot_index = instance.vram_slot.index;
         drop(instance);
@@ -310,4 +348,16 @@ pub(crate) fn query_vgpu_type(cmdq: &Cmdq, bar: Bar0<'_>, type_id: u32) -> Resul
         return Err(EINVAL);
     }
     Ok(VgpuType::from_properties(&properties))
+}
+
+/// Bootload the GSP plugin for an allocated instance.
+#[expect(dead_code)]
+pub(crate) fn activate_instance(
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq,
+    bar: Bar0<'_>,
+    instance: &mut VgpuInstance<'_>,
+    fifo_engine_list: &FifoEngineList,
+) -> Result {
+    bootload(dev, cmdq, bar, instance, fifo_engine_list)
 }
