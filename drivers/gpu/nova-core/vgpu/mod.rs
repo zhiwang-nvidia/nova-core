@@ -5,6 +5,7 @@ mod chan;
 pub(crate) mod consts;
 mod instance;
 pub(crate) mod plugin_rpc;
+pub(crate) mod scrubber;
 
 pub(crate) use self::chan::ChidAllocator;
 pub(crate) use self::instance::Gfid;
