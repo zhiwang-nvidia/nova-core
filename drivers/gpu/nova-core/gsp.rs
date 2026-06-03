@@ -28,6 +28,7 @@ pub(crate) mod nvkv;
 mod regs;
 
 pub(crate) use fw::{
+    r000_00 as bindings,
     GspFmcBootParams,
     GspFwWprMeta,
     LibosMemoryRegionInitArgument,

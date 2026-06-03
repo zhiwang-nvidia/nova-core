@@ -505,7 +505,6 @@ pub(crate) struct GmcResponse {
     /// Response status (`NV_STATUS` code). Zero means success.
     pub(crate) status: u32,
     /// Response payload copied out of the message queue.
-    #[expect(dead_code)]
     pub(crate) payload: KVec<u8>,
 }
 
