@@ -4,6 +4,7 @@
 use core::num::NonZeroUsize;
 
 use kernel::{
+    device,
     prelude::*,
     ptr::Alignment,
     sizes::SizeConstants, //
@@ -17,12 +18,23 @@ use crate::{
         commands::{
             decode_vgpu_properties,
             Dbdf,
+            FifoEngineList,
             VgpuProperties, //
         }, //
     },
-    mm::GpuMm,
+    mm::{
+        bar_user::BarUser,
+        GpuMm, //
+    },
     vgpu::{
+        bootload::{
+            bootload,
+            cleanup,
+            shutdown, //
+        },
         consts::gmc,
+        fw::CommBufferRegion,
+        plugin_rpc::PluginRpc,
         vram::{
             VgpuVramLayout,
             VgpuVramSlot,
@@ -59,6 +71,10 @@ pub(crate) struct VgpuType {
 }
 
 impl VgpuType {
+    pub(crate) const fn vgpu_type_id(&self) -> u32 {
+        self.vgpu_type_id
+    }
+
     fn from_properties(properties: &VgpuProperties) -> Self {
         let mut name = [0; 64];
         let name_len = properties.name.len().min(name.len());
@@ -99,6 +115,24 @@ pub(crate) struct VgpuInstance<'gpu> {
     pub(crate) chids: ChannelIdReservation<'gpu>,
     pub(crate) num_plugin_channels: u32,
     pub(crate) vram_slot: VgpuVramSlot,
+    pub(crate) plugin_rpc: PluginRpc<'gpu>,
+}
+
+impl<'gpu> VgpuInstance<'gpu> {
+    /// Unmap the plugin communication buffer and return the slot release token.
+    fn unmap_and_take_slot(
+        self,
+        bar_user: &BarUser<'gpu>,
+        mm: &mut GpuMm<'_>,
+    ) -> Result<VgpuVramSlot> {
+        let Self {
+            plugin_rpc,
+            vram_slot,
+            ..
+        } = self;
+        plugin_rpc.destroy(bar_user, mm)?;
+        Ok(vram_slot)
+    }
 }
 
 /// Identity and firmware profile used to allocate an instance.
@@ -166,10 +200,13 @@ impl<'gpu> VgpuInstances<'gpu> {
         allocator.release(slot);
     }
 
-    /// Allocate resources and register a new inactive vGPU instance.
+    /// Allocate resources, map the management communication region, and
+    /// register a new inactive vGPU instance.
     pub(crate) fn allocate_instance(
         &mut self,
-        mm: &GpuMm<'_>,
+        dev: &device::Device<device::Bound>,
+        bar_user: &BarUser<'gpu>,
+        mm: &mut GpuMm<'_>,
         vgpu: &VgpuManager<'gpu>,
         info: InstanceInfo,
     ) -> Result<Gfid> {
@@ -220,6 +257,21 @@ impl<'gpu> VgpuInstances<'gpu> {
             fb_align: vgpu.vmmu_segment_size().ok_or(ENODEV)?,
         };
         let vram_slot = self.alloc_vram_slot(mm, layout)?;
+        let comm = match CommBufferRegion::new(bar_user, mm, &vram_slot.mgmt_heap) {
+            Ok(comm) => comm,
+            Err(error) => {
+                // A failed page-table update may have installed a partial mapping without
+                // returning a handle that can unmap it. Keep the slot reserved so its backing
+                // VRAM cannot be reused while stale BAR1 PTEs may still reference it.
+                dev_err!(
+                    dev,
+                    "allocate_instance: retaining slot {} after BAR1 map error {:?}\n",
+                    vram_slot.index(),
+                    error,
+                );
+                return Err(error);
+            }
+        };
 
         let instance = VgpuInstance {
             gfid,
@@ -229,26 +281,40 @@ impl<'gpu> VgpuInstances<'gpu> {
             chids,
             num_plugin_channels: 3,
             vram_slot,
+            plugin_rpc: PluginRpc::new(comm),
         };
         match self.instances.push_within_capacity(instance) {
             Ok(()) => Ok(gfid),
-            Err(error) => {
-                let VgpuInstance { vram_slot, .. } = error.0;
-                self.release_vram_slot(vram_slot);
-                Err(EIO)
-            }
+            Err(error) => match error.0.unmap_and_take_slot(bar_user, mm) {
+                Ok(vram_slot) => {
+                    self.release_vram_slot(vram_slot);
+                    Err(EIO)
+                }
+                Err(error) => Err(error),
+            },
         }
     }
 
-    /// Remove an instance and release its channel and VRAM reservations.
-    pub(crate) fn destroy_instance(&mut self, gfid: Gfid) -> Result {
+    /// Shut down and remove an instance, then release its reservations.
+    pub(crate) fn destroy_instance(
+        &mut self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+        bar_user: &BarUser<'gpu>,
+        mm: &mut GpuMm<'_>,
+        gfid: Gfid,
+    ) -> Result {
         let index = self
             .instances
             .iter()
             .position(|instance| instance.gfid == gfid)
             .ok_or(ENOENT)?;
+
+        shutdown(dev, cmdq, bar, gfid)?;
+        cleanup(dev, cmdq, bar, gfid)?;
         let instance = self.instances.remove(index).map_err(|_| EIO)?;
-        let VgpuInstance { vram_slot, .. } = instance;
+        let vram_slot = instance.unmap_and_take_slot(bar_user, mm)?;
         self.release_vram_slot(vram_slot);
         Ok(())
     }
@@ -285,4 +351,16 @@ pub(crate) fn query_vgpu_type(cmdq: &Cmdq, bar: Bar0<'_>, type_id: u32) -> Resul
         return Err(EINVAL);
     }
     Ok(VgpuType::from_properties(&properties))
+}
+
+/// Bootload the GSP plugin for an allocated instance.
+#[expect(dead_code)]
+pub(crate) fn activate_instance(
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq,
+    bar: Bar0<'_>,
+    instance: &mut VgpuInstance<'_>,
+    fifo_engine_list: &FifoEngineList,
+) -> Result {
+    bootload(dev, cmdq, bar, instance, fifo_engine_list)
 }
