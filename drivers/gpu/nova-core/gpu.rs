@@ -442,11 +442,22 @@ impl Gpu {
 
                 mm: {
                     let usable_vram = &gsp_static_info.usable_fb_region;
+                    let mut vram_start = usable_vram.start;
+                    let mut vram_size = usable_vram.end - usable_vram.start;
+
+                    if vgpu.lock().vgpu_requested {
+                        let seg = gsp_static_info.vmmu_segment_size;
+                        if seg > 0 {
+                            let aligned = (vram_start + seg - 1) & !(seg - 1);
+                            vram_size -= aligned - vram_start;
+                            vram_start = aligned;
+                        }
+                    }
 
                     let pramin_vram_region = (0..gsp_static_info.total_fb_end).into_vram_range();
                     let buddy_params = GpuBuddyParams {
-                        base_offset: usable_vram.start,
-                        size: usable_vram.end - usable_vram.start,
+                        base_offset: vram_start,
+                        size: vram_size,
                         chunk_size: Alignment::new::<SZ_4K>(),
                     };
                     Arc::pin_init(
