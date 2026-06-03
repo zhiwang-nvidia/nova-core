@@ -504,6 +504,40 @@ impl PluginConfigParamsRequest {
     const FEATURE_FLAGS_KEY: KeyId = 0x0030;
 }
 
+/// Encode plugin configuration parameters using the typed NVKV schema.
+pub(crate) fn encode_plugin_config_params(
+    uuid: [u8; 16],
+    dbdf: Dbdf,
+    vgpu_type: u32,
+    vm_pid: u32,
+    num_channels: u32,
+    num_plugin_channels: u32,
+) -> Result<KVVec<u8>> {
+    let request = PluginConfigParamsRequest {
+        uuid: uuid.into(),
+        dbdf: dbdf.into(),
+        dev_inst: 0.into(),
+        vgpu_type: vgpu_type.into(),
+        vm_pid: vm_pid.into(),
+        swizz_id: SwizzId::WHOLE_GPU.into(),
+        num_channels: num_channels.into(),
+        num_plugin_channels: num_plugin_channels.into(),
+        vmm_cap: 0.into(),
+        migration_feature: MigrationFeature::KVM.into(),
+        hypervisor_type: HypervisorType::Unknown.into(),
+        cpu_arch: CpuArch::X86_64.into(),
+        page_size: 4096.into(),
+        feature_flags: FeatureFlags::zeroed()
+            .with_enable_uvm(true)
+            .with_vmm_migration(true)
+            .into(),
+    };
+
+    let mut encoder = Encoder::new();
+    request.encode(&mut encoder)?;
+    Ok(encoder.finish())
+}
+
 // UPDATE_BME_STATE
 
 nvkv_encode! {
@@ -514,6 +548,17 @@ nvkv_encode! {
 
 impl PluginSetBmeRequest {
     const BME_ENABLE_KEY: KeyId = 0x0100;
+}
+
+/// Encode a plugin BME state update using the typed NVKV schema.
+pub(crate) fn encode_plugin_set_bme(enable: bool) -> Result<KVVec<u8>> {
+    let request = PluginSetBmeRequest {
+        bme_enable: enable.into(),
+    };
+
+    let mut encoder = Encoder::new();
+    request.encode(&mut encoder)?;
+    Ok(encoder.finish())
 }
 
 // Decode:

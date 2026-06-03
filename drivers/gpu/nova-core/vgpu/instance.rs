@@ -31,7 +31,10 @@ use crate::{
         },
         consts::gmc,
         fw::CommBufferRegion,
-        plugin_rpc::PluginRpc,
+        plugin_rpc::{
+            PluginConfigParams,
+            PluginRpc, //
+        },
         vram::{
             VgpuVramLayout,
             VgpuVramSlot,
@@ -349,7 +352,9 @@ pub(crate) fn query_vgpu_type(cmdq: &Cmdq, bar: Bar0<'_>, type_id: u32) -> Resul
     Ok(VgpuType::from_properties(&properties))
 }
 
-/// Bootload the GSP plugin for an allocated instance.
+/// Bootload the GSP plugin and negotiate its RPC channel.
+///
+/// Called without holding the runtime lock.
 #[expect(dead_code)]
 pub(crate) fn activate_instance(
     dev: &device::Device<device::Bound>,
@@ -358,5 +363,22 @@ pub(crate) fn activate_instance(
     instance: &mut VgpuInstance<'_>,
     engine_masks: &[u64; NVGMC_ENGINE_TYPE_COUNT],
 ) -> Result {
-    bootload(dev, cmdq, bar, instance, engine_masks)
+    bootload(dev, cmdq, bar, instance, engine_masks)?;
+
+    let params = PluginConfigParams::new(
+        [0; 16],
+        instance.dbdf,
+        instance.vgpu_type.vgpu_type_id,
+        instance.vm_pid,
+        u32::try_from(instance.chids.len()).map_err(|_| EOVERFLOW)?,
+        instance.num_plugin_channels,
+    );
+    let gfid = instance.gfid;
+    let rpc = &mut instance.plugin_rpc;
+    rpc.init_rpc()?;
+    rpc.negotiate_rpc_version(dev, bar, gfid)?;
+    rpc.send_config_params(dev, bar, gfid, &params)?;
+    rpc.set_bme(dev, bar, gfid, true)?;
+
+    Ok(())
 }

@@ -12,5 +12,8 @@ pub(crate) mod gmc {
 
 /// vGPU plugin RPC values not provided by the firmware bindings.
 pub(crate) mod plugin_rpc {
+    pub(crate) const DOORBELL_STRIDE: u32 = 32;
+    pub(crate) const DOORBELL_VECTOR: u32 = 17;
     pub(crate) const PLUGIN_BOOT_TIMEOUT_MS: i64 = 10_000;
+    pub(crate) const NV_VIRTUAL_FUNCTION_PRIV_DOORBELL: usize = 0xb8_0000 + 0x2200;
 }

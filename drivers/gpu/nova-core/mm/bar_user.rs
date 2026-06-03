@@ -279,6 +279,12 @@ impl<'gpu> Bar1Map<'gpu> {
             .try_read32(self.bar_offset(offset, size_of::<u32>())?)
     }
 
+    pub(crate) fn try_write8(&self, value: u8, offset: usize) -> Result {
+        self.bar1
+            .as_ref()
+            .try_write8(value, self.bar_offset(offset, size_of::<u8>())?)
+    }
+
     pub(crate) fn try_write32(&self, value: u32, offset: usize) -> Result {
         self.bar1
             .as_ref()
