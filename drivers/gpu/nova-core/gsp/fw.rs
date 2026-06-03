@@ -527,6 +527,11 @@ impl GspMsgElement {
         self.transport.validate(size_of::<Self>())
     }
 
+    /// Returns `true` if the NVDM header routes this element to the RM RPC dispatcher.
+    pub(super) fn is_rm_rpc(&self) -> bool {
+        self.transport.is_nvdm_type(NvdmType::RmRpc)
+    }
+
     // Returns the sequence number of the message.
     pub(crate) fn sequence(&self) -> u32 {
         self.rpc.sequence
@@ -809,6 +814,10 @@ impl GspGmcMsgElement {
     /// Validates the transport framing. See [`QueueElementHeader::validate`].
     pub(crate) fn validate_framing(&self) -> Result {
         self.transport.validate(size_of::<Self>())
+    }
+
+    pub(super) fn validate_common_framing(&self) -> Result {
+        self.transport.validate(size_of::<QueueElementHeader>())
     }
 
     /// Returns `true` if the NVDM type says a GMC header follows the transport header.

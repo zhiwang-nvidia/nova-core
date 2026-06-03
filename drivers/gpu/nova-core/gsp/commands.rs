@@ -209,7 +209,7 @@ pub(crate) fn gsp_init(
         cmdq.send_gmc_no_wait(GMCAPI_CMD_GSP_INIT, payload, GSP_INIT_MAX_RESPONSE_SIZE)?;
 
     loop {
-        let reply = cmdq.receive_gmc_and_dispatch(
+        let reply = match cmdq.receive_gmc_and_dispatch(
             Cmdq::RECEIVE_TIMEOUT,
             |header, payload_0, payload_1| {
                 if header.is_response_to(GMCAPI_CMD_GSP_INIT, sequence) {
@@ -231,7 +231,11 @@ pub(crate) fn gsp_init(
                     }
                 }
             },
-        )?;
+        ) {
+            Ok(reply) => reply,
+            Err(ERANGE) => continue,
+            Err(error) => return Err(error),
+        };
 
         if let Some(reply) = reply {
             return reply;
