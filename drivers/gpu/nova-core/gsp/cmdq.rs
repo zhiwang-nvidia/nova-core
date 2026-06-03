@@ -653,12 +653,13 @@ struct GmcMessage<'a> {
 /// Returned by [`Cmdq::send_gmc_and_receive`].
 pub(crate) struct GmcResponse {
     /// The 24-bit GMC command identifier from the response (flags stripped).
-    #[expect(dead_code)]
     pub(crate) command: u32,
     /// Response status (`NV_STATUS` code). Zero means success.
     pub(crate) status: u32,
     /// Response payload (copied from the message queue).
     pub(crate) payload: KVec<u8>,
+    /// Sequence number used to match this response to its request.
+    sequence: u64,
 }
 
 /// GSP command queue.
@@ -809,7 +810,7 @@ impl Cmdq {
         &self,
         bar: Bar0<'_>,
         timeout: Delta,
-        handler: impl FnOnce(u32, u32, &[u8], &[u8]) -> R,
+        handler: impl FnOnce(u32, u32, u64, &[u8], &[u8]) -> R,
     ) -> Result<R> {
         self.inner
             .lock()
@@ -832,11 +833,15 @@ impl Cmdq {
         self.inner
             .lock()
             .send_gmc(bar, command_id, payload, max_response_size)
+            .map(|_| ())
     }
 
-    /// Sends a GMC API command to the GSP and waits for the response.
+    /// Sends a GMC API command and waits for its matching response.
     ///
-    /// The queue is locked for the entire send+receive cycle.
+    /// The queue remains locked across the send and receive operations. Stale
+    /// responses are consumed until both the command identifier and sequence
+    /// number match the request. The receive timeout is shared by the whole
+    /// matching loop.
     ///
     /// # Errors
     ///
@@ -850,9 +855,117 @@ impl Cmdq {
         payload: &[u8],
         max_response_size: u32,
     ) -> Result<GmcResponse> {
+        self.send_gmc_and_receive_timeout(
+            bar,
+            command_id,
+            payload,
+            max_response_size,
+            Self::RECEIVE_TIMEOUT,
+        )
+    }
+
+    /// Sends a GMC API command and waits up to `timeout` for its matching response.
+    pub(crate) fn send_gmc_and_receive_timeout(
+        &self,
+        bar: Bar0<'_>,
+        command_id: u32,
+        payload: &[u8],
+        max_response_size: u32,
+        timeout: Delta,
+    ) -> Result<GmcResponse> {
         let mut inner = self.inner.lock();
-        inner.send_gmc(bar, command_id, payload, max_response_size)?;
-        inner.receive_gmc(bar, Self::RECEIVE_TIMEOUT)
+        let expected_sequence = inner.send_gmc(bar, command_id, payload, max_response_size)?;
+        let expected_command = command_id & GMCAPI_COMMAND_ID_MASK;
+        let deadline = Instant::<Monotonic>::now() + timeout;
+
+        loop {
+            let remaining = deadline - Instant::<Monotonic>::now();
+            if remaining.is_negative() {
+                return Err(ETIMEDOUT);
+            }
+            let response = match inner.receive_gmc(bar, remaining) {
+                Ok(response) => response,
+                Err(ERANGE) => continue,
+                Err(error) => return Err(error),
+            };
+
+            if response.command == expected_command && response.sequence == expected_sequence {
+                return Ok(response);
+            }
+
+            dev_dbg!(
+                &inner.dev,
+                "GSP GMC: skip seq {} command 0x{:x}; expected seq {} command 0x{:x}\n",
+                response.sequence,
+                response.command,
+                expected_sequence,
+                expected_command,
+            );
+        }
+    }
+
+    /// Sends a synchronous GMC command whose reply has no payload.
+    #[expect(dead_code)]
+    pub(crate) fn send_gmc_no_response(
+        &self,
+        bar: Bar0<'_>,
+        command_id: u32,
+        payload: &[u8],
+    ) -> Result {
+        let response = self.send_gmc_and_receive(bar, command_id, payload, 0)?;
+        if response.status == 0 {
+            Ok(())
+        } else {
+            Err(EIO)
+        }
+    }
+
+    /// Sends an asynchronous GMC command and waits atomically for its event.
+    ///
+    /// The command queue remains locked from the send through the matching
+    /// event, preventing another transaction from consuming its completion.
+    /// Interleaved GMC messages are passed to `handler`. The timeout is shared
+    /// by the complete operation.
+    #[expect(dead_code)]
+    pub(crate) fn send_gmc_and_wait_event(
+        &self,
+        bar: Bar0<'_>,
+        command_id: u32,
+        payload: &[u8],
+        timeout: Delta,
+        mut predicate: impl FnMut(u32, u32, u64, &[u8], &[u8]) -> Result<bool>,
+        mut handler: impl FnMut(u32, u32, u64, &[u8], &[u8]) -> Result,
+    ) -> Result {
+        let deadline = Instant::<Monotonic>::now() + timeout;
+        let mut inner = self.inner.lock();
+        inner.send_gmc(bar, command_id, payload, 0)?;
+
+        loop {
+            let remaining = deadline - Instant::<Monotonic>::now();
+            if remaining.is_negative() {
+                return Err(ETIMEDOUT);
+            }
+            let matched = match inner.receive_gmc_and_dispatch(
+                bar,
+                remaining,
+                |command, status, sequence, payload_0, payload_1| -> Result<bool> {
+                    if predicate(command, status, sequence, payload_0, payload_1)? {
+                        return Ok(true);
+                    }
+
+                    handler(command, status, sequence, payload_0, payload_1)?;
+                    Ok(false)
+                },
+            ) {
+                Ok(matched) => matched?,
+                Err(ERANGE) => continue,
+                Err(error) => return Err(error),
+            };
+
+            if matched {
+                return Ok(());
+            }
+        }
     }
 
     /// Drains and dispatches every message currently pending in the GSP-to-CPU queue.
@@ -1031,19 +1144,16 @@ impl CmdqInner {
         command_id: u32,
         payload: &[u8],
         max_response_size: u32,
-    ) -> Result {
+    ) -> Result<u64> {
         let dst = self.gsp_mem.allocate_command::<GspGmcMsgElement>(
             bar,
             payload.len(),
             Self::ALLOCATE_TIMEOUT,
         )?;
 
-        let msg_element = GspGmcMsgElement::init(
-            command_id,
-            u64::from(self.seq),
-            payload.len(),
-            max_response_size,
-        );
+        let sequence = u64::from(self.seq);
+        let msg_element =
+            GspGmcMsgElement::init(command_id, sequence, payload.len(), max_response_size);
         // SAFETY: `dst.header` points to a valid, writable `GspGmcMsgElement` region.
         unsafe {
             msg_element.__init(core::ptr::from_mut(dst.header))?;
@@ -1058,16 +1168,16 @@ impl CmdqInner {
         dev_dbg!(
             &self.dev,
             "GSP GMC: send: seq# {}, command=0x{:x}, length=0x{:x}\n",
-            self.seq,
+            sequence,
             command_id,
             dst.header.length(),
         );
 
         let elem_count = dst.header.element_count();
-        self.seq += 1;
         DmaGspMem::advance_cpu_write_ptr_v2(bar, elem_count);
+        self.seq = self.seq.wrapping_add(1);
 
-        Ok(())
+        Ok(sequence)
     }
 
     /// Wait for a message to become available on the message queue.
@@ -1319,13 +1429,15 @@ impl CmdqInner {
     /// Wait for a GMC message to become available on the message queue.
     ///
     /// This is the GMC counterpart to [`CmdqInner::wait_for_msg`]. It parses a
-    /// [`GspGmcMsgElement`] instead of a [`GspMsgElement`].
-    fn wait_for_gmc_msg(&self, bar: Bar0<'_>, timeout: Delta) -> Result<GmcMessage<'_>> {
+    /// [`GspGmcMsgElement`] instead of a [`GspMsgElement`]. An interleaved, valid
+    /// RM RPC message is consumed and dispatched, and `ERANGE` is returned so
+    /// the caller can continue waiting for a GMC message.
+    fn wait_for_gmc_msg(&mut self, bar: Bar0<'_>, timeout: Delta) -> Result<GmcMessage<'_>> {
         if self.poisoned.get() {
             return Err(EIO);
         }
 
-        let (slice_1, slice_2) = read_poll_timeout(
+        let (raw_1, raw_2) = read_poll_timeout(
             || Ok(self.gsp_mem.driver_read_area_v2(bar)),
             |driver_area| !driver_area.0.is_empty(),
             Delta::from_millis(1),
@@ -1333,38 +1445,75 @@ impl CmdqInner {
         )
         .map(|(slice_1, slice_2)| (slice_1.as_flattened(), slice_2.as_flattened()))?;
 
-        let Some((header, slice_1)) = GspGmcMsgElement::from_bytes_prefix(slice_1) else {
-            self.poisoned.set(true);
-            return Err(EIO);
-        };
+        if let Some((header, payload_1)) = GspGmcMsgElement::from_bytes_prefix(raw_1) {
+            if header.has_valid_framing() {
+                let payload_length = header.payload_length();
 
-        if !header.has_valid_framing() {
-            dev_err!(
-                &self.dev,
-                "GSP GMC: receive: seq {} - invalid MCTP/NVDM framing\n",
-                header.gmc.sequence
-            );
-            self.poisoned.set(true);
-            return Err(EIO);
+                if payload_1.len() + raw_2.len() < payload_length {
+                    self.poisoned.set(true);
+                    return Err(EIO);
+                }
+
+                let contents = if payload_1.len() > payload_length {
+                    (payload_1.split_at(payload_length).0, &raw_2[0..0])
+                } else {
+                    (
+                        payload_1,
+                        raw_2.split_at(payload_length - payload_1.len()).0,
+                    )
+                };
+
+                return Ok(GmcMessage { header, contents });
+            }
         }
 
-        let payload_length = header.payload_length();
+        if let Some((header, payload_1)) = GspMsgElement::from_bytes_prefix(raw_1) {
+            if header.has_valid_framing() {
+                if payload_1.len() + raw_2.len() < header.payload_length() {
+                    self.poisoned.set(true);
+                    return Err(EIO);
+                }
 
-        if slice_1.len() + slice_2.len() < payload_length {
-            self.poisoned.set(true);
-            return Err(EIO);
+                let function = header.function();
+                let seq = header.sequence();
+                let is_event = matches!(function, Ok(f) if f.is_event());
+                let display_seq = if is_event { self.rx_event_seq } else { seq };
+                let length = header.length();
+                let element_count = u32::try_from(length.div_ceil(GSP_PAGE_SIZE))?;
+
+                if let Ok(function) = function {
+                    if is_event {
+                        dev_dbg!(
+                            &self.dev,
+                            "GSP RPC: async received: seq# {}, function={:?}, length=0x{:x}\n",
+                            display_seq,
+                            function,
+                            length,
+                        );
+                    } else {
+                        dev_dbg!(
+                            &self.dev,
+                            "GSP RPC: response received: seq# {}, function={:?}, length=0x{:x}\n",
+                            display_seq,
+                            function,
+                            length,
+                        );
+                    }
+                }
+
+                DmaGspMem::advance_cpu_read_ptr_v2(bar, element_count);
+                if is_event {
+                    self.rx_event_seq += 1;
+                }
+                self.dispatch_event(function, display_seq);
+
+                return Err(ERANGE);
+            }
         }
 
-        let (slice_1, slice_2) = if slice_1.len() > payload_length {
-            (slice_1.split_at(payload_length).0, &slice_2[0..0])
-        } else {
-            (slice_1, slice_2.split_at(payload_length - slice_1.len()).0)
-        };
-
-        Ok(GmcMessage {
-            header,
-            contents: (slice_1, slice_2),
-        })
+        dev_err!(&self.dev, "GSP GMC: receive: invalid MCTP/NVDM framing\n");
+        self.poisoned.set(true);
+        Err(EIO)
     }
 
     /// Receive a GMC response from the GSP.
@@ -1376,11 +1525,13 @@ impl CmdqInner {
     /// - `ETIMEDOUT` if `timeout` elapses before a message arrives.
     /// - `EIO` if the message queue is inconsistent or the MCTP magic is invalid.
     /// - `ENOMEM` if the payload buffer cannot be allocated.
+    /// - `ERANGE` if an interleaved RM RPC message was consumed and dispatched.
     fn receive_gmc(&mut self, bar: Bar0<'_>, timeout: Delta) -> Result<GmcResponse> {
+        let dev = self.dev.clone();
         let message = self.wait_for_gmc_msg(bar, timeout)?;
 
         dev_dbg!(
-            &self.dev,
+            &dev,
             "GSP GMC: response received: seq {}, command=0x{:x}, status=0x{:x}, length=0x{:x}\n",
             message.header.gmc.sequence,
             message.header.gmc.command & GMCAPI_COMMAND_ID_MASK,
@@ -1397,6 +1548,7 @@ impl CmdqInner {
             command: message.header.gmc.command & GMCAPI_COMMAND_ID_MASK,
             status: message.header.gmc.max_resp_or_status,
             payload,
+            sequence: message.header.gmc.sequence,
         };
 
         DmaGspMem::advance_cpu_read_ptr_v2(
@@ -1409,26 +1561,30 @@ impl CmdqInner {
 
     /// Receive the next GMC event from GSP and dispatch it through a handler.
     ///
-    /// The handler receives the GMC command id and the raw payload slices that follow the
-    /// `GmcApiHeader` (two slices because the circular buffer may wrap). The message is
-    /// consumed from the queue after the handler returns, regardless of the handler's result.
+    /// The handler receives the GMC command id, response status, sequence, and the raw payload
+    /// slices that follow the `GmcApiHeader` (two slices because the circular buffer may wrap).
+    /// The message is consumed from the queue after the handler returns, regardless of the
+    /// handler's result.
     ///
     /// This is the GMC counterpart to [`CmdqInner::receive_and_dispatch`]. Where
     /// `receive_and_dispatch` handles RPC-style messages keyed by [`MsgFunction`], this method
     /// handles GMC events keyed by command id, which is the form r000 firmware uses for boot
-    /// events.
+    /// events. A valid interleaved RM RPC message is consumed and dispatched with `ERANGE`
+    /// returned to the caller.
     fn receive_gmc_and_dispatch<R>(
         &mut self,
         bar: Bar0<'_>,
         timeout: Delta,
-        handler: impl FnOnce(u32, u32, &[u8], &[u8]) -> R,
+        handler: impl FnOnce(u32, u32, u64, &[u8], &[u8]) -> R,
     ) -> Result<R> {
+        let dev = self.dev.clone();
         let message = self.wait_for_gmc_msg(bar, timeout)?;
         let command = message.header.gmc.command & GMCAPI_COMMAND_ID_MASK;
         let status = message.header.gmc.max_resp_or_status;
+        let sequence = message.header.gmc.sequence;
 
         dev_dbg!(
-            &self.dev,
+            &dev,
             "GSP GMC: event received: seq {}, command=0x{:x}, status=0x{:x}, length=0x{:x}\n",
             message.header.gmc.sequence,
             command,
@@ -1436,7 +1592,13 @@ impl CmdqInner {
             message.header.length(),
         );
 
-        let result = handler(command, status, message.contents.0, message.contents.1);
+        let result = handler(
+            command,
+            status,
+            sequence,
+            message.contents.0,
+            message.contents.1,
+        );
 
         DmaGspMem::advance_cpu_read_ptr_v2(
             bar,
