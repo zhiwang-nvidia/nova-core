@@ -28,6 +28,7 @@ use crate::{
         VramAddress,
         PAGE_SIZE, //
     },
+    mm::vram::VramRegion,
     num::IntoSafeCast,
 };
 
@@ -171,6 +172,125 @@ impl Drop for BarUserAccess<'_> {
         }
         // The inner `MappedRange`'s own `MustUnmapGuard` will also fire,
         // identifying the leaked VA range.
+    }
+}
+
+/// An owned BAR1 mapping of a region within a live VRAM allocation.
+///
+/// The mapping retains the region's backing allocation until its PTEs have been removed. A
+/// logical region may begin or end within a page; the containing pages are mapped while CPU
+/// access remains bounded to the requested byte range.
+pub(crate) struct Bar1Map<'gpu> {
+    access: BarUserAccess<'gpu>,
+    region: VramRegion,
+    page_bias: usize,
+    logical_size: usize,
+}
+
+impl<'gpu> Bar1Map<'gpu> {
+    /// Maps a VRAM region through BAR1.
+    pub(crate) fn new(
+        bar_user: &Arc<BarUser<'gpu>>,
+        mm: &mut GpuMm<'_>,
+        region: VramRegion,
+        writable: bool,
+    ) -> Result<Self> {
+        let page_size = u64::try_from(PAGE_SIZE).map_err(|_| EOVERFLOW)?;
+        let region_start = region.address();
+        let region_end = region_start.checked_add(region.size()).ok_or(EOVERFLOW)?;
+        let map_start = region_start - region_start % page_size;
+        let map_end = region_end
+            .checked_add(page_size - 1)
+            .ok_or(EOVERFLOW)?
+            / page_size
+            * page_size;
+        let map_size = map_end.checked_sub(map_start).ok_or(EINVAL)?;
+        let num_pages = usize::try_from(map_size / page_size).map_err(|_| EOVERFLOW)?;
+        if num_pages == 0 {
+            return Err(EINVAL);
+        }
+
+        let page_bias = usize::try_from(region_start - map_start).map_err(|_| EOVERFLOW)?;
+        let logical_size = usize::try_from(region.size()).map_err(|_| EOVERFLOW)?;
+        let mut pfns = KVec::new();
+        for page in 0..num_pages {
+            let byte_offset = u64::try_from(page)
+                .map_err(|_| EOVERFLOW)?
+                .checked_mul(page_size)
+                .ok_or(EOVERFLOW)?;
+            let address = map_start.checked_add(byte_offset).ok_or(EOVERFLOW)?;
+            pfns.push(Pfn::from(VramAddress::from_raw(address)), GFP_KERNEL)?;
+        }
+
+        let access = bar_user.map(mm, &pfns, writable)?;
+
+        Ok(Self {
+            access,
+            region,
+            page_bias,
+            logical_size,
+        })
+    }
+
+    /// Returns the mapped physical VRAM region.
+    pub(crate) fn region(&self) -> &VramRegion {
+        &self.region
+    }
+
+    /// Returns the logical GPU virtual address visible through BAR1.
+    pub(crate) fn gpu_va_addr(&self) -> Result<u64> {
+        self.access
+            .base()
+            .into_raw()
+            .checked_add(u64::try_from(self.page_bias).map_err(|_| EOVERFLOW)?)
+            .ok_or(EOVERFLOW)
+    }
+
+    /// Returns the requested logical mapping size.
+    pub(crate) const fn size(&self) -> usize {
+        self.logical_size
+    }
+
+    fn access_offset(&self, offset: usize, width: usize) -> Result<usize> {
+        let logical_end = offset.checked_add(width).ok_or(EOVERFLOW)?;
+        if logical_end > self.logical_size {
+            return Err(EINVAL);
+        }
+
+        let access_offset = self.page_bias.checked_add(offset).ok_or(EOVERFLOW)?;
+        if !access_offset.is_multiple_of(width) {
+            return Err(EINVAL);
+        }
+        Ok(access_offset)
+    }
+
+    pub(crate) fn try_read32(&self, offset: usize) -> Result<u32> {
+        self.access
+            .try_read32(self.access_offset(offset, size_of::<u32>())?)
+    }
+
+    pub(crate) fn try_write32(&self, value: u32, offset: usize) -> Result {
+        self.access
+            .try_write32(value, self.access_offset(offset, size_of::<u32>())?)
+    }
+
+    pub(crate) fn try_read64(&self, offset: usize) -> Result<u64> {
+        self.access
+            .try_read64(self.access_offset(offset, size_of::<u64>())?)
+    }
+
+    pub(crate) fn try_write64(&self, value: u64, offset: usize) -> Result {
+        self.access
+            .try_write64(value, self.access_offset(offset, size_of::<u64>())?)
+    }
+
+    /// Invalidates the PTEs and releases the BAR1 virtual address.
+    ///
+    /// The backing VRAM region remains alive until unmapping completes.
+    pub(crate) fn destroy(self, mm: &mut GpuMm<'_>) -> Result {
+        let result = self.access.release(mm);
+        drop(self.region);
+        result
     }
 }
 

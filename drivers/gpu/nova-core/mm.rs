@@ -67,6 +67,7 @@ mod pramin;
 mod regs;
 pub(super) mod tlb;
 pub(super) mod vmm;
+pub(crate) mod vram;
 
 /// GPU Memory Manager - owns all core MM components.
 ///
