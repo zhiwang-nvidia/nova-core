@@ -9,7 +9,8 @@ use kernel::{
     prelude::*,
     ptr::Alignment,
     sizes::SizeConstants,
-    str::CString, //
+    str::CString,
+    sync::Mutex, //
     time::{
         delay::fsleep,
         Delta,
@@ -56,6 +57,7 @@ use super::commands::{
     free_ceutils,
     negotiate_plugin_version,
     query_vgpu_properties,
+    reset_plugin,
     send_bootload,
     send_cleanup,
     send_plugin_config,
@@ -116,7 +118,6 @@ fn wait_plugin_ready(
 pub(super) struct Gfid(pub(super) u32);
 
 /// Resource requirements and device identity for one vGPU type.
-#[expect(dead_code)]
 pub(super) struct VgpuType {
     vgpu_type_id: u32,
     bar1_length: u64,
@@ -130,6 +131,22 @@ pub(super) struct VgpuType {
 impl VgpuType {
     pub(super) const fn vgpu_type_id(&self) -> u32 {
         self.vgpu_type_id
+    }
+
+    pub(super) const fn bar1_length(&self) -> u64 {
+        self.bar1_length
+    }
+
+    pub(super) const fn pci_dev_id(&self) -> u32 {
+        self.pci_dev_id
+    }
+
+    pub(super) const fn pci_subsys_id(&self) -> u32 {
+        self.pci_subsys_id
+    }
+
+    pub(super) const fn fb_length(&self) -> u64 {
+        self.fb_length
     }
 
     fn from_properties(properties: &VgpuProperties) -> Self {
@@ -158,6 +175,7 @@ pub(super) struct VgpuInstance<'gpu> {
     pub(super) plugin_rpc: PluginRpc<'gpu, 'gpu>,
     ceutils: Option<CeUtils>,
     initialized: bool,
+    active: bool,
     needs_teardown: bool,
 }
 
@@ -233,6 +251,7 @@ impl VgpuInstance<'_> {
             send_shutdown(dev, cmdq, self.gfid)?;
             dev_dbg!(dev, "shutdown: gfid={} stopped\n", self.gfid.0);
         }
+        self.active = false;
         Ok(())
     }
 }
@@ -245,7 +264,6 @@ pub(super) struct InstanceInfo {
     vm_pid: u32,
 }
 
-#[expect(dead_code)]
 impl InstanceInfo {
     pub(super) const fn new(gfid: Gfid, dbdf: Dbdf, vgpu_type: VgpuType, vm_pid: u32) -> Self {
         Self {
@@ -296,7 +314,6 @@ pub(super) struct VgpuInstances<'gpu> {
     vram_slots: Option<VgpuVramSlotAllocator>,
 }
 
-#[expect(dead_code)]
 impl<'gpu> VgpuInstances<'gpu> {
     pub(super) const fn new() -> Self {
         Self {
@@ -420,6 +437,7 @@ impl<'gpu> VgpuInstances<'gpu> {
             plugin_rpc: PluginRpc::new(comm),
             ceutils: None,
             initialized: false,
+            active: false,
             needs_teardown: false,
         };
         // Register ownership before firmware work so an uncertain result leaves
@@ -503,6 +521,35 @@ impl<'gpu> VgpuInstances<'gpu> {
         Ok(())
     }
 
+    /// Reset an active instance and scrub its guest VRAM.
+    pub(super) fn reset_instance(
+        &mut self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq<'_>,
+        bar: Bar0<'_>,
+        bar_user: &BarUser<'gpu>,
+        mm: &mut GpuMm<'_>,
+        gfid: Gfid,
+    ) -> Result {
+        let instance = self
+            .instances
+            .iter_mut()
+            .find(|instance| instance.gfid == gfid)
+            .ok_or(ENOENT)?;
+        if !instance.active {
+            return Err(EBUSY);
+        }
+
+        reset_plugin(dev, bar, instance.gfid, &mut instance.plugin_rpc)?;
+        instance.ceutils.as_ref().ok_or(EINVAL)?.scrub_guest_fb(
+            dev,
+            cmdq,
+            bar_user,
+            mm,
+            &instance.vram_slot.fbmem,
+        )
+    }
+
     /// Stop the plugin and release the instance's firmware and host resources.
     pub(super) fn destroy_instance(
         &mut self,
@@ -534,8 +581,104 @@ impl<'gpu> VgpuInstances<'gpu> {
 }
 
 /// Query and decode one vGPU type using the typed NVKV schema.
-#[expect(dead_code)]
 pub(super) fn query_vgpu_type(cmdq: &Cmdq<'_>, type_id: u32) -> Result<VgpuType> {
     let properties = query_vgpu_properties(cmdq, type_id)?;
     Ok(VgpuType::from_properties(&properties))
+}
+
+/// Activate an instance already owned by the live-instance registry.
+///
+/// If activation fails, attempt full teardown before returning the original
+/// error.
+#[expect(clippy::too_many_arguments)]
+fn activate_registered_instance<'gpu>(
+    instances: &mut VgpuInstances<'gpu>,
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq<'_>,
+    bar: Bar0<'_>,
+    bar_user: &BarUser<'gpu>,
+    mm: &mut GpuMm<'_>,
+    gfid: Gfid,
+    vgpu: &VgpuManager<'gpu>,
+) -> Result {
+    let index = instances
+        .instances
+        .iter()
+        .position(|instance| instance.gfid == gfid)
+        .ok_or(EIO)?;
+    let activation_result = instances.activate_instance(dev, cmdq, bar, gfid, vgpu);
+
+    if let Err(original_error) = activation_result {
+        if let Err(cleanup_error) = instances.destroy_instance(dev, cmdq, bar_user, mm, gfid) {
+            dev_err!(
+                dev,
+                "vgpu_open: cleanup failed for gfid={} after activation error {:?}: {:?}\n",
+                gfid.0,
+                original_error,
+                cleanup_error,
+            );
+        }
+        return Err(original_error);
+    }
+
+    instances.instances[index].active = true;
+    Ok(())
+}
+
+impl<'gpu> VgpuManager<'gpu> {
+    /// Allocate, register, and activate a vGPU instance.
+    ///
+    /// Keep the registry locked from allocation through activation or rollback
+    /// so duplicate checks and vGPU type limits remain stable.
+    pub(super) fn create_instance(
+        &self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq<'_>,
+        bar: Bar0<'_>,
+        bar_user: &'gpu BarUser<'gpu>,
+        mm: &Mutex<GpuMm<'gpu>>,
+        info: InstanceInfo,
+    ) -> Result {
+        let mut instances = self.instances().lock();
+        // Global vGPU lock order: instances -> MM -> BAR-user VMM.
+        let mut mm = mm.lock();
+        let gfid = instances.allocate_instance(dev, cmdq, bar_user, &mut mm, self, info)?;
+
+        activate_registered_instance(
+            &mut instances,
+            dev,
+            cmdq,
+            bar,
+            bar_user,
+            &mut mm,
+            gfid,
+            self,
+        )
+    }
+    pub(super) fn close_instance(
+        &self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq<'_>,
+        bar_user: &BarUser<'gpu>,
+        mm: &Mutex<GpuMm<'gpu>>,
+        gfid: Gfid,
+    ) -> Result {
+        let mut instances = self.instances().lock();
+        let mut mm = mm.lock();
+        instances.destroy_instance(dev, cmdq, bar_user, &mut mm, gfid)
+    }
+
+    pub(super) fn reset_instance(
+        &self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq<'_>,
+        bar: Bar0<'_>,
+        bar_user: &BarUser<'gpu>,
+        mm: &Mutex<GpuMm<'gpu>>,
+        gfid: Gfid,
+    ) -> Result {
+        let mut instances = self.instances().lock();
+        let mut mm = mm.lock();
+        instances.reset_instance(dev, cmdq, bar, bar_user, &mut mm, gfid)
+    }
 }

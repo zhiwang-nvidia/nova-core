@@ -67,7 +67,6 @@ use super::fw::{
 };
 
 /// Query the vGPU type assigned to a VF by its DBDF.
-#[expect(dead_code)]
 pub(super) fn query_assigned_vf_type(cmdq: &Cmdq<'_>, dbdf: Dbdf) -> Result<u32> {
     let request = u64::from(dbdf.into_raw()).to_le_bytes();
     let response =
@@ -208,6 +207,16 @@ pub(super) fn set_plugin_bme(
 ) -> Result {
     let bme = encode_plugin_set_bme(enable)?;
     rpc.rpc_call_nvkv(dev, bar0, gfid, RpcMessage::UpdateBmeState, &bme)
+}
+
+/// Reset an active GSP plugin.
+pub(super) fn reset_plugin(
+    dev: &device::Device<device::Bound>,
+    bar: Bar0<'_>,
+    gfid: Gfid,
+    rpc: &mut PluginRpc<'_, '_>,
+) -> Result {
+    rpc.rpc_call(dev, bar, gfid, RpcMessage::Reset, &[])
 }
 
 /// Whether a failed allocation may still have transferred CHID ownership to firmware.

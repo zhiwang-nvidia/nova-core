@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use core::ops::Range;
+use core::{
+    num::NonZero,
+    ops::Range, //
+};
 
 use kernel::{
     device,
@@ -8,6 +11,7 @@ use kernel::{
     fmt,
     gpu::buddy::GpuBuddyParams,
     io::Io,
+    new_mutex,
     num::Bounded,
     pci,
     prelude::*,
@@ -16,6 +20,7 @@ use kernel::{
         SizeConstants,
         SZ_4K, //
     },
+    sync::Mutex,
 };
 
 use crate::{
@@ -33,6 +38,7 @@ use crate::{
     fsp::Fsp,
     gsp::{
         self,
+        cmdq::Cmdq,
         Gsp,
         GspBootContext, //
     },
@@ -326,7 +332,8 @@ pub(crate) struct Gpu<'gpu> {
     ///
     /// Must be kept declared *before* `gsp_resources`, so that its components are dropped while
     /// the GSP is still operational.
-    mm: GpuMm<'gpu>,
+    #[pin]
+    mm: Mutex<GpuMm<'gpu>>,
     /// BAR1 user interface for CPU access to GPU virtual memory.
     #[pin]
     bar_user: BarUser<'gpu>,
@@ -380,6 +387,33 @@ impl PinnedDrop for GspResources<'_> {
 }
 
 impl<'gpu> Gpu<'gpu> {
+    pub(crate) fn cmdq(&self) -> &Cmdq<'gpu> {
+        &self.gsp_resources.gsp.cmdq
+    }
+
+    pub(crate) fn vgpu_manager(&self) -> Option<&VgpuManager<'gpu>> {
+        self.vgpu.as_ref().map(|vgpu| vgpu.as_ref().get_ref())
+    }
+
+    pub(crate) fn vgpu_total_vfs(&self) -> Option<NonZero<u16>> {
+        match self.gsp_resources.vgpu_state {
+            VgpuState::Disabled => None,
+            VgpuState::Enabled { total_vfs } => Some(total_vfs),
+        }
+    }
+
+    pub(crate) fn mm(&self) -> &Mutex<GpuMm<'gpu>> {
+        &self.mm
+    }
+
+    pub(crate) fn bar_user(&self) -> &BarUser<'gpu> {
+        &self.bar_user
+    }
+
+    pub(crate) fn bar0(&self) -> Bar0<'gpu> {
+        self.gsp_resources.bar
+    }
+
     pub(crate) fn new<'a>(
         pdev: &'gpu pci::Device<device::Core<'a>>,
         bar: Bar0<'gpu>,
@@ -509,7 +543,7 @@ impl<'gpu> Gpu<'gpu> {
             },
 
             // Create GPU memory manager owning memory management resources.
-            mm: {
+            mm <- {
                 let info = &gsp_resources.boot_result.static_info;
                 let usable_vram = info.usable_fb_regions.first().ok_or(ENODEV)?;
                 let buddy_params = GpuBuddyParams {
@@ -518,12 +552,15 @@ impl<'gpu> Gpu<'gpu> {
                     chunk_size: Alignment::new::<SZ_4K>(),
                 };
 
-                GpuMm::new(
-                    bar,
-                    gsp_resources.spec.chipset,
-                    buddy_params,
-                    VramAddress::from_raw(info.total_fb_end),
-                )?
+                new_mutex!(
+                    GpuMm::new(
+                        bar,
+                        gsp_resources.spec.chipset,
+                        buddy_params,
+                        VramAddress::from_raw(info.total_fb_end),
+                    )?,
+                    "nova-core::gpu-mm",
+                )
             },
 
             // Create BAR1 user interface for CPU access to GPU virtual memory.
@@ -548,10 +585,11 @@ impl<'gpu> Gpu<'gpu> {
         let this = self.project();
         let dev = pdev.as_ref();
         let regions = &this.gsp_resources.boot_result.static_info.usable_fb_regions;
+        let mut mm = this.mm.lock();
 
         if let Err(err) = crate::mm::selftest::run(
             dev,
-            this.mm,
+            &mut mm,
             regions,
             this.bar_user.as_ref().get_ref(),
             this.gsp_resources.boot_result.static_info.bar1_pde_base,
