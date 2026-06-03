@@ -2,8 +2,6 @@
 
 //! VRAM placement allocation for non-MIG vGPU instances.
 
-#![expect(dead_code)]
-
 use core::ops::Range;
 
 use kernel::prelude::*;

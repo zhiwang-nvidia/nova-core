@@ -46,6 +46,7 @@ mod channel;
 mod hal;
 
 pub(crate) use self::channel::{
+    ChannelIdArea,
     ChannelIdPool,
     TOTAL_CHANNELS, //
 };
@@ -302,6 +303,7 @@ pub(crate) struct Gpu<'gpu> {
     /// vGPU state and firmware parameters.
     ///
     /// Declared before `bar_user` and `mm` to preserve vGPU-before-MM teardown ordering.
+    #[pin]
     vgpu: VgpuManager<'gpu>,
     /// BAR1 user interface for CPU access to GPU virtual memory.
     #[pin]
@@ -374,7 +376,7 @@ impl<'gpu> Gpu<'gpu> {
         #[cfg(not(CONFIG_NOVA_CORE_IRQ_SELFTEST))]
         let _ = vectors;
 
-        try_pin_init!(Self {
+        try_pin_init!(&this in Self {
             spec: Spec::new(dev, bar).inspect(|spec| {
                 dev_info!(dev,"NVIDIA ({})\n", spec);
             })?,
@@ -413,7 +415,7 @@ impl<'gpu> Gpu<'gpu> {
             // lives at a pinned stable address. On successful construction the declaration
             // order drops `vgpu` before `chid_pool`; on initializer failure the later `vgpu`
             // guard is dropped before the earlier `chid_pool` guard.
-            vgpu: VgpuManager::new(
+            vgpu <- VgpuManager::new(
                 // SAFETY: The lifetime and drop-order rationale above covers this borrow.
                 unsafe { &*core::ptr::from_ref(chid_pool.as_ref().get_ref()) },
             ),
@@ -437,6 +439,12 @@ impl<'gpu> Gpu<'gpu> {
                 fsp: Fsp::try_new(dev, bar, spec.chipset)?,
 
                 _: {
+                    // SAFETY: `vgpu` was initialized above at its stable address in this
+                    // pinned `Gpu`. Construction is single-threaded, and no other reference
+                    // to the manager is live while this temporary mutable pin is used.
+                    let vgpu = unsafe {
+                        Pin::new_unchecked(&mut *core::ptr::addr_of_mut!((*this.as_ptr()).vgpu))
+                    };
                     vgpu.detect_state(pdev, spec.chipset, fsp.as_mut());
                 },
 
@@ -445,17 +453,25 @@ impl<'gpu> Gpu<'gpu> {
                 // This member must be initialized last, so the unload bundle can never be dropped
                 // from outside of the constructed `GspResources`, ensuring that the unload
                 // sequence is properly run in case of failure.
-                boot_result: gsp.boot(
-                    GspBootContext {
-                        pdev,
-                        bar,
-                        chipset: spec.chipset,
-                        gsp_falcon,
-                        sec2_falcon,
-                        fsp: fsp.as_mut(),
-                    },
-                    vgpu,
-                )?,
+                boot_result: {
+                    // SAFETY: `vgpu` was initialized above at its stable address in this
+                    // pinned `Gpu`. The previous temporary reference has expired, and
+                    // construction is still single-threaded.
+                    let vgpu = unsafe {
+                        Pin::new_unchecked(&mut *core::ptr::addr_of_mut!((*this.as_ptr()).vgpu))
+                    };
+                    gsp.boot(
+                        GspBootContext {
+                            pdev,
+                            bar,
+                            chipset: spec.chipset,
+                            gsp_falcon,
+                            sec2_falcon,
+                            fsp: fsp.as_mut(),
+                        },
+                        vgpu,
+                    )?
+                },
             }),
 
             // Create GPU memory manager owning memory management resources.
