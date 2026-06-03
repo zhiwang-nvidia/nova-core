@@ -17,6 +17,7 @@ use crate::{
         Gsp,
         GspBootContext, //
     },
+    vgpu::VgpuState,
 };
 
 /// Trait for types containing the resources and code required to fully reset the GSP.
@@ -40,6 +41,7 @@ pub(super) trait GspHal: Send {
         gsp: &Gsp,
         ctx: &mut GspBootContext<'_, '_>,
         gsp_fw: &GspFirmware,
+        vgpu_state: VgpuState,
     ) -> Result<Option<crate::gsp::UnloadBundle>>;
 }
 

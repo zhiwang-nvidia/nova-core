@@ -534,6 +534,26 @@ impl GspInitResponse {
             .filter_map(|region| region.limit.checked_add(1))
             .max()
     }
+
+    /// Returns the VMMU segment size reported by GSP-RM.
+    pub(super) const fn vmmu_segment_size(&self) -> u64 {
+        self.vmmu_segment_size
+    }
+
+    /// Returns the count of FIFO engines reported by GSP-RM.
+    pub(super) fn fifo_engine_count(&self) -> usize {
+        (self.fifo_engine_count as usize).min(Self::MAX_FIFO_ENGINES)
+    }
+
+    /// Returns the raw array of GMC engine IDs from the FIFO engine table.
+    pub(super) fn fifo_engine_gmc_ids(&self) -> &[u32; Self::MAX_FIFO_ENGINES] {
+        &self.fifo_engine_gmc_ids
+    }
+
+    /// Returns the raw array of per-engine flags from the FIFO engine table.
+    pub(super) fn fifo_engine_flags(&self) -> &[u32; Self::MAX_FIFO_ENGINES] {
+        &self.fifo_engine_flags
+    }
 }
 
 nvkv_decode! {

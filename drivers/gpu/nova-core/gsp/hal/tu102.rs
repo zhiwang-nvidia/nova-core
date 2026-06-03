@@ -44,6 +44,7 @@ use crate::{
         GspBootContext,
         GspFwWprMeta, //
     },
+    vgpu::VgpuState,
     vbios::Vbios, //
 };
 
@@ -251,6 +252,7 @@ impl GspHal for Tu102 {
         gsp: &Gsp,
         ctx: &mut GspBootContext<'_, '_>,
         gsp_fw: &GspFirmware,
+        vgpu_state: VgpuState,
     ) -> Result<Option<crate::gsp::UnloadBundle>> {
         let dev = ctx.dev();
         let bar = ctx.bar;
@@ -258,7 +260,7 @@ impl GspHal for Tu102 {
         let gsp_falcon = ctx.gsp_falcon;
         let sec2_falcon = ctx.sec2_falcon;
 
-        let fb_ranges = FbRanges::new(chipset, bar, gsp_fw, ctx.vgpu.state())?;
+        let fb_ranges = FbRanges::new(chipset, bar, gsp_fw, vgpu_state)?;
         dev_dbg!(dev, "{:#x?}\n", fb_ranges);
 
         // Declared before the unload guard so that if Booter fails while running, SEC2 is reset

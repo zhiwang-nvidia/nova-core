@@ -46,6 +46,24 @@ const GSP_INIT_MAX_RESPONSE_SIZE: u32 = 8192;
 /// Matches `GMCAPI_COMMANDS_GMCAPI_CMD_GSP_INIT` in the r000 bindings.
 const CMD_GSP_INIT: u32 = 0x0001_0001;
 
+/// Upper bound on entries in the hardware FIFO engine table.
+pub(crate) const MAX_FIFO_ENGINES: usize = 64;
+
+/// Bit mask for `NVGMC_SC_ENGINE_FLAGS_IS_HOST_DRIVEN` (bits 0:0).
+const ENGINE_FLAGS_IS_HOST_DRIVEN: u32 = 1 << 0;
+
+/// Ordered list of GMC engine IDs from the hardware FIFO engine table.
+///
+/// Each entry is a 32-bit value: `engine_type[15:0] | engine_index[31:16]`,
+/// matching `NVGMC_ENGINE_ID_DEF` in `gmcapi_engine_types.h`. The list
+/// covers only engines that have a valid (non-NONE) GMC engine ID and
+/// preserves hardware FIFO table order.
+#[derive(Copy, Clone)]
+pub(crate) struct FifoEngineList {
+    pub(crate) gmc_ids: [u32; MAX_FIFO_ENGINES],
+    pub(crate) count: usize,
+}
+
 /// Hardcoded registry entries the driver always sends to GSP-RM.
 ///
 /// `RMSecBusResetEnable` enables PCI secondary bus reset. `RMForcePcieConfigSave`
@@ -67,6 +85,10 @@ pub(crate) struct GetGspStaticInfoReply {
     pub(crate) usable_fb_regions: KVec<Range<u64>>,
     /// End of VRAM.
     pub(crate) total_fb_end: u64,
+    /// VMMU segment size reported by GSP-RM, in bytes.
+    pub(crate) vmmu_segment_size: u64,
+    /// Ordered FIFO engine GMC IDs from the hardware FIFO engine table.
+    pub(crate) fifo_engine_list: FifoEngineList,
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -110,12 +132,30 @@ fn decode_gsp_info(payload: &[u8]) -> Result<GetGspStaticInfoReply> {
         usable_fb_regions.push(region, GFP_KERNEL)?;
     }
     let total_fb_end = decoded.total_fb_end().ok_or(ENODEV)?;
+    let vmmu_segment_size = decoded.vmmu_segment_size();
+    let fifo_count = decoded.fifo_engine_count();
+    let raw_ids = decoded.fifo_engine_gmc_ids();
+    let raw_flags = decoded.fifo_engine_flags();
+    let mut fifo_engine_list = FifoEngineList {
+        gmc_ids: [0; MAX_FIFO_ENGINES],
+        count: 0,
+    };
+    for i in 0..fifo_count {
+        let gmc_id = raw_ids[i];
+        let is_host_driven = raw_flags[i] & ENGINE_FLAGS_IS_HOST_DRIVEN != 0;
+        if is_host_driven {
+            fifo_engine_list.gmc_ids[fifo_engine_list.count] = gmc_id;
+            fifo_engine_list.count += 1;
+        }
+    }
 
     Ok(GetGspStaticInfoReply {
         gpu_name,
         bar1_pde_base: decoded.bar1_pde_base(),
         usable_fb_regions,
         total_fb_end,
+        vmmu_segment_size,
+        fifo_engine_list,
     })
 }
 
