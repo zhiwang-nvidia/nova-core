@@ -36,6 +36,7 @@ pub(super) mod pagetable;
 pub(crate) mod pramin;
 pub(super) mod tlb;
 pub(super) mod vmm;
+pub(crate) mod vram;
 
 use core::ops::Range;
 
@@ -47,7 +48,8 @@ use kernel::{
     },
     num::Bounded,
     prelude::*,
-    sizes::SZ_4K, //
+    sizes::SZ_4K,
+    sync::Arc, //
 };
 
 use crate::{
@@ -56,6 +58,8 @@ use crate::{
 };
 
 pub(crate) use tlb::Tlb;
+
+use self::vram::VramBlock;
 
 /// GPU Memory Manager - owns all core MM components.
 ///
@@ -100,6 +104,13 @@ impl<'gpu> GpuMm<'gpu> {
             pramin <- pramin_init,
             tlb <- tlb_init,
         }))
+    }
+
+    /// Allocate aligned, contiguous VRAM from the core allocator.
+    ///
+    /// Dropping all references to the returned block releases the memory.
+    pub(crate) fn alloc_core_vram(&self, size: u64, align: u64) -> Result<Arc<VramBlock>> {
+        VramBlock::alloc(self, size, align)
     }
 
     /// Access the [`GpuBuddy`] allocators.
