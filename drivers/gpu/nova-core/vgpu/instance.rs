@@ -33,6 +33,7 @@ use crate::{
 use super::{
     gsp_plugin_comm::CommBufferRegion,
     gsp_plugin_rpc::PluginRpc,
+    scrubber::CeUtils,
     vram::{
         VgpuVramLayout,
         VgpuVramSlot,
@@ -42,6 +43,7 @@ use super::{
 };
 
 use super::commands::{
+    free_ceutils,
     negotiate_plugin_version,
     query_vgpu_properties,
     send_bootload,
@@ -49,6 +51,7 @@ use super::commands::{
     send_plugin_config,
     send_shutdown,
     set_plugin_bme,
+    CeUtilsAllocError,
     Dbdf,
     VgpuProperties, //
 };
@@ -142,6 +145,8 @@ pub(super) struct VgpuInstance<'gpu> {
     num_plugin_channels: u32,
     vram_slot: VgpuVramSlot,
     pub(super) plugin_rpc: PluginRpc<'gpu, 'gpu>,
+    ceutils: Option<CeUtils>,
+    initialized: bool,
     needs_teardown: bool,
 }
 
@@ -204,7 +209,7 @@ impl VgpuInstance<'_> {
             self.dbdf,
             self.vgpu_type.vgpu_type_id(),
             self.vm_pid,
-            u32::try_from(self.chids.len()).map_err(|_| EOVERFLOW)?,
+            u32::try_from(self.chids.len().checked_sub(1).ok_or(EINVAL)?).map_err(|_| EOVERFLOW)?,
             self.num_plugin_channels,
         )?;
 
@@ -291,9 +296,11 @@ impl<'gpu> VgpuInstances<'gpu> {
         result
     }
 
-    /// Allocate resources and register a new inactive vGPU instance.
+    /// Allocate resources, scrub the framebuffer and register an inactive instance.
     pub(super) fn allocate_instance(
         &mut self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq<'_>,
         bar_user: &'gpu BarUser<'gpu>,
         mm: &mut GpuMm<'_>,
         vgpu: &VgpuManager<'gpu>,
@@ -331,12 +338,14 @@ impl<'gpu> VgpuInstances<'gpu> {
         let num_chid = vgpu
             .total_channels()
             .checked_div(vgpu_type.max_instance)
-            .filter(|count| *count != 0)
+            .filter(|count| *count > 1)
             .ok_or(EINVAL)?;
         let chids = vgpu.chid_pool.reserve_ids(
             NonZeroUsize::new(usize::try_from(num_chid).map_err(|_| EOVERFLOW)?).ok_or(EINVAL)?,
             Alignment::SZ_1,
         )?;
+        let ceutils_chid =
+            u32::try_from(chids.end.checked_sub(1).ok_or(EINVAL)?).map_err(|_| EOVERFLOW)?;
         let layout = VgpuVramLayout {
             type_id: vgpu_type.vgpu_type_id,
             max_slots: vgpu_type.max_instance,
@@ -362,15 +371,39 @@ impl<'gpu> VgpuInstances<'gpu> {
             num_plugin_channels: 3,
             vram_slot,
             plugin_rpc: PluginRpc::new(comm),
+            ceutils: None,
+            initialized: false,
             needs_teardown: false,
         };
-        match self.instances.push_within_capacity(instance) {
-            Ok(()) => Ok(gfid),
-            Err(error) => {
-                self.release_instance(error.0, mm)?;
-                Err(EIO)
-            }
+        // Register ownership before firmware work so an uncertain result leaves
+        // the reservations reachable and unavailable to another instance.
+        let index = self.instances.len();
+        if let Err(error) = self.instances.push_within_capacity(instance) {
+            self.release_instance(error.0, mm)?;
+            return Err(EIO);
         }
+
+        let ceutils = match CeUtils::allocate(dev, cmdq, gfid, ceutils_chid) {
+            Ok(ceutils) => ceutils,
+            Err(error) => {
+                let error = match error {
+                    CeUtilsAllocError::NotOwned(error) => error,
+                    CeUtilsAllocError::MayOwn(error) => {
+                        dev_err!(dev, "CeUtils allocation failed: {:?}\n", error);
+                        return Err(error);
+                    }
+                };
+                let instance = self.instances.remove(index).map_err(|_| EIO)?;
+                self.release_instance(instance, mm)?;
+                return Err(error);
+            }
+        };
+        let instance = self.instances.get_mut(index).ok_or(EIO)?;
+        let result = ceutils.scrub_guest_fb(dev, cmdq, bar_user, mm, &instance.vram_slot.fbmem);
+        instance.ceutils = Some(ceutils);
+        result?;
+        instance.initialized = true;
+        Ok(gfid)
     }
 
     /// Boot and configure the GSP plugin for a registered instance.
@@ -387,6 +420,9 @@ impl<'gpu> VgpuInstances<'gpu> {
             .iter_mut()
             .find(|instance| instance.gfid == gfid)
             .ok_or(ENOENT)?;
+        if !instance.initialized {
+            return Err(EINVAL);
+        }
         instance.bootload(dev, cmdq, fifo_engine_list)?;
 
         instance.plugin_rpc.init_rpc()?;
@@ -400,6 +436,7 @@ impl<'gpu> VgpuInstances<'gpu> {
         &mut self,
         dev: &device::Device<device::Bound>,
         cmdq: &Cmdq<'_>,
+        bar_user: &BarUser<'_>,
         mm: &mut GpuMm<'_>,
         gfid: Gfid,
     ) -> Result {
@@ -408,8 +445,14 @@ impl<'gpu> VgpuInstances<'gpu> {
             .iter()
             .position(|instance| instance.gfid == gfid)
             .ok_or(ENOENT)?;
-        let instance = &mut self.instances[index];
+        let instance = self.instances.get_mut(index).ok_or(EIO)?;
+        instance.initialized = false;
         instance.shutdown(dev, cmdq)?;
+        if let Some(ceutils) = instance.ceutils.as_ref() {
+            ceutils.scrub_guest_fb(dev, cmdq, bar_user, mm, &instance.vram_slot.fbmem)?;
+        }
+        instance.ceutils = None;
+        free_ceutils(dev, cmdq, gfid)?;
         if instance.needs_teardown {
             send_cleanup(dev, cmdq, gfid)?;
         }

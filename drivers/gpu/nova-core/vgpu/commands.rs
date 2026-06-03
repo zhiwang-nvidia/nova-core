@@ -8,6 +8,7 @@
 
 use kernel::{
     device,
+    num::casts::usize_into_u32,
     prelude::*,
     time::Delta,
     transmute::AsBytes, //
@@ -22,7 +23,10 @@ use crate::gsp::{
     },
 };
 
-use crate::driver::Bar0;
+use crate::{
+    driver::Bar0,
+    mm::PAGE_SIZE, //
+};
 
 use super::{
     fw::RpcMessage,
@@ -46,6 +50,20 @@ use super::fw::{
     GMCAPI_CMD_QUERY_VGPU_PROPERTIES,
     GMCAPI_CMD_SHUTDOWN_GSP_VGPU_PLUGIN_TASK,
     GMCAPI_CMD_SHUTDOWN_GSP_VGPU_PLUGIN_TASK_COMPLETE, //
+};
+
+use super::fw::{
+    commands::{
+        AllocCeutilsRequest,
+        AllocCeutilsResponse,
+        FreeCeutilsRequest,
+        ScrubGuestFbRequest,
+        ScrubGuestFbResponse, //
+    },
+    GMCAPI_CMD_VGPU_MGR_ALLOC_GSP_CEUTILS,
+    GMCAPI_CMD_VGPU_MGR_FREE_GSP_CEUTILS,
+    GMCAPI_CMD_VGPU_MGR_SCRUB_GUEST_FB,
+    NV_ADDR_FBMEM, //
 };
 
 /// Query the vGPU type assigned to a VF by its DBDF.
@@ -190,4 +208,126 @@ pub(super) fn set_plugin_bme(
 ) -> Result {
     let bme = encode_plugin_set_bme(enable)?;
     rpc.rpc_call_nvkv(dev, bar0, gfid, RpcMessage::UpdateBmeState, &bme)
+}
+
+/// Whether a failed allocation may still have transferred CHID ownership to firmware.
+pub(super) enum CeUtilsAllocError {
+    /// A matching firmware response explicitly rejected the allocation.
+    NotOwned(Error),
+    /// The request may have completed despite a transport or response-validation error.
+    MayOwn(Error),
+}
+
+/// Allocate a CeUtils channel and validate its semaphore description.
+pub(super) fn alloc_ceutils(
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq<'_>,
+    gfid: Gfid,
+    chid: u32,
+) -> core::result::Result<u64, CeUtilsAllocError> {
+    let request = AllocCeutilsRequest {
+        gfid: gfid.0.to_le(),
+        fixed_chid: chid.to_le(),
+        force_ceid: u32::MAX.to_le(),
+        swizz_id: 0,
+    };
+
+    dev_dbg!(dev, "alloc CeUtils: gfid={} chid={}\n", gfid.0, chid,);
+
+    let response = cmdq
+        .send_gmc_and_receive(
+            GMCAPI_CMD_VGPU_MGR_ALLOC_GSP_CEUTILS,
+            <AllocCeutilsRequest as IntoBytes>::as_bytes(&request),
+            usize_into_u32::<{ size_of::<AllocCeutilsResponse>() }>(),
+        )
+        .map_err(CeUtilsAllocError::MayOwn)?;
+    if response.status != 0 {
+        return Err(CeUtilsAllocError::NotOwned(EIO));
+    }
+
+    (|| {
+        let bytes = response
+            .payload
+            .get(..size_of::<AllocCeutilsResponse>())
+            .ok_or(EMSGSIZE)?;
+        let response = AllocCeutilsResponse::read_from_bytes(bytes).map_err(|_| EINVAL)?;
+        let semaphore_address = u64::from_le(response.semaphore_address);
+        let semaphore_aperture = u32::from_le(response.semaphore_aperture);
+        let page_size = u64::try_from(PAGE_SIZE).map_err(|_| EOVERFLOW)?;
+
+        if semaphore_address == 0
+            || !semaphore_address.is_multiple_of(page_size)
+            || semaphore_aperture != NV_ADDR_FBMEM
+        {
+            return Err(EINVAL);
+        }
+
+        dev_dbg!(
+            dev,
+            "alloc CeUtils: gfid={} semaphore={:#x}\n",
+            gfid.0,
+            semaphore_address,
+        );
+        Ok(semaphore_address)
+    })()
+    .map_err(CeUtilsAllocError::MayOwn)
+}
+
+/// Release a CeUtils allocation, including one whose allocation reply was lost.
+pub(super) fn free_ceutils(
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq<'_>,
+    gfid: Gfid,
+) -> Result {
+    let request = FreeCeutilsRequest {
+        gfid: gfid.0.to_le(),
+    };
+
+    dev_dbg!(dev, "free CeUtils: gfid={}\n", gfid.0);
+    cmdq.send_gmc_and_check_status(
+        GMCAPI_CMD_VGPU_MGR_FREE_GSP_CEUTILS,
+        <FreeCeutilsRequest as IntoBytes>::as_bytes(&request),
+    )
+}
+
+/// Submit an asynchronous guest FB scrub and return its work identifier.
+pub(super) fn submit_ceutils_scrub(
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq<'_>,
+    gfid: Gfid,
+    fb_offset: u64,
+    fb_size: u64,
+) -> Result<u32> {
+    let request = ScrubGuestFbRequest {
+        gfid: gfid.0.to_le(),
+        reserved: 0,
+        fb_offset: fb_offset.to_le(),
+        fb_size: fb_size.to_le(),
+    };
+
+    dev_dbg!(
+        dev,
+        "submit scrub: gfid={} offset={:#x} size={:#x}\n",
+        gfid.0,
+        fb_offset,
+        fb_size,
+    );
+
+    let response = cmdq.send_gmc_and_receive(
+        GMCAPI_CMD_VGPU_MGR_SCRUB_GUEST_FB,
+        <ScrubGuestFbRequest as IntoBytes>::as_bytes(&request),
+        usize_into_u32::<{ size_of::<ScrubGuestFbResponse>() }>(),
+    )?;
+    if response.status != 0 {
+        return Err(EIO);
+    }
+
+    let bytes = response
+        .payload
+        .get(..size_of::<ScrubGuestFbResponse>())
+        .ok_or(EMSGSIZE)?;
+    let response = ScrubGuestFbResponse::read_from_bytes(bytes).map_err(|_| EINVAL)?;
+    let work_id = u32::try_from(u64::from_le(response.work_id)).map_err(|_| EOVERFLOW)?;
+
+    Ok(work_id)
 }
