@@ -37,6 +37,8 @@ pub(super) use super::fw::commands::{
     VgpuProperties, //
 };
 
+use super::fw::commands::encode_plugin_set_bme;
+
 use super::fw::{
     GMCAPI_CMD_BOOTLOAD_GSP_VGPU_PLUGIN_TASK,
     GMCAPI_CMD_CLEANUP_GSP_VGPU_PLUGIN_RESOURCES,
@@ -176,4 +178,16 @@ pub(super) fn send_plugin_config(
         RpcMessage::SetupConfigParamsAndInit,
         config,
     )
+}
+
+/// Update the bus-mastering state reported to the GSP plugin.
+pub(super) fn set_plugin_bme(
+    dev: &device::Device<device::Bound>,
+    bar0: Bar0<'_>,
+    gfid: Gfid,
+    rpc: &mut PluginRpc<'_, '_>,
+    enable: bool,
+) -> Result {
+    let bme = encode_plugin_set_bme(enable)?;
+    rpc.rpc_call_nvkv(dev, bar0, gfid, RpcMessage::UpdateBmeState, &bme)
 }

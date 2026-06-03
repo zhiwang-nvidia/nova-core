@@ -48,6 +48,7 @@ use super::commands::{
     send_cleanup,
     send_plugin_config,
     send_shutdown,
+    set_plugin_bme,
     Dbdf,
     VgpuProperties, //
 };
@@ -390,7 +391,8 @@ impl<'gpu> VgpuInstances<'gpu> {
 
         instance.plugin_rpc.init_rpc()?;
         negotiate_plugin_version(dev, bar0, gfid, &mut instance.plugin_rpc)?;
-        instance.configure_plugin(dev, bar0)
+        instance.configure_plugin(dev, bar0)?;
+        set_plugin_bme(dev, bar0, gfid, &mut instance.plugin_rpc, true)
     }
 
     /// Stop the plugin and release the instance's firmware and host resources.
