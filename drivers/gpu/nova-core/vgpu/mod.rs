@@ -7,11 +7,18 @@ mod instance;
 pub(crate) mod log;
 pub(crate) mod plugin_rpc;
 pub(crate) mod scrubber;
+mod vfio;
 
 pub(crate) use self::chan::ChidAllocator;
-pub(crate) use self::instance::Gfid;
+pub(crate) use self::instance::{
+    activate_instance,
+    query_assigned_vf_type,
+    query_vgpu_type,
+    Dbdf,
+    Gfid,
+    VgpuInstance, //
+};
 
-use self::instance::VgpuInstance;
 
 use kernel::{
     device,
@@ -28,6 +35,7 @@ use crate::{
 ///
 /// Indexed by `NVGMC_ENGINE_TYPE` (GR=1, COPY=2, ..., OFA=19).
 /// Each `u64` is a bitmask where bit N means engine instance N exists.
+#[derive(Copy, Clone)]
 pub(crate) struct GmcEngineMasks {
     pub masks: [u64; NVGMC_ENGINE_TYPE_COUNT],
 }

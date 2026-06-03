@@ -331,7 +331,7 @@ pub(crate) struct Gpu {
     /// SEC2 falcon instance, used for GSP boot up and cleanup.
     sec2_falcon: Falcon<Sec2Falcon>,
     /// GPU memory manager owning memory management resources.
-    mm: Arc<GpuMm>,
+    pub(crate) mm: Arc<GpuMm>,
     /// GSP runtime data.
     #[pin]
     pub(crate) gsp: Gsp,
@@ -344,7 +344,7 @@ pub(crate) struct Gpu {
     /// Static GPU information from GSP.
     gsp_static_info: GetGspStaticInfoReply,
     /// BAR1 user interface for CPU access to GPU virtual memory.
-    bar_user: Arc<BarUser>,
+    pub(crate) bar_user: Arc<BarUser>,
     /// fwctl device registration for GMC API pass-through.
     #[pin]
     _fwctl_reg: Devres<fwctl::Registration<crate::fwctl::NovaCoreFwCtl>>,

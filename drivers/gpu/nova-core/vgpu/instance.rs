@@ -102,8 +102,8 @@ impl Default for VgpuType {
 /// Field ordering is load-bearing for drop: `debugfs_logs` must be declared
 /// before `plugin_rpc` so that debugfs entries are removed (and in-progress
 /// readers drained) before the underlying `Bar1Map` is destroyed.
-#[expect(dead_code)]
 pub(crate) struct VgpuInstance {
+    #[expect(dead_code)]
     pub id: u32,
     pub gfid: Gfid,
     pub dbdf: Dbdf,
@@ -113,18 +113,19 @@ pub(crate) struct VgpuInstance {
     pub num_chid: u32,
     pub num_plugin_channels: u32,
     /// Fixed channel ID reserved for the per-VM CeUtils scrubber.
+    #[expect(dead_code)]
     pub ceutils_chid: u32,
     /// Physical address of the CeUtils finish-payload semaphore page (from GSP).
     pub sema_phys_addr: u64,
     pub fbmem_heap: Option<VramBlock>,
     pub mgmt_heap: Option<VramBlock>,
+    #[expect(dead_code)]
     pub debugfs_logs: Option<Pin<KBox<debugfs::Scope<VgpuLogBuffers>>>>,
     pub plugin_rpc: Option<PluginRpc>,
     pub active: bool,
 }
 
 /// Query the vGPU type assigned to a VF by its DBDF.
-#[expect(dead_code)]
 pub(crate) fn query_assigned_vf_type(cmdq: &Cmdq, bar: &Bar0, dbdf: Dbdf) -> Result<u32> {
     let in_params = u64::from(dbdf.0).to_le_bytes();
     let resp =
@@ -141,7 +142,6 @@ pub(crate) fn query_assigned_vf_type(cmdq: &Cmdq, bar: &Bar0, dbdf: Dbdf) -> Res
 }
 
 /// Query vGPU type properties and decode NVKV response.
-#[expect(dead_code)]
 pub(crate) fn query_vgpu_type(cmdq: &Cmdq, bar: &Bar0, type_id: u32) -> Result<VgpuType> {
     let in_params = type_id.to_le_bytes();
     let resp =
@@ -181,7 +181,6 @@ impl VgpuManager {
     /// The caller must invoke [`activate_instance`] afterwards (outside the
     /// manager lock) to bootload the GSP plugin and negotiate the RPC
     /// channel.
-    #[expect(dead_code)]
     #[expect(clippy::too_many_arguments)]
     pub(crate) fn allocate_instance(
         &mut self,
@@ -307,7 +306,6 @@ impl VgpuManager {
     }
 
     /// Destroy a vGPU instance by GFID: send GSP shutdown sequence, scrub FB, then free resources.
-    #[expect(dead_code)]
     pub(crate) fn destroy_instance(
         &mut self,
         dev: &device::Device<device::Bound>,
@@ -360,7 +358,6 @@ impl VgpuManager {
 /// Bootload the GSP plugin and negotiate the RPC channel for an allocated
 /// instance.  Called **without** holding the `VgpuManager` or `ChidAllocator`
 /// locks.
-#[expect(dead_code)]
 pub(crate) fn activate_instance(
     dev: &device::Device<device::Bound>,
     cmdq: &Cmdq,
