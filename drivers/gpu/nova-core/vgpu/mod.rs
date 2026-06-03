@@ -10,6 +10,7 @@ pub(crate) mod scrubber;
 mod vfio;
 
 pub(crate) use self::chan::ChidAllocator;
+pub(crate) use self::consts::gmcapi;
 pub(crate) use self::instance::{
     activate_instance,
     query_assigned_vf_type,
