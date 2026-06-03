@@ -32,6 +32,7 @@ use super::bindings;
 #[repr(u32)]
 pub(in crate::vgpu) enum RpcMessage {
     VersionNegotiation = bindings::MESSAGE_NV_VGPU_CPU_RPC_MSG_VERSION_NEGOTIATION,
+    SetupConfigParamsAndInit = bindings::MESSAGE_NV_VGPU_CPU_RPC_MSG_SETUP_CONFIG_PARAMS_AND_INIT,
 }
 
 bitfield! {
@@ -258,4 +259,129 @@ pub(in crate::vgpu) struct VgpuProperties {
 
 impl VgpuProperties {
     const STRING_LEN: usize = 64;
+}
+
+#[derive(Clone, Copy)]
+enum HypervisorType {
+    Unknown = 4,
+}
+
+impl From<HypervisorType> for u32 {
+    fn from(value: HypervisorType) -> Self {
+        value as u32
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CpuArch {
+    Aarch64 = 1,
+    X86_64 = 2,
+}
+
+impl CpuArch {
+    fn host() -> Result<Self> {
+        if cfg!(target_arch = "x86_64") {
+            Ok(Self::X86_64)
+        } else if cfg!(target_arch = "aarch64") {
+            Ok(Self::Aarch64)
+        } else {
+            Err(EOPNOTSUPP)
+        }
+    }
+}
+
+impl From<CpuArch> for u32 {
+    fn from(value: CpuArch) -> Self {
+        value as u32
+    }
+}
+
+#[derive(Clone, Copy)]
+struct MigrationFeature(u32);
+
+impl MigrationFeature {
+    const PRESERVE_CTX_BUF: Self = Self(0x4000);
+}
+
+impl From<MigrationFeature> for u32 {
+    fn from(value: MigrationFeature) -> Self {
+        value.0
+    }
+}
+
+bitfield! {
+    struct FeatureFlags(u64) {
+        3:3 enable_uvm => bool;
+        5:5 vmm_migration => bool;
+    }
+}
+
+nvkv_encode! {
+    struct PluginConfigParamsRequest {
+        uuid: Key<[u8; 16], { Self::UUID_KEY }>,
+        dbdf: Key<Dbdf, { Self::DBDF_KEY }, u32>,
+        dev_inst: Key<u32, { Self::DEV_INST_KEY }>,
+        vgpu_type: Key<u32, { Self::VGPU_TYPE_KEY }>,
+        vm_pid: Key<u32, { Self::VM_PID_KEY }>,
+        swizz_id: Key<SwizzId, { Self::SWIZZ_ID_KEY }, u32>,
+        num_channels: Key<u32, { Self::NUM_CHANNELS_KEY }>,
+        num_plugin_channels: Key<u32, { Self::NUM_PLUGIN_CHANNELS_KEY }>,
+        vmm_cap: Key<u32, { Self::VMM_CAP_KEY }>,
+        migration_feature: Key<MigrationFeature, { Self::MIGRATION_FEATURE_KEY }, u32>,
+        hypervisor_type: Key<HypervisorType, { Self::HYPERVISOR_TYPE_KEY }, u32>,
+        cpu_arch: Key<CpuArch, { Self::CPU_ARCH_KEY }, u32>,
+        page_size: Key<u64, { Self::PAGE_SIZE_KEY }>,
+        feature_flags: Key<FeatureFlags, { Self::FEATURE_FLAGS_KEY }, u64>,
+    }
+}
+
+impl PluginConfigParamsRequest {
+    const UUID_KEY: KeyId = 0x0001;
+    const DBDF_KEY: KeyId = 0x0002;
+    const DEV_INST_KEY: KeyId = 0x0004;
+    const VGPU_TYPE_KEY: KeyId = 0x0005;
+    const VM_PID_KEY: KeyId = 0x0006;
+    const SWIZZ_ID_KEY: KeyId = 0x0010;
+    const NUM_CHANNELS_KEY: KeyId = 0x0011;
+    const NUM_PLUGIN_CHANNELS_KEY: KeyId = 0x0012;
+    const VMM_CAP_KEY: KeyId = 0x0020;
+    const MIGRATION_FEATURE_KEY: KeyId = 0x0021;
+    const HYPERVISOR_TYPE_KEY: KeyId = 0x0022;
+    const CPU_ARCH_KEY: KeyId = 0x0023;
+    const PAGE_SIZE_KEY: KeyId = 0x0024;
+    const FEATURE_FLAGS_KEY: KeyId = 0x0030;
+}
+
+/// Encodes plugin configuration parameters using the typed NVKV schema.
+pub(in crate::vgpu) fn encode_plugin_config_params(
+    uuid: [u8; 16],
+    dbdf: Dbdf,
+    vgpu_type: u32,
+    vm_pid: u32,
+    num_channels: u32,
+    num_plugin_channels: u32,
+) -> Result<EncodedStream> {
+    let request = PluginConfigParamsRequest {
+        uuid: uuid.into(),
+        dbdf: dbdf.into(),
+        dev_inst: 0.into(),
+        vgpu_type: vgpu_type.into(),
+        vm_pid: vm_pid.into(),
+        swizz_id: SwizzId::WHOLE_GPU.into(),
+        num_channels: num_channels.into(),
+        num_plugin_channels: num_plugin_channels.into(),
+        vmm_cap: 0.into(),
+        migration_feature: MigrationFeature::PRESERVE_CTX_BUF.into(),
+        hypervisor_type: HypervisorType::Unknown.into(),
+        cpu_arch: CpuArch::host()?.into(),
+        page_size: u64::try_from(kernel::page::PAGE_SIZE)?.into(),
+        feature_flags: FeatureFlags::zeroed()
+            .with_enable_uvm(false)
+            .with_vmm_migration(true)
+            .into(),
+    };
+
+    let mut encoder = Encoder::new();
+    request.encode(&mut encoder)?;
+    Ok(encoder.finish())
 }

@@ -46,12 +46,14 @@ use super::commands::{
     query_vgpu_properties,
     send_bootload,
     send_cleanup,
+    send_plugin_config,
     send_shutdown,
     Dbdf,
     VgpuProperties, //
 };
 
 use super::fw::commands::{
+    encode_plugin_config_params,
     encode_vgpu_bootload,
     ChannelMapEntry, //
 };
@@ -193,6 +195,19 @@ impl VgpuInstance<'_> {
 
         dev_dbg!(dev, "bootload: gfid={} plugin ready\n", self.gfid.0);
         Ok(())
+    }
+
+    fn configure_plugin(&mut self, dev: &device::Device<device::Bound>, bar0: Bar0<'_>) -> Result {
+        let config = encode_plugin_config_params(
+            [0; 16],
+            self.dbdf,
+            self.vgpu_type.vgpu_type_id(),
+            self.vm_pid,
+            u32::try_from(self.chids.len()).map_err(|_| EOVERFLOW)?,
+            self.num_plugin_channels,
+        )?;
+
+        send_plugin_config(dev, bar0, self.gfid, &mut self.plugin_rpc, &config)
     }
 
     /// Stop the plugin when firmware may own instance resources.
@@ -357,7 +372,7 @@ impl<'gpu> VgpuInstances<'gpu> {
         }
     }
 
-    /// Boot the GSP plugin and negotiate its RPC version.
+    /// Boot and configure the GSP plugin for a registered instance.
     pub(super) fn activate_instance(
         &mut self,
         dev: &device::Device<device::Bound>,
@@ -374,7 +389,8 @@ impl<'gpu> VgpuInstances<'gpu> {
         instance.bootload(dev, cmdq, fifo_engine_list)?;
 
         instance.plugin_rpc.init_rpc()?;
-        negotiate_plugin_version(dev, bar0, gfid, &mut instance.plugin_rpc)
+        negotiate_plugin_version(dev, bar0, gfid, &mut instance.plugin_rpc)?;
+        instance.configure_plugin(dev, bar0)
     }
 
     /// Stop the plugin and release the instance's firmware and host resources.
