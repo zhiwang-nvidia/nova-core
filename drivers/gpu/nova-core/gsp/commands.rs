@@ -55,6 +55,8 @@ use crate::{
 };
 
 pub(crate) use fw::commands::{
+    encode_plugin_config_params,
+    encode_plugin_set_bme,
     encode_vgpu_bootload,
     ChannelMapEntry,
     Dbdf,
