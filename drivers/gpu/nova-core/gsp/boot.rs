@@ -72,7 +72,7 @@ impl super::Gsp {
     pub(crate) fn boot(
         self: Pin<&mut Self>,
         mut ctx: super::GspBootContext<'_, '_>,
-        vgpu: &mut VgpuManager<'_>,
+        mut vgpu: Pin<&mut VgpuManager<'_>>,
     ) -> Result<super::BootResult> {
         let pdev = ctx.pdev;
         let bar = ctx.bar;
@@ -96,7 +96,7 @@ impl super::Gsp {
             }),
         );
 
-        let vgpu_state = vgpu.state();
+        let vgpu_state = vgpu.as_ref().state();
 
         // Perform the chipset-specific boot sequence, and retrieve the unload bundle.
         let unload_bundle = hal
@@ -160,7 +160,7 @@ impl super::Gsp {
                 )
             })?;
 
-        vgpu.init(
+        vgpu.as_mut().init(
             &static_info.fifo_engine_list,
             static_info.vmmu_segment_size,
             TOTAL_CHANNELS,

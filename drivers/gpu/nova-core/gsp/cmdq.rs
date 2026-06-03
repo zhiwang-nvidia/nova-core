@@ -520,6 +520,17 @@ pub(crate) enum QueuePointers {
     Reset,
 }
 
+/// Response from a GMC API command.
+pub(crate) struct GmcResponse {
+    /// The 24-bit GMC command identifier from the response (flags stripped).
+    #[expect(dead_code)]
+    pub(crate) command: u32,
+    /// Response status (`NV_STATUS` code). Zero means success.
+    pub(crate) status: u32,
+    /// Response payload copied out of the message queue.
+    pub(crate) payload: KVec<u8>,
+}
+
 /// GSP command queue.
 ///
 /// Provides the ability to send commands and receive messages from the GSP using a shared memory
@@ -681,6 +692,59 @@ impl Cmdq {
         self.inner
             .lock()
             .send_gmc(bar, command_id, payload, max_response_size)
+    }
+
+    /// Sends a GMC API command and waits for its response.
+    ///
+    /// The queue stays locked for the complete transaction. A single deadline bounds all queue
+    /// elements observed while waiting.
+    pub(crate) fn send_gmc_and_receive(
+        &self,
+        bar: Bar0<'_>,
+        command_id: u32,
+        payload: &[u8],
+        max_response_size: u32,
+    ) -> Result<GmcResponse> {
+        let mut inner = self.inner.lock();
+        inner.send_gmc(bar, command_id, payload, max_response_size)?;
+
+        let deadline = Instant::<Monotonic>::now() + Self::RECEIVE_TIMEOUT;
+        loop {
+            let remaining = deadline - Instant::<Monotonic>::now();
+            if remaining.is_negative() {
+                return Err(ETIMEDOUT);
+            }
+
+            let response = inner.receive_gmc_and_dispatch(
+                bar,
+                remaining,
+                |received_command, status, payload_0, payload_1| {
+                    if received_command != command_id {
+                        return (None, QueuePointers::Unchanged);
+                    }
+
+                    let response = (|| {
+                        let mut payload = KVec::with_capacity(
+                            payload_0.len().checked_add(payload_1.len()).ok_or(EOVERFLOW)?,
+                            GFP_KERNEL,
+                        )?;
+                        payload.extend_from_slice(payload_0, GFP_KERNEL)?;
+                        payload.extend_from_slice(payload_1, GFP_KERNEL)?;
+                        Ok(GmcResponse {
+                            command: received_command,
+                            status,
+                            payload,
+                        })
+                    })();
+
+                    (Some(response), QueuePointers::Unchanged)
+                },
+            )?;
+
+            if let Some(response) = response {
+                return response;
+            }
+        }
     }
 
     /// Waits for an unsolicited GSP event of type `M`, dispatching any other event that arrives

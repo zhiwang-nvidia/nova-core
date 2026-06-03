@@ -50,6 +50,11 @@ use crate::{
     vgpu::VgpuState, //
 };
 
+pub(crate) use fw::commands::{
+    Dbdf,
+    VgpuProperties, //
+};
+
 /// Upper bound on entries in the hardware FIFO engine table.
 pub(crate) const MAX_FIFO_ENGINES: usize = 64;
 
@@ -480,6 +485,12 @@ fn nvkv_words(payload_0: &[u8], payload_1: &[u8]) -> Result<KVVec<u64>> {
     }
 
     Ok(out)
+}
+
+/// Decodes a byte-oriented GMC vGPU-properties response with the typed NVKV schema.
+pub(crate) fn decode_vgpu_properties(payload: &[u8]) -> Result<KBox<VgpuProperties>> {
+    let words = nvkv_words(payload, &[])?;
+    VgpuProperties::decode(&words)
 }
 
 /// Decodes the static GPU configuration from an NVKV stream.
