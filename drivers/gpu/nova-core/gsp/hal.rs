@@ -16,7 +16,7 @@ use crate::{
     gsp::{
         Gsp,
         GspBootContext, //
-    },
+    }, //
 };
 
 /// Trait for types containing the resources and code required to fully reset the GSP.

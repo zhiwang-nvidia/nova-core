@@ -26,6 +26,7 @@ use crate::gsp::nvkv::{
     Encodeable,
     Encoder,
     Index,
+    Indexed,
     Key,
     KeyId,
     Required, //
@@ -295,6 +296,14 @@ nvkv_decode! {
         fb_regions: Accumulated<FbRegionSchema>,
         bar1_pde_base: Required<u64, { Self::BAR1_PDE_BASE_KEY }>,
         vmmu_segment_size: Key<u64, { Self::VMMU_SEGMENT_SIZE_KEY }>,
+        fifo_engine_count: Key<u32, { Self::FIFO_ENGINE_COUNT_KEY }>,
+        fifo_engine_gmc_ids: Indexed<
+            u32,
+            { GspInitResponse::MAX_FIFO_ENGINES },
+            { Self::FIFO_ENGINE_GMC_ENGINE_ID_KEY },
+        >,
+        fifo_engine_flags:
+            Indexed<u32, { GspInitResponse::MAX_FIFO_ENGINES }, { Self::FIFO_ENGINE_FLAGS_KEY }>,
     }
 }
 
@@ -303,6 +312,9 @@ impl GspInitResponseSchema {
     const GPU_NAME_STRING_KEY: KeyId = 0x2000;
     const BAR1_PDE_BASE_KEY: KeyId = 0x1020;
     const VMMU_SEGMENT_SIZE_KEY: KeyId = 0x1050;
+    const FIFO_ENGINE_COUNT_KEY: KeyId = 0x0500;
+    const FIFO_ENGINE_GMC_ENGINE_ID_KEY: KeyId = 0x0501;
+    const FIFO_ENGINE_FLAGS_KEY: KeyId = 0x0502;
 }
 
 /// Payload of the `GSP_INIT` response.
@@ -312,10 +324,14 @@ pub(crate) struct GspInitResponse {
     fb_regions: KVVec<FbRegion>,
     bar1_pde_base: u64,
     vmmu_segment_size: u64,
+    fifo_engine_count: u32,
+    fifo_engine_gmc_ids: [u32; Self::MAX_FIFO_ENGINES],
+    fifo_engine_flags: [u32; Self::MAX_FIFO_ENGINES],
 }
 
 impl GspInitResponse {
     pub(crate) const MAX_GPU_NAME_LEN: usize = 64;
+    const MAX_FIFO_ENGINES: usize = 64;
 
     /// A region with no tag is general-purpose memory. A tagged region is reserved for a
     /// firmware-internal use that the tag identifies.
@@ -357,6 +373,26 @@ impl GspInitResponse {
             .map(|region| region.limit)
             .max()?
             .checked_add(1)
+    }
+
+    /// Returns the VMMU segment size reported by GSP-RM.
+    pub(crate) const fn vmmu_segment_size(&self) -> u64 {
+        self.vmmu_segment_size
+    }
+
+    /// Returns the count of FIFO engines reported by GSP-RM.
+    pub(crate) fn fifo_engine_count(&self) -> usize {
+        (self.fifo_engine_count as usize).min(Self::MAX_FIFO_ENGINES)
+    }
+
+    /// Returns the raw array of GMC engine IDs from the FIFO engine table.
+    pub(crate) fn fifo_engine_gmc_ids(&self) -> &[u32; Self::MAX_FIFO_ENGINES] {
+        &self.fifo_engine_gmc_ids
+    }
+
+    /// Returns the raw array of per-engine flags from the FIFO engine table.
+    pub(crate) fn fifo_engine_flags(&self) -> &[u32; Self::MAX_FIFO_ENGINES] {
+        &self.fifo_engine_flags
     }
 }
 

@@ -60,7 +60,7 @@ use crate::{
         fw::GspArgumentsPadded, //
     },
     num,
-    vgpu::VgpuManager, //
+    vgpu::VgpuState, //
 };
 
 pub(crate) const GSP_PAGE_SHIFT: usize = 12;
@@ -79,7 +79,6 @@ pub(crate) struct GspBootContext<'ctx, 'gpu> {
     pub(crate) gsp_falcon: &'ctx Falcon<'gpu, GspFalcon>,
     pub(crate) sec2_falcon: &'ctx Falcon<'gpu, Sec2Falcon>,
     pub(crate) fsp: Option<&'ctx mut Fsp<'gpu>>,
-    pub(crate) vgpu: &'ctx VgpuManager,
 }
 
 impl<'ctx, 'gpu> GspBootContext<'ctx, 'gpu> {
@@ -282,6 +281,8 @@ struct LogBuffers {
 pub(crate) struct Gsp {
     /// Preloaded GSP firmware TLV metadata used during boot.
     gsp_tlv: kernel::firmware::Firmware,
+    /// vGPU mode detected before GSP boot.
+    vgpu_state: VgpuState,
     /// Libos arguments.
     pub(crate) libos: Coherent<[LibosMemoryRegionInitArgument]>,
     /// Log buffers for all LIBOS3 tasks, exposed via debugfs.
@@ -300,6 +301,7 @@ impl Gsp {
     pub(crate) fn new(
         pdev: &pci::Device<device::Bound>,
         chipset: Chipset,
+        vgpu_state: VgpuState,
     ) -> impl PinInit<Self, Error> + '_ {
         pin_init::pin_init_scope(move || {
             let dev = pdev.as_ref();
@@ -323,6 +325,7 @@ impl Gsp {
 
             Ok(try_pin_init!(Self {
                 gsp_tlv,
+                vgpu_state,
                 cmdq: Arc::pin_init(Cmdq::new(dev), GFP_KERNEL)?,
                 rm_state_monitor: Coherent::zeroed(dev, GFP_KERNEL)?,
                 rmargs: Coherent::init(
@@ -396,6 +399,11 @@ impl Gsp {
                 },
             }))
         })
+    }
+
+    /// Returns the vGPU mode detected for this boot.
+    pub(crate) const fn vgpu_state(&self) -> VgpuState {
+        self.vgpu_state
     }
 
     /// Returns a shared handle to the GSP command queue.

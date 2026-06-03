@@ -49,6 +49,19 @@ use crate::{
     vgpu::VgpuState, //
 };
 
+/// Upper bound on entries in the hardware FIFO engine table.
+pub(crate) const MAX_FIFO_ENGINES: usize = 64;
+
+/// Bit mask for `NVGMC_SC_ENGINE_FLAGS_IS_HOST_DRIVEN` (bits 0:0).
+const ENGINE_FLAGS_IS_HOST_DRIVEN: u32 = 1 << 0;
+
+/// Ordered list of host-driven GMC engine IDs from the hardware FIFO engine table.
+#[derive(Copy, Clone)]
+pub(crate) struct FifoEngineList {
+    pub(crate) gmc_ids: [u32; MAX_FIFO_ENGINES],
+    pub(crate) count: usize,
+}
+
 /// The static GPU configuration, as decoded from the `GSP_INIT` reply.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
@@ -58,6 +71,10 @@ pub(crate) struct GetGspStaticInfoReply {
     pub(crate) usable_fb_regions: KVec<Range<u64>>,
     /// Exclusive end of the FB physical address space.
     pub(crate) total_fb_end: u64,
+    /// VMMU segment size reported by GSP-RM, in bytes.
+    pub(crate) vmmu_segment_size: u64,
+    /// Ordered host-driven FIFO engine GMC IDs.
+    pub(crate) fifo_engine_list: FifoEngineList,
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -289,12 +306,28 @@ fn decode_gsp_info(words: &[u64]) -> Result<GetGspStaticInfoReply> {
         usable_fb_regions.push(region, GFP_KERNEL)?;
     }
     let total_fb_end = decoded.total_fb_end().ok_or(EINVAL)?;
+    let vmmu_segment_size = decoded.vmmu_segment_size();
+    let fifo_count = decoded.fifo_engine_count();
+    let raw_ids = decoded.fifo_engine_gmc_ids();
+    let raw_flags = decoded.fifo_engine_flags();
+    let mut fifo_engine_list = FifoEngineList {
+        gmc_ids: [0; MAX_FIFO_ENGINES],
+        count: 0,
+    };
+    for index in 0..fifo_count {
+        if raw_flags[index] & ENGINE_FLAGS_IS_HOST_DRIVEN != 0 {
+            fifo_engine_list.gmc_ids[fifo_engine_list.count] = raw_ids[index];
+            fifo_engine_list.count += 1;
+        }
+    }
 
     Ok(GetGspStaticInfoReply {
         gpu_name,
         bar1_pde_base: decoded.bar1_pde_base(),
         usable_fb_regions,
         total_fb_end,
+        vmmu_segment_size,
+        fifo_engine_list,
     })
 }
 
