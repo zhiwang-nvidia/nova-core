@@ -35,6 +35,7 @@ use crate::{
             PluginConfigParams,
             PluginRpc, //
         },
+        scrubber::CeUtils,
         vram::{
             VgpuVramLayout,
             VgpuVramSlot,
@@ -111,8 +112,30 @@ pub(crate) struct VgpuInstance<'gpu> {
     pub(crate) vm_pid: u32,
     pub(crate) chids: ChannelIdArea<'gpu>,
     pub(crate) num_plugin_channels: u32,
+    ceutils: Option<CeUtils>,
     pub(crate) vram_slot: VgpuVramSlot,
     pub(crate) plugin_rpc: PluginRpc<'gpu>,
+}
+
+impl<'gpu> VgpuInstance<'gpu> {
+    /// Scrub the instance framebuffer with its owned CeUtils allocation.
+    pub(crate) fn scrub_guest_fb(
+        &self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+        bar_user: &BarUser<'gpu>,
+        mm: &GpuMm<'gpu>,
+    ) -> Result {
+        self.ceutils.as_ref().ok_or(EIO)?.scrub_guest_fb(
+            dev,
+            cmdq,
+            bar,
+            bar_user,
+            mm,
+            &self.vram_slot.fbmem,
+        )
+    }
 }
 
 /// Identity and firmware profile used to allocate an instance.
@@ -188,9 +211,12 @@ impl<'gpu> VgpuInstances<'gpu> {
     }
 
     /// Allocate resources and map the management communication region.
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn allocate_instance(
         &mut self,
         dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
         bar_user: &BarUser<'gpu>,
         mm: &GpuMm<'gpu>,
         vgpu: &VgpuManager<'gpu>,
@@ -234,6 +260,8 @@ impl<'gpu> VgpuInstances<'gpu> {
             Alignment::new::<1>(),
         )?;
         let chid_offset = u32::try_from(chids.start).map_err(|_| EOVERFLOW)?;
+        let ceutils_chid =
+            u32::try_from(chids.end.checked_sub(1).ok_or(EINVAL)?).map_err(|_| EOVERFLOW)?;
 
         let layout = VgpuVramLayout {
             type_id: vgpu_type.vgpu_type_id,
@@ -243,9 +271,56 @@ impl<'gpu> VgpuInstances<'gpu> {
             fb_align: vgpu.vmmu_segment_size().ok_or(ENODEV)?,
         };
         let vram_slot = self.alloc_vram_slot(mm, layout)?;
+        let ceutils = match CeUtils::allocate(dev, cmdq, bar, gfid, ceutils_chid, 0) {
+            Ok(ceutils) => ceutils,
+            Err(error) => {
+                let slot_index = vram_slot.index;
+                drop(vram_slot);
+                if let Err(free_error) = self.free_vram_slot(slot_index) {
+                    dev_err!(
+                        dev,
+                        "allocate_instance: failed to release slot {}: {:?}\n",
+                        slot_index,
+                        free_error,
+                    );
+                }
+                return Err(error);
+            }
+        };
+        if let Err(error) = ceutils.scrub_guest_fb(dev, cmdq, bar, bar_user, mm, &vram_slot.fbmem) {
+            if let Err(release_error) = ceutils.release(dev, cmdq, bar) {
+                dev_err!(
+                    dev,
+                    "failed to release CeUtils after scrub error {:?}: {:?}\n",
+                    error,
+                    release_error,
+                );
+                // The firmware may still own the reserved channel.
+                core::mem::forget(chids);
+            }
+            dev_err!(
+                dev,
+                "retaining VRAM slot {} after scrub error {:?}\n",
+                vram_slot.index,
+                error,
+            );
+            return Err(error);
+        }
         let comm = match CommBufferRegion::new(bar_user, mm, &vram_slot.mgmt_heap) {
             Ok(comm) => comm,
             Err(error) => {
+                if let Err(release_error) = ceutils.release(dev, cmdq, bar) {
+                    dev_err!(
+                        dev,
+                        "failed to release CeUtils after BAR1 error {:?}: {:?}\n",
+                        error,
+                        release_error,
+                    );
+                    // The firmware may still own the reserved channel.
+                    core::mem::forget(chids);
+                    return Err(error);
+                }
+
                 let slot_index = vram_slot.index;
                 drop(vram_slot);
                 if let Err(free_error) = self.free_vram_slot(slot_index) {
@@ -264,17 +339,19 @@ impl<'gpu> VgpuInstances<'gpu> {
 
         dev_dbg!(
             dev,
-            "allocate_instance: gfid={} dbdf={:#x} type={} slot={} chid={}..{} fb={:#x}+{:#x} heap={:#x}+{:#x}\n",
+            "allocate_instance: gfid={} dbdf={:#x} type={} slot={} chid={}..{} ceutils_chid={} fb={:#x}+{:#x} heap={:#x}+{:#x} sema={:#x}\n",
             gfid.0,
             dbdf.into_raw(),
             vgpu_type.vgpu_type_id,
             vram_slot.index,
             chid_offset,
             u64::from(chid_offset) + u64::from(num_chid),
+            ceutils.chid(),
             fbmem.address(),
             fbmem.size(),
             mgmt.address(),
             mgmt.size(),
+            ceutils.semaphore_address(),
         );
 
         Ok(VgpuInstance {
@@ -285,12 +362,13 @@ impl<'gpu> VgpuInstances<'gpu> {
             vm_pid,
             chids,
             num_plugin_channels: 3,
+            ceutils: Some(ceutils),
             vram_slot,
             plugin_rpc: PluginRpc::new(comm),
         })
     }
 
-    /// Shut down and remove an instance, then release its reservations.
+    /// Shut down an instance, scrub its guest FB, and release its reservations.
     pub(crate) fn destroy_instance(
         &mut self,
         dev: &device::Device<device::Bound>,
@@ -307,6 +385,13 @@ impl<'gpu> VgpuInstances<'gpu> {
             .ok_or(ENOENT)?;
 
         shutdown(dev, cmdq, bar, gfid)?;
+        self.instances[index].scrub_guest_fb(dev, cmdq, bar, bar_user, mm)?;
+        self.instances[index]
+            .ceutils
+            .as_ref()
+            .ok_or(EIO)?
+            .release(dev, cmdq, bar)?;
+        self.instances[index].ceutils = None;
         cleanup(dev, cmdq, bar, gfid)?;
         self.instances[index].plugin_rpc.destroy(bar_user, mm)?;
 
@@ -370,7 +455,7 @@ pub(crate) fn activate_instance(
         instance.dbdf,
         instance.vgpu_type.vgpu_type_id,
         instance.vm_pid,
-        u32::try_from(instance.chids.len()).map_err(|_| EOVERFLOW)?,
+        u32::try_from(instance.chids.len().checked_sub(1).ok_or(EINVAL)?).map_err(|_| EOVERFLOW)?,
         instance.num_plugin_channels,
     );
     let gfid = instance.gfid;
