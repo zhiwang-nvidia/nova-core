@@ -27,6 +27,30 @@ use kernel::{
 };
 use zerocopy::Immutable;
 
+use crate::sbuffer::SBufferIter;
+
+/// Joins the two halves of a wrapped payload into the `u64` words an NVKV stream is made of.
+///
+/// # Errors
+///
+/// - `EIO` if the combined length is not a whole number of words.
+/// - `ENOMEM` if the buffer cannot be allocated.
+pub(crate) fn nvkv_words(payload_0: &[u8], payload_1: &[u8]) -> Result<KVVec<u64>> {
+    let bytes = SBufferIter::new_reader([payload_0, payload_1]).flush_into_kvec(GFP_KERNEL)?;
+    let words = bytes.chunks_exact(size_of::<u64>());
+    if !words.remainder().is_empty() {
+        return Err(EIO);
+    }
+
+    let mut out = KVVec::with_capacity(bytes.len() / size_of::<u64>(), GFP_KERNEL)?;
+    for word in words {
+        let word: [u8; size_of::<u64>()] = word.try_into().map_err(|_| EIO)?;
+        out.push(u64::from_le_bytes(word), GFP_KERNEL)?;
+    }
+
+    Ok(out)
+}
+
 mod encode;
 pub(crate) use encode::*;
 
