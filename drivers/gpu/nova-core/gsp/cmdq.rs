@@ -503,7 +503,6 @@ pub(crate) enum QueuePointers {
 /// Response from a GMC API command.
 pub(crate) struct GmcResponse {
     /// Response status (`NV_STATUS` code). Zero means success.
-    #[expect(dead_code)]
     pub(crate) status: u32,
     /// Response payload copied out of the message queue.
     #[expect(dead_code)]
@@ -652,7 +651,6 @@ impl<'cmdq> Cmdq<'cmdq> {
     ///
     /// The queue stays locked for the complete transaction. A single deadline bounds all queue
     /// elements observed while waiting.
-    #[expect(dead_code)]
     pub(crate) fn send_gmc_and_receive(
         &self,
         command_id: u32,
@@ -733,6 +731,17 @@ impl<'cmdq> Cmdq<'cmdq> {
             if let Some(response) = response {
                 return response;
             }
+        }
+    }
+
+    /// Sends a synchronous GMC command and checks its status-only reply.
+    #[expect(dead_code)]
+    pub(crate) fn send_gmc_and_check_status(&self, command_id: u32, payload: &[u8]) -> Result {
+        let response = self.send_gmc_and_receive(command_id, payload, 0)?;
+        if response.status == 0 {
+            Ok(())
+        } else {
+            Err(EIO)
         }
     }
 
