@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use core::ops::Range;
+use core::{
+    num::NonZero,
+    ops::Range, //
+};
 
 use kernel::{
     device,
@@ -35,6 +38,7 @@ use crate::{
     fsp::Fsp,
     gsp::{
         self,
+        cmdq::Cmdq,
         Gsp,
         GspBootContext, //
     },
@@ -397,6 +401,25 @@ impl PinnedDrop for GspResources<'_> {
 }
 
 impl<'gpu> Gpu<'gpu> {
+    pub(crate) fn cmdq(&self) -> &Cmdq<'gpu> {
+        &self.gsp_resources.gsp.cmdq
+    }
+
+    pub(crate) fn vgpu_manager(&self) -> Option<&VgpuManager<'gpu>> {
+        self.vgpu.as_ref().map(|vgpu| vgpu.as_ref().get_ref())
+    }
+
+    pub(crate) fn vgpu_total_vfs(&self) -> Option<NonZero<u16>> {
+        match self.gsp_resources.vgpu_state {
+            VgpuState::Disabled => None,
+            VgpuState::Enabled { total_vfs } => Some(total_vfs),
+        }
+    }
+
+    pub(crate) fn bar0(&self) -> Bar0<'gpu> {
+        self.gsp_resources.bar
+    }
+
     pub(crate) fn new<'a>(
         pdev: &'gpu pci::Device<device::Core<'a>>,
         bar: Bar0<'gpu>,
@@ -466,7 +489,6 @@ impl<'gpu> Gpu<'gpu> {
                     vgpu_state,
                 })?,
             }),
-
 
 
             // GSP boot left the SWGEN0 latch set and pending bits in the tree.
