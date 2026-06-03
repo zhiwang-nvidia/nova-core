@@ -33,6 +33,7 @@ use crate::{
             vgpu_prop_keys, //
         },
         plugin_rpc::PluginRpc,
+        scrubber,
         ChidAllocator,
         VgpuManager, //
     },
@@ -102,6 +103,10 @@ pub(crate) struct VgpuInstance {
     pub chid_offset: u32,
     pub num_chid: u32,
     pub num_plugin_channels: u32,
+    /// Fixed channel ID reserved for the per-VM CeUtils scrubber.
+    pub ceutils_chid: u32,
+    /// Physical address of the CeUtils finish-payload semaphore page (from GSP).
+    pub sema_phys_addr: u64,
     pub fbmem_heap: Option<VramBlock>,
     pub mgmt_heap: Option<VramBlock>,
     pub plugin_rpc: Option<PluginRpc>,
@@ -172,6 +177,8 @@ impl VgpuManager {
         &mut self,
         dev: &device::Device<device::Bound>,
         mm: &GpuMm,
+        cmdq: &Cmdq,
+        bar: &Bar0,
         bar_user: &Arc<BarUser>,
         chid_alloc: &mut ChidAllocator,
         gfid: Gfid,
@@ -191,12 +198,15 @@ impl VgpuManager {
         let num_chid = self.total_avail_chids / vgpu_type.max_instance.max(1);
         let chid_offset = chid_alloc.alloc(num_chid)?;
 
+        let ceutils_chid = chid_offset + num_chid - 1;
+
         dev_dbg!(
             dev,
-            "allocate_instance: gfid={} chid_offset={} num_chid={}\n",
+            "allocate_instance: gfid={} chid_offset={} num_chid={} ceutils_chid={}\n",
             gfid.0,
             chid_offset,
-            num_chid
+            num_chid,
+            ceutils_chid
         );
 
         let fb_size = vgpu_type.fb_length;
@@ -226,6 +236,20 @@ impl VgpuManager {
         let bar1_map = Bar1Map::new(bar_user, dev, mgmt.addr, mgmt.size)?;
         let plugin_rpc = PluginRpc::new(bar1_map);
 
+        let (sema_phys_addr, _sema_aperture) =
+            scrubber::alloc_ceutils(dev, cmdq, bar, gfid, ceutils_chid, 0)?;
+
+        dev_dbg!(
+            dev,
+            "allocate_instance: gfid={} ceutils sema_phys={:#x}\n",
+            gfid.0,
+            sema_phys_addr
+        );
+
+        scrubber::scrub_guest_fb(
+            dev, cmdq, bar, bar_user, gfid, fbmem.addr, fbmem.size, sema_phys_addr,
+        );
+
         Ok(VgpuInstance {
             id: self.next_id(),
             gfid,
@@ -235,6 +259,8 @@ impl VgpuManager {
             chid_offset,
             num_chid,
             num_plugin_channels: 3,
+            ceutils_chid,
+            sema_phys_addr,
             fbmem_heap: Some(fbmem),
             mgmt_heap: Some(mgmt),
             plugin_rpc: Some(plugin_rpc),
@@ -242,13 +268,14 @@ impl VgpuManager {
         })
     }
 
-    /// Destroy a vGPU instance by GFID: send GSP shutdown sequence, then free resources.
+    /// Destroy a vGPU instance by GFID: send GSP shutdown sequence, scrub FB, then free resources.
     #[expect(dead_code)]
     pub(crate) fn destroy_instance(
         &mut self,
         dev: &device::Device<device::Bound>,
         cmdq: &Cmdq,
         bar: &Bar0,
+        bar_user: &Arc<BarUser>,
         chid_alloc: &mut ChidAllocator,
         gfid: Gfid,
     ) -> Result {
@@ -261,6 +288,21 @@ impl VgpuManager {
             .ok_or(ENOENT)?;
 
         shutdown(dev, cmdq, bar, self.instances[idx].gfid)?;
+
+        if let Some(fb) = self.instances[idx].fbmem_heap.as_ref() {
+            let inst_gfid = self.instances[idx].gfid;
+            let fb_addr = fb.addr;
+            let fb_size = fb.size;
+            let sema_phys = self.instances[idx].sema_phys_addr;
+
+            scrubber::scrub_guest_fb(
+                dev, cmdq, bar, bar_user, inst_gfid, fb_addr, fb_size, sema_phys,
+            );
+
+            if let Err(e) = scrubber::free_ceutils(dev, cmdq, bar, inst_gfid) {
+                dev_warn!(dev, "destroy_instance: gfid={} free_ceutils failed: {:?}\n", inst_gfid.0, e);
+            }
+        }
 
         let mut instance = self.instances.remove(idx).map_err(|_| EINVAL)?;
         chid_alloc.free(instance.chid_offset, instance.num_chid);
