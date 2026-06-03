@@ -48,6 +48,7 @@ use crate::{
         GpuMm,
         VramAddress, //
     },
+    num,
     vgpu::VgpuState, //
 };
 
@@ -55,6 +56,10 @@ use crate::{
 mod channel;
 mod hal;
 mod regs;
+
+use self::channel::TOTAL_CHANNELS;
+
+pub(crate) use self::channel::ChannelIdPool;
 
 macro_rules! define_chipset {
     ({ $($variant:ident = $value:expr),* $(,)* }) =>
@@ -322,6 +327,8 @@ pub(crate) struct Gpu<'gpu> {
     /// GSP and its resources.
     #[pin]
     gsp_resources: GspResources<'gpu>,
+    #[pin]
+    chid_pool: ChannelIdPool,
     /// System memory page required for flushing all pending GPU-side memory writes done through
     /// PCIE into system memory, via sysmembar (A GPU-initiated HW memory-barrier operation).
     ///
@@ -395,6 +402,8 @@ impl<'gpu> Gpu<'gpu> {
 
             // Initialize this early because `gsp_resources` depends on it.
             sysmem_flush: SysmemFlush::register(dev, bar, spec.chipset)?,
+
+            chid_pool <- ChannelIdPool::new(cv!(num::u32_as_usize(TOTAL_CHANNELS))),
 
             gsp_resources <- try_pin_init!(GspResources {
                 device: pdev,
