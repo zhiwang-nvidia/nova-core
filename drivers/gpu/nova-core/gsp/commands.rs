@@ -107,7 +107,7 @@ pub(super) fn build_gsp_init_payload(ctx: &GspBootContext<'_, '_>) -> Result<Enc
     for &(name, value) in REGISTRY_ENTRIES {
         regkeys.push(RegKey::new(name, value), GFP_KERNEL)?;
     }
-    if matches!(ctx.vgpu.state(), VgpuState::Enabled { .. }) {
+    if matches!(*ctx.vgpu_state, VgpuState::Enabled { .. }) {
         regkeys.push(RegKey::new(b"RMSetSriovMode\0", 1), GFP_KERNEL)?;
     }
 
@@ -121,7 +121,7 @@ pub(super) fn build_gsp_init_payload(ctx: &GspBootContext<'_, '_>) -> Result<Enc
 
 /// Builds the optional VF topology portion of the `GSP_INIT` request.
 fn build_vf_info(ctx: &GspBootContext<'_, '_>) -> Result<Option<VfInfo>> {
-    let VgpuState::Enabled { total_vfs } = ctx.vgpu.state() else {
+    let VgpuState::Enabled { total_vfs } = *ctx.vgpu_state else {
         return Ok(None);
     };
 
