@@ -10,15 +10,23 @@ pub(crate) use commands::{
 
 use r000_00 as r000;
 
-use kernel::prelude::*;
+use kernel::{
+    devres::Devres,
+    io::Io,
+    prelude::*,
+    sync::Arc, //
+};
 
-use crate::mm::{
-    bar_user::{
-        Bar1Map,
-        BarUser, //
+use crate::{
+    driver::Bar1,
+    mm::{
+        bar_user::{
+            Bar1Map,
+            BarUser, //
+        },
+        vram::VramRegion,
+        GpuMm, //
     },
-    vram::VramRegion,
-    GpuMm, //
 };
 
 type RawControlRegion = r000::VGPU_CPU_GSP_CTRL_BUFF_REGION;
@@ -54,6 +62,104 @@ fn take_region(region: &VramRegion, cursor: &mut u64, size: u32) -> Result<VramR
     let subregion = region.subregion(*cursor..end)?;
     *cursor = end;
     Ok(subregion)
+}
+
+/// Revocable BAR1 view of one vGPU plugin log buffer.
+pub(crate) struct MappedPluginLogBuffer {
+    bar1: Arc<Devres<Bar1<'static>>>,
+    gpu_va_addr: usize,
+    size: usize,
+}
+
+impl MappedPluginLogBuffer {
+    fn new(map: &Bar1Map<'_>, region: &VramRegion) -> Result<Self> {
+        let start = region
+            .address()
+            .checked_sub(map.region().address())
+            .ok_or(EINVAL)
+            .and_then(|start| usize::try_from(start).map_err(|_| EOVERFLOW))?;
+        let size = usize::try_from(region.size()).map_err(|_| EOVERFLOW)?;
+        let end = start.checked_add(size).ok_or(EOVERFLOW)?;
+        if end > map.size() || !start.is_multiple_of(4) || !size.is_multiple_of(4) {
+            return Err(EINVAL);
+        }
+
+        let gpu_va_addr = usize::try_from(map.gpu_va_addr()?)
+            .map_err(|_| EOVERFLOW)?
+            .checked_add(start)
+            .ok_or(EOVERFLOW)?;
+        if !gpu_va_addr.is_multiple_of(4) {
+            return Err(EINVAL);
+        }
+
+        let bar1 = map.bar1_arc().clone();
+        {
+            let mapped_bar1 = bar1.try_access().ok_or(ENXIO)?;
+            if gpu_va_addr.checked_add(size).ok_or(EOVERFLOW)? > mapped_bar1.size() {
+                return Err(EINVAL);
+            }
+        }
+
+        Ok(Self {
+            bar1,
+            gpu_va_addr,
+            size,
+        })
+    }
+
+    /// Return the log buffer size in bytes.
+    pub(crate) const fn size(&self) -> usize {
+        self.size
+    }
+
+    /// Stage a range of log bytes in a kernel buffer.
+    pub(crate) fn read(&self, offset: usize, output: &mut [u8]) -> Result {
+        let end = offset.checked_add(output.len()).ok_or(EOVERFLOW)?;
+        if end > self.size {
+            return Err(EINVAL);
+        }
+
+        let bar1 = self.bar1.try_access().ok_or(ENXIO)?;
+        let mut source = offset;
+        let mut copied = 0usize;
+
+        while copied < output.len() {
+            let aligned_source = source & !3;
+            let within = source & 3;
+            let bar_offset = self
+                .gpu_va_addr
+                .checked_add(aligned_source)
+                .ok_or(EOVERFLOW)?;
+            let bytes = bar1.try_read32(bar_offset)?.to_le_bytes();
+            let chunk = (4 - within).min(output.len() - copied);
+
+            output[copied..copied + chunk].copy_from_slice(&bytes[within..within + chunk]);
+            source = source.checked_add(chunk).ok_or(EOVERFLOW)?;
+            copied += chunk;
+        }
+
+        Ok(())
+    }
+}
+
+/// Revocable BAR1 views of all vGPU plugin log buffers.
+pub(crate) struct MappedPluginLogBuffers {
+    init: MappedPluginLogBuffer,
+    vgpu: MappedPluginLogBuffer,
+    kernel: MappedPluginLogBuffer,
+}
+
+impl MappedPluginLogBuffers {
+    /// Split the aggregate into its three task log views.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        MappedPluginLogBuffer,
+        MappedPluginLogBuffer,
+        MappedPluginLogBuffer,
+    ) {
+        (self.init, self.vgpu, self.kernel)
+    }
 }
 
 /// BAR1 mapping and semantic regions of a vGPU CPU-GSP communication buffer.
@@ -203,6 +309,17 @@ impl<'gpu> CommBufferRegion<'gpu> {
             init: self.init_log.clone(),
             vgpu: self.vgpu_log.clone(),
             kernel: self.kernel_log.clone(),
+        })
+    }
+
+    /// Return revocable BAR1 views of the three plugin logs.
+    pub(crate) fn mapped_plugin_logs(&self) -> Result<MappedPluginLogBuffers> {
+        let logs = self.plugin_logs()?;
+
+        Ok(MappedPluginLogBuffers {
+            init: MappedPluginLogBuffer::new(&self.map, logs.init())?,
+            vgpu: MappedPluginLogBuffer::new(&self.map, logs.vgpu())?,
+            kernel: MappedPluginLogBuffer::new(&self.map, logs.kernel())?,
         })
     }
 

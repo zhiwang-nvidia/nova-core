@@ -3,7 +3,10 @@
 //! BAR1 user interface for CPU access to GPU virtual memory. Used for USERD
 //! for GPU work submission, and applications to access GPU buffers via mmap().
 
+use core::marker::PhantomData;
+
 use kernel::{
+    devres::Devres,
     io::Io,
     new_mutex,
     prelude::*,
@@ -39,7 +42,9 @@ use crate::{
 pub(crate) struct BarUser<'gpu> {
     #[pin]
     vmm: Mutex<Vmm>,
-    bar1: Arc<Bar1<'gpu>>,
+    bar1: Arc<Devres<Bar1<'static>>>,
+    bar1_size: usize,
+    _gpu: PhantomData<&'gpu ()>,
 }
 
 impl<'gpu> BarUser<'gpu> {
@@ -48,13 +53,15 @@ impl<'gpu> BarUser<'gpu> {
         pdb_addr: VramAddress,
         chipset: Chipset,
         va_size: u64,
-        bar1: Bar1<'gpu>,
+        bar1: Arc<Devres<Bar1<'static>>>,
     ) -> Result<impl PinInit<Self> + 'gpu> {
         let vmm = Vmm::new(pdb_addr, chipset.mmu_version(), va_size)?;
-        let bar1 = Arc::new(bar1, GFP_KERNEL)?;
+        let bar1_size = usize::try_from(va_size).map_err(|_| EOVERFLOW)?;
         Ok(pin_init!(Self {
             vmm <- new_mutex!(vmm, "bar_user_vmm"),
             bar1,
+            bar1_size,
+            _gpu: PhantomData,
         }))
     }
 
@@ -140,25 +147,29 @@ impl BarUserAccess<'_, '_> {
     /// Read a 32-bit value at the given offset.
     pub(crate) fn try_read32(&self, offset: usize) -> Result<u32> {
         let off = self.bar_offset(offset)?;
-        self.bar_user.bar1.as_ref().try_read32(off)
+        let bar1 = self.bar_user.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_read32(off)
     }
 
     /// Write a 32-bit value at the given offset.
     pub(crate) fn try_write32(&self, value: u32, offset: usize) -> Result {
         let off = self.bar_offset(offset)?;
-        self.bar_user.bar1.as_ref().try_write32(value, off)
+        let bar1 = self.bar_user.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_write32(value, off)
     }
 
     /// Read a 64-bit value at the given offset.
     pub(crate) fn try_read64(&self, offset: usize) -> Result<u64> {
         let off = self.bar_offset(offset)?;
-        self.bar_user.bar1.as_ref().try_read64(off)
+        let bar1 = self.bar_user.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_read64(off)
     }
 
     /// Write a 64-bit value at the given offset.
     pub(crate) fn try_write64(&self, value: u64, offset: usize) -> Result {
         let off = self.bar_offset(offset)?;
-        self.bar_user.bar1.as_ref().try_write64(value, off)
+        let bar1 = self.bar_user.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_write64(value, off)
     }
 }
 
@@ -182,11 +193,13 @@ impl Drop for BarUserAccess<'_, '_> {
 /// pages are mapped, while all CPU accessors remain bounded to the requested
 /// byte range.
 pub(crate) struct Bar1Map<'gpu> {
-    bar1: Arc<Bar1<'gpu>>,
+    bar1: Arc<Devres<Bar1<'static>>>,
+    bar1_size: usize,
     mapped: MappedRange,
     region: VramRegion,
     page_bias: usize,
     logical_size: usize,
+    _gpu: PhantomData<&'gpu GpuMm<'gpu>>,
 }
 
 impl<'gpu> Bar1Map<'gpu> {
@@ -225,11 +238,18 @@ impl<'gpu> Bar1Map<'gpu> {
 
         Ok(Self {
             bar1: bar_user.bar1.clone(),
+            bar1_size: bar_user.bar1_size,
             mapped,
             region,
             page_bias,
             logical_size,
+            _gpu: PhantomData,
         })
+    }
+
+    /// Clone the revocable BAR1 mapping used by debugfs readers.
+    pub(crate) fn bar1_arc(&self) -> &Arc<Devres<Bar1<'static>>> {
+        &self.bar1
     }
 
     /// Return the mapped physical VRAM region.
@@ -266,7 +286,7 @@ impl<'gpu> Bar1Map<'gpu> {
         let logical_base = base.checked_add(self.page_bias).ok_or(EOVERFLOW)?;
         let bar_offset = logical_base.checked_add(offset).ok_or(EOVERFLOW)?;
         let bar_end = bar_offset.checked_add(access_width).ok_or(EOVERFLOW)?;
-        if bar_end > self.bar1.size() || !bar_offset.is_multiple_of(access_width) {
+        if bar_end > self.bar1_size || !bar_offset.is_multiple_of(access_width) {
             return Err(EINVAL);
         }
 
@@ -274,33 +294,28 @@ impl<'gpu> Bar1Map<'gpu> {
     }
 
     pub(crate) fn try_read32(&self, offset: usize) -> Result<u32> {
-        self.bar1
-            .as_ref()
-            .try_read32(self.bar_offset(offset, size_of::<u32>())?)
+        let bar1 = self.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_read32(self.bar_offset(offset, size_of::<u32>())?)
     }
 
     pub(crate) fn try_write8(&self, value: u8, offset: usize) -> Result {
-        self.bar1
-            .as_ref()
-            .try_write8(value, self.bar_offset(offset, size_of::<u8>())?)
+        let bar1 = self.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_write8(value, self.bar_offset(offset, size_of::<u8>())?)
     }
 
     pub(crate) fn try_write32(&self, value: u32, offset: usize) -> Result {
-        self.bar1
-            .as_ref()
-            .try_write32(value, self.bar_offset(offset, size_of::<u32>())?)
+        let bar1 = self.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_write32(value, self.bar_offset(offset, size_of::<u32>())?)
     }
 
     pub(crate) fn try_read64(&self, offset: usize) -> Result<u64> {
-        self.bar1
-            .as_ref()
-            .try_read64(self.bar_offset(offset, size_of::<u64>())?)
+        let bar1 = self.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_read64(self.bar_offset(offset, size_of::<u64>())?)
     }
 
     pub(crate) fn try_write64(&self, value: u64, offset: usize) -> Result {
-        self.bar1
-            .as_ref()
-            .try_write64(value, self.bar_offset(offset, size_of::<u64>())?)
+        let bar1 = self.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_write64(value, self.bar_offset(offset, size_of::<u64>())?)
     }
 
     /// Invalidate the PTEs and release the BAR1 virtual address.

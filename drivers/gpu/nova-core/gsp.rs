@@ -114,7 +114,7 @@ impl<const NUM_PAGES: usize> PteArray<NUM_PAGES> {
 /// This header makes each dump self-describing so that decoding tools can
 /// identify the firmware build, GPU architecture, and metadata format without
 /// out-of-band information.
-const LOG_BUFFER_HEADER_SIZE: usize = 0x48;
+pub(crate) const LOG_BUFFER_HEADER_SIZE: usize = 0x48;
 
 /// Build a log buffer header from GPU and firmware metadata.
 ///
@@ -128,7 +128,7 @@ const LOG_BUFFER_HEADER_SIZE: usize = 0x48;
 ///   0x20  buildId[32]
 ///   0x40  flags (u32) = 1 (packed metadata)
 ///   0x44  reserved (u32) = 0
-fn build_log_buffer_header(
+pub(crate) fn build_log_buffer_header(
     chipset: Chipset,
     build_id: &BuildId,
     task_prefix: &str,
@@ -278,6 +278,8 @@ struct LogBuffers {
 pub(crate) struct Gsp {
     /// Preloaded GSP firmware TLV metadata used during boot.
     gsp_tlv: kernel::firmware::Firmware,
+    /// Firmware build identifier used by host and per-vGPU log headers.
+    build_id: Option<BuildId>,
     /// Libos arguments.
     pub(crate) libos: Coherent<[LibosMemoryRegionInitArgument]>,
     /// Log buffers for all LIBOS3 tasks, exposed via debugfs.
@@ -319,6 +321,7 @@ impl Gsp {
 
             Ok(try_pin_init!(Self {
                 gsp_tlv,
+                build_id,
                 cmdq: Arc::pin_init(Cmdq::new(dev), GFP_KERNEL)?,
                 rm_state_monitor: Coherent::zeroed(dev, GFP_KERNEL)?,
                 rmargs: Coherent::init(
@@ -397,6 +400,11 @@ impl Gsp {
     /// Returns a shared handle to the GSP command queue.
     pub(crate) fn cmdq(&self) -> Arc<Cmdq> {
         self.cmdq.clone()
+    }
+
+    /// Returns the firmware build identifier, if one was reported.
+    pub(crate) fn build_id(&self) -> Option<&BuildId> {
+        self.build_id.as_ref()
     }
 }
 
