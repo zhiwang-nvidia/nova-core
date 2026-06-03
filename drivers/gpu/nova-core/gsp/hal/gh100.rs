@@ -29,6 +29,7 @@ use crate::{
         GspFmcBootParams,
         GspFwWprMeta, //
     },
+    vgpu::VgpuState,
 };
 
 /// GSP falcon mailbox state, used to track lockdown release status.
@@ -146,12 +147,13 @@ impl GspHal for Gh100 {
         gsp: &Gsp,
         ctx: &mut GspBootContext<'_, '_>,
         gsp_fw: &GspFirmware,
+        vgpu_state: VgpuState,
     ) -> Result<Option<crate::gsp::UnloadBundle>> {
         let dev = ctx.dev();
         let chipset = ctx.chipset;
         let gsp_falcon = ctx.gsp_falcon;
 
-        let fb_sizes = FbSizes::new(chipset, ctx.bar, ctx.vgpu.state())?;
+        let fb_sizes = FbSizes::new(chipset, ctx.bar, vgpu_state)?;
         dev_dbg!(dev, "{:#x?}\n", fb_sizes);
 
         let wpr_meta =

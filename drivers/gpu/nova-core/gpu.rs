@@ -8,6 +8,7 @@ use kernel::{
     fmt,
     gpu::buddy::GpuBuddyParams,
     io::Io,
+    nz,
     num::Bounded,
     pci,
     prelude::*,
@@ -49,9 +50,13 @@ use crate::{
     vgpu::VgpuManager, //
 };
 
-#[cfg_attr(not(CONFIG_KUNIT = "y"), expect(dead_code))]
 mod channel;
 mod hal;
+
+pub(crate) use self::channel::{
+    ChannelIdPool,
+    TOTAL_CHANNELS, //
+};
 
 macro_rules! define_chipset {
     ({ $($variant:ident = $value:expr),* $(,)* }) =>
@@ -291,8 +296,6 @@ struct GspResources<'gpu> {
     // TODO: use different resource types for each boot method, and make the relevant Gsp methods
     // generic against them.
     fsp: Option<Fsp<'gpu>>,
-    /// vGPU state detected before GSP boot.
-    vgpu: VgpuManager,
     /// GSP runtime data.
     #[pin]
     gsp: Gsp,
@@ -304,6 +307,10 @@ struct GspResources<'gpu> {
 #[pin_data]
 pub(crate) struct Gpu<'gpu> {
     spec: Spec,
+    /// vGPU state and firmware parameters.
+    ///
+    /// Declared before MM and BAR1 so live instances are torn down before their resources.
+    vgpu: VgpuManager<'gpu>,
     /// GPU memory manager owning memory management resources.
     ///
     /// Must be kept declared *before* `gsp_resources`, so that its components are dropped while
@@ -314,6 +321,11 @@ pub(crate) struct Gpu<'gpu> {
     /// GSP and its resources.
     #[pin]
     gsp_resources: GspResources<'gpu>,
+    /// Channel ID pool borrowed by the vGPU manager and its live instances.
+    ///
+    /// Declared after `vgpu` so the manager is dropped before the pool.
+    #[pin]
+    chid_pool: ChannelIdPool,
     /// System memory page required for flushing all pending GPU-side memory writes done through
     /// PCIE into system memory, via sysmembar (A GPU-initiated HW memory-barrier operation).
     ///
@@ -342,7 +354,6 @@ impl PinnedDrop for GspResources<'_> {
                     gsp_falcon: &*this.gsp_falcon,
                     sec2_falcon: &*this.sec2_falcon,
                     fsp: this.fsp.as_mut(),
-                    vgpu: &*this.vgpu,
                 },
                 bundle,
             )
@@ -402,6 +413,18 @@ impl<'gpu> Gpu<'gpu> {
             // Initialize this early because `gsp_resources` depends on it.
             sysmem_flush: SysmemFlush::register(dev, bar, spec.chipset)?,
 
+            chid_pool <- ChannelIdPool::new(nz!(TOTAL_CHANNELS as usize)),
+
+            // TODO: Use `&chid_pool` self-referential pin-init syntax once available.
+            //
+            // SAFETY: `chid_pool` is initialized before this expression and lives at a pinned
+            // stable address. Field order drops `vgpu` before `chid_pool`, including unwind of
+            // an incomplete initializer.
+            vgpu: VgpuManager::new(
+                // SAFETY: The lifetime and drop-order rationale above covers this borrow.
+                unsafe { &*core::ptr::from_ref(chid_pool.as_ref().get_ref()) },
+            ),
+
             gsp_resources <- try_pin_init!(GspResources {
                 device: pdev,
 
@@ -420,22 +443,26 @@ impl<'gpu> Gpu<'gpu> {
 
                 fsp: Fsp::try_new(dev, bar, spec.chipset)?,
 
-                vgpu: VgpuManager::new(pdev, spec.chipset, fsp.as_mut()),
+                _: {
+                    vgpu.detect_state(pdev, spec.chipset, fsp.as_mut());
+                },
 
                 gsp <- Gsp::new(pdev, spec.chipset),
 
                 // This member must be initialized last, so the unload bundle can never be dropped
                 // from outside of the constructed `GspResources`, ensuring that the unload sequence
                 // is properly run in case of failure.
-                boot_result: gsp.boot(GspBootContext {
-                    pdev,
-                    bar,
-                    chipset: spec.chipset,
-                    gsp_falcon,
-                    sec2_falcon,
-                    fsp: fsp.as_mut(),
+                boot_result: gsp.boot(
+                    GspBootContext {
+                        pdev,
+                        bar,
+                        chipset: spec.chipset,
+                        gsp_falcon,
+                        sec2_falcon,
+                        fsp: fsp.as_mut(),
+                    },
                     vgpu,
-                })?,
+                )?,
             }),
 
             _: {

@@ -36,6 +36,7 @@ use crate::{
         gsp::GspFirmware,
         radix3::Radix3, //
     },
+    gpu::TOTAL_CHANNELS,
     gsp::{
         cmdq::{
             Cmdq,
@@ -50,7 +51,8 @@ use crate::{
         }, //
     },
     num,
-    regs, //
+    regs,
+    vgpu::VgpuManager, //
 };
 
 impl super::Gsp {
@@ -70,6 +72,7 @@ impl super::Gsp {
     pub(crate) fn boot(
         self: Pin<&mut Self>,
         mut ctx: super::GspBootContext<'_, '_>,
+        vgpu: &mut VgpuManager<'_>,
     ) -> Result<super::BootResult> {
         let pdev = ctx.pdev;
         let bar = ctx.bar;
@@ -93,8 +96,12 @@ impl super::Gsp {
             }),
         );
 
+        let vgpu_state = vgpu.state();
+
         // Perform the chipset-specific boot sequence, and retrieve the unload bundle.
-        let unload_bundle = hal.boot(&self, &mut ctx, &gsp_fw)?.or_else(|| {
+        let unload_bundle = hal
+            .boot(&self, &mut ctx, &gsp_fw, vgpu_state)?
+            .or_else(|| {
             dev_warn!(dev, "The GSP won't be able to unload properly on unbind.\n");
             dev_warn!(
                 dev,
@@ -102,7 +109,7 @@ impl super::Gsp {
             );
 
             None
-        });
+            });
 
         let mut unload_guard =
             ScopeGuard::new_with_data((ctx, unload_bundle), |(ctx, unload_bundle)| {
@@ -126,7 +133,7 @@ impl super::Gsp {
         // the registry keys ride inside that one request. Its reply is also what says GSP-RM has
         // finished starting, and the load-and-execute events it raises first are dispatched as
         // they arrive.
-        let init_payload = commands::build_gsp_init_payload(pdev, chipset, ctx.vgpu.state())?;
+        let init_payload = commands::build_gsp_init_payload(pdev, chipset, vgpu_state)?;
         // Only the chipsets that raise `GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER` are shipped a
         // `gen_bootloader.tlv`, so requesting it elsewhere fails the whole boot with `ENOENT`.
         let bootloader = if super::hal::uses_generic_bootloader(chipset) {
@@ -152,6 +159,12 @@ impl super::Gsp {
                     libos_dma_handle,
                 )
             })?;
+
+        vgpu.init(
+            &static_info.fifo_engine_list,
+            static_info.vmmu_segment_size,
+            TOTAL_CHANNELS,
+        );
 
         Ok(super::BootResult::new(
             unload_guard.dismiss().1,
