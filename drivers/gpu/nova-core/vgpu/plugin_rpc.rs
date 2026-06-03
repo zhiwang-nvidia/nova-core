@@ -24,6 +24,7 @@ use crate::{
     },
     vgpu::fw::{
         CommBufferRegion,
+        MappedPluginLogBuffers,
         PluginLogRegions,
         RpcMessage,
         RpcResponse, //
@@ -87,6 +88,11 @@ impl<'gpu> PluginRpc<'gpu> {
     /// Return the physical regions occupied by the plugin logs.
     pub(crate) fn plugin_logs(&self) -> Result<PluginLogRegions> {
         self.comm()?.plugin_logs()
+    }
+
+    /// Return revocable BAR1 views of the plugin logs.
+    pub(crate) fn mapped_plugin_logs(&self) -> Result<MappedPluginLogBuffers> {
+        self.comm()?.mapped_plugin_logs()
     }
 
     /// Poll the control buffer until the plugin publishes its boot marker.

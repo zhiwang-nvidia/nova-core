@@ -23,6 +23,7 @@ use crate::{
         Falcon, //
     },
     fb::SysmemFlush,
+    firmware,
     fsp::Fsp,
     gsp::{
         self,
@@ -365,6 +366,12 @@ impl<'gpu> Gpu<'gpu> {
         self.gsp_resources.gsp.cmdq()
     }
 
+    /// Returns the firmware build identifier, if one was reported.
+    #[expect(dead_code)]
+    pub(crate) fn build_id(&self) -> Option<&firmware::BuildId> {
+        self.gsp_resources.gsp.build_id()
+    }
+
     pub(crate) fn new(
         pdev: &'gpu pci::Device<device::Core<'_>>,
         bar: Bar0<'gpu>,
@@ -516,7 +523,11 @@ impl<'gpu> Gpu<'gpu> {
                 let info = &gsp_resources.boot_result.static_info;
                 let bar1_idx = crate::driver::bar1_resource_index(pdev)?;
                 let bar1_size = pdev.resource_len(bar1_idx)?;
-                let bar1 = pdev.iomap_region(bar1_idx, c"nova-core/bar1")?;
+                let bar1 = Arc::new(
+                    pdev.iomap_region(bar1_idx, c"nova-core/bar1")?
+                        .into_devres()?,
+                    GFP_KERNEL,
+                )?;
                 BarUser::new(
                     VramAddress::new(info.bar1_pde_base),
                     gsp_resources.spec.chipset,
