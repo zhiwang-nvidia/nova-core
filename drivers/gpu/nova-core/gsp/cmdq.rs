@@ -745,6 +745,67 @@ impl<'cmdq> Cmdq<'cmdq> {
         }
     }
 
+    /// Sends an asynchronous GMC command and waits atomically for its event.
+    ///
+    /// The command queue remains locked from the send through the matching
+    /// event, preventing another transaction from consuming its completion.
+    /// Interleaved GMC events are passed to `handler`; responses are consumed
+    /// while waiting. The receive deadline starts after sending.
+    ///
+    /// Both callbacks run with the queue locked and must not reenter this queue or reset it.
+    /// Their second argument is the raw `max_resp_or_status` word of the event header.
+    #[expect(dead_code)]
+    pub(crate) fn send_gmc_and_wait_event(
+        &self,
+        command_id: u32,
+        payload: &[u8],
+        timeout: Delta,
+        mut predicate: impl FnMut(u32, u32, u64, &[u8], &[u8]) -> Result<bool>,
+        mut handler: impl FnMut(u32, u32, u64, &[u8], &[u8]) -> Result,
+    ) -> Result {
+        let mut inner = self.inner.lock();
+        inner.send_gmc(command_id, payload, 0)?;
+        let deadline = Instant::<Monotonic>::now() + timeout;
+
+        loop {
+            let remaining = deadline - Instant::<Monotonic>::now();
+            if remaining.is_negative() {
+                return Err(ETIMEDOUT);
+            }
+
+            let matched =
+                match inner.receive_gmc_and_dispatch(remaining, |header, payload_0, payload_1| {
+                    let header = &header.gmc;
+                    let result: Result<bool> = (|| {
+                        if header.is_response() {
+                            return Ok(false);
+                        }
+
+                        let command = header.command_id();
+                        let max_resp_or_status = header.max_resp_or_status;
+                        let sequence = header.sequence;
+                        if predicate(command, max_resp_or_status, sequence, payload_0, payload_1)? {
+                            return Ok(true);
+                        }
+
+                        handler(command, max_resp_or_status, sequence, payload_0, payload_1)?;
+                        Ok(false)
+                    })();
+                    (Some(result), QueuePointers::Unchanged)
+                }) {
+                    Ok(matched) => matched,
+                    Err(ERANGE) => continue,
+                    Err(error) => return Err(error),
+                };
+
+            if let Some(matched) = matched {
+                if matched? {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     /// Waits for an unsolicited GSP event of type `M`, consuming any other event that arrives
     /// first.
     ///
