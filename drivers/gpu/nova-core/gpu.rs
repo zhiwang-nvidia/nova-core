@@ -379,7 +379,7 @@ impl<'gpu> Gpu<'gpu> {
         #[cfg(not(CONFIG_NOVA_CORE_IRQ_SELFTEST))]
         let _ = vector;
 
-        try_pin_init!(Self {
+        try_pin_init!(&this in Self {
             spec: Spec::new(dev, bar).inspect(|spec| {
                 dev_info!(dev,"NVIDIA ({})\n", spec);
             })?,
@@ -484,6 +484,17 @@ impl<'gpu> Gpu<'gpu> {
                     )?;
                 }
 
+                // SAFETY: `vgpu` was initialized above in this pinned `Gpu`, and is not
+                // mutably accessed after `gsp_resources` initialization has completed.
+                let vgpu = unsafe { &*core::ptr::addr_of!((*this.as_ptr()).vgpu) };
+                let buddy_base_alignment = match vgpu.vmmu_segment_size() {
+                    Some(size) => Alignment::new_checked(
+                        usize::try_from(size).map_err(|_| EOVERFLOW)?,
+                    )
+                    .ok_or(EINVAL)?,
+                    None => Alignment::new::<SZ_4K>(),
+                };
+
                 // PRAMIN covers all physical VRAM (including GSP-reserved areas
                 // above the usable region, e.g. the BAR1 page directory).
                 let pramin_vram_region = (0..info.total_fb_end).into_vram_range();
@@ -491,6 +502,7 @@ impl<'gpu> Gpu<'gpu> {
                     bar,
                     gsp_resources.spec.chipset,
                     buddy_params,
+                    buddy_base_alignment,
                     pramin_vram_region,
                 )?
             },

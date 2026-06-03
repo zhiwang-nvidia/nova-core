@@ -47,6 +47,10 @@ use kernel::{
     },
     num::Bounded,
     prelude::*,
+    ptr::{
+        Alignable,
+        Alignment, //
+    },
     sizes::SZ_4K, //
 };
 
@@ -77,10 +81,15 @@ impl<'gpu> GpuMm<'gpu> {
     ///
     /// `pramin_vram_region` is the full physical VRAM range (including GSP-reserved
     /// areas). PRAMIN window accesses are validated against this range.
+    ///
+    /// `buddy_base_alignment` is applied to the absolute start of every
+    /// usable VRAM region. Individual allocations must still request their
+    /// required alignment from the buddy allocator.
     pub(crate) fn new(
         bar: Bar0<'gpu>,
         chipset: Chipset,
         buddy_params: KVec<GpuBuddyParams>,
+        buddy_base_alignment: Alignment,
         pramin_vram_region: Range<VramAddress>,
     ) -> Result<impl PinInit<Self> + 'gpu> {
         if buddy_params.is_empty() {
@@ -88,8 +97,25 @@ impl<'gpu> GpuMm<'gpu> {
         }
 
         let mut buddies = KVec::new();
-        for params in buddy_params {
+        for mut params in buddy_params {
+            let end = params
+                .base_offset
+                .checked_add(params.size)
+                .ok_or(EOVERFLOW)?;
+            let start = params
+                .base_offset
+                .align_up(buddy_base_alignment)
+                .ok_or(EOVERFLOW)?;
+            if start >= end {
+                continue;
+            }
+            params.base_offset = start;
+            params.size = end - start;
             buddies.push(GpuBuddy::new(params)?, GFP_KERNEL)?;
+        }
+
+        if buddies.is_empty() {
+            return Err(ENOSPC);
         }
 
         let pramin_init = pramin::Pramin::new(bar, chipset, pramin_vram_region)?;
