@@ -142,7 +142,6 @@ pub(crate) mod plugin_rpc {
     pub(crate) enum RpcMsg {
         VersionNegotiation = 1,
         SetupConfigParamsAndInit = 2,
-        #[expect(dead_code)]
         Reset = 3,
         UpdateBmeState = 13,
     }
