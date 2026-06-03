@@ -8,6 +8,9 @@ pub(crate) mod gmc {
     pub(crate) const SHUTDOWN: u32 = 0x0002_0021;
     pub(crate) const SHUTDOWN_COMPLETE: u32 = 0x0002_0022;
     pub(crate) const CLEANUP: u32 = 0x0002_0023;
+    pub(crate) const SCRUB_GUEST_FB: u32 = 0x0002_0025;
+    pub(crate) const ALLOC_GSP_CEUTILS: u32 = 0x0002_0026;
+    pub(crate) const FREE_GSP_CEUTILS: u32 = 0x0002_0027;
 }
 
 /// vGPU plugin RPC values not provided by the firmware bindings.
