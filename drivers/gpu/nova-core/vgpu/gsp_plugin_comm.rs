@@ -18,6 +18,7 @@ use super::fw::{
     self,
     RawControlRegion,
     RawResponseRegion,
+    RpcMessage,
     RpcResponse, //
 };
 
@@ -337,7 +338,7 @@ impl<'map, 'gpu> CommBufferRegion<'map, 'gpu> {
     }
 
     /// Copy and publish one RPC request to firmware.
-    pub(super) fn submit(&self, message: u32, sequence: u32, data: &[u8]) -> Result {
+    pub(super) fn submit(&self, message: RpcMessage, sequence: u32, data: &[u8]) -> Result {
         if u64::try_from(data.len()).map_err(|_| EOVERFLOW)? > self.message.size() {
             return Err(E2BIG);
         }
@@ -352,7 +353,7 @@ impl<'map, 'gpu> CommBufferRegion<'map, 'gpu> {
         self.write_u32(
             &self.control,
             core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.message_type),
-            message,
+            message as u32,
         )?;
         self.write_u32(
             &self.control,

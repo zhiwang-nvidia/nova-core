@@ -22,6 +22,7 @@ use crate::gsp::{
 };
 
 use crate::{
+    driver::Bar0,
     gpu::ChannelIdReservation,
     mm::{
         bar_user::BarUser,
@@ -41,6 +42,7 @@ use super::{
 };
 
 use super::commands::{
+    negotiate_plugin_version,
     query_vgpu_properties,
     send_bootload,
     send_cleanup,
@@ -355,11 +357,12 @@ impl<'gpu> VgpuInstances<'gpu> {
         }
     }
 
-    /// Bootload the GSP plugin for a registered instance.
+    /// Boot the GSP plugin and negotiate its RPC version.
     pub(super) fn activate_instance(
         &mut self,
         dev: &device::Device<device::Bound>,
         cmdq: &Cmdq<'_>,
+        bar0: Bar0<'_>,
         gfid: Gfid,
         fifo_engine_list: &FifoEngineList,
     ) -> Result {
@@ -368,7 +371,10 @@ impl<'gpu> VgpuInstances<'gpu> {
             .iter_mut()
             .find(|instance| instance.gfid == gfid)
             .ok_or(ENOENT)?;
-        instance.bootload(dev, cmdq, fifo_engine_list)
+        instance.bootload(dev, cmdq, fifo_engine_list)?;
+
+        instance.plugin_rpc.init_rpc()?;
+        negotiate_plugin_version(dev, bar0, gfid, &mut instance.plugin_rpc)
     }
 
     /// Stop the plugin and release the instance's firmware and host resources.

@@ -22,7 +22,13 @@ use crate::gsp::{
     },
 };
 
-use super::instance::Gfid;
+use crate::driver::Bar0;
+
+use super::{
+    fw::RpcMessage,
+    gsp_plugin_rpc::PluginRpc,
+    instance::Gfid, //
+};
 
 use super::fw::commands::VgpuPropertiesSchema;
 
@@ -143,4 +149,14 @@ pub(super) fn send_cleanup(
     )?;
     dev_dbg!(dev, "cleanup: gfid={} done\n", gfid.0);
     Ok(())
+}
+
+/// Negotiate the host protocol with a bootloaded GSP plugin.
+pub(super) fn negotiate_plugin_version(
+    dev: &device::Device<device::Bound>,
+    bar0: Bar0<'_>,
+    gfid: Gfid,
+    rpc: &mut PluginRpc<'_, '_>,
+) -> Result {
+    rpc.rpc_call(dev, bar0, gfid, RpcMessage::VersionNegotiation, &[])
 }
