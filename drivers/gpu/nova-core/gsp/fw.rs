@@ -739,13 +739,15 @@ impl GmcApiHeader {
     }
 
     /// Returns `true` if GSP-RM sent this header as a response rather than an event.
-    fn is_response(&self) -> bool {
+    pub(super) fn is_response(&self) -> bool {
         self.command & GMCAPI_COMMAND_FLAGS_RESPONSE != 0
     }
 
     /// Returns `true` if this header answers the request that sent `command_id` under `sequence`.
-    fn is_response_to(&self, command_id: u32, sequence: u64) -> bool {
-        self.is_response() && self.command_id() == command_id && self.sequence == sequence
+    pub(super) fn is_response_to(&self, command_id: u32, sequence: u64) -> bool {
+        self.is_response()
+            && self.command_id() == (command_id & GMCAPI_COMMAND_ID_MASK)
+            && self.sequence == sequence
     }
 }
 

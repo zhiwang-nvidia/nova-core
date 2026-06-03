@@ -500,6 +500,16 @@ pub(crate) enum QueuePointers {
     Reset,
 }
 
+/// Response from a GMC API command.
+pub(crate) struct GmcResponse {
+    /// Response status (`NV_STATUS` code). Zero means success.
+    #[expect(dead_code)]
+    pub(crate) status: u32,
+    /// Response payload copied out of the message queue.
+    #[expect(dead_code)]
+    pub(crate) payload: KVec<u8>,
+}
+
 /// GSP command queue.
 ///
 /// Provides the ability to send commands and receive messages from the GSP using a shared memory
@@ -636,6 +646,94 @@ impl<'cmdq> Cmdq<'cmdq> {
         self.inner
             .lock()
             .send_gmc(command_id, payload, max_response_size)
+    }
+
+    /// Sends a GMC API command and waits for its matching response.
+    ///
+    /// The queue stays locked for the complete transaction. A single deadline bounds all queue
+    /// elements observed while waiting.
+    #[expect(dead_code)]
+    pub(crate) fn send_gmc_and_receive(
+        &self,
+        command_id: u32,
+        payload: &[u8],
+        max_response_size: u32,
+    ) -> Result<GmcResponse> {
+        self.send_gmc_and_receive_timeout(
+            command_id,
+            payload,
+            max_response_size,
+            Self::RECEIVE_TIMEOUT,
+        )
+    }
+
+    /// Sends a GMC API command and waits up to `timeout` for its matching response.
+    pub(crate) fn send_gmc_and_receive_timeout(
+        &self,
+        command_id: u32,
+        payload: &[u8],
+        max_response_size: u32,
+        timeout: Delta,
+    ) -> Result<GmcResponse> {
+        let mut inner = self.inner.lock();
+        let expected_sequence = inner.send_gmc(command_id, payload, max_response_size)?;
+        let dev = inner.dev;
+
+        let deadline = Instant::<Monotonic>::now() + timeout;
+        loop {
+            let remaining = deadline - Instant::<Monotonic>::now();
+            if remaining.is_negative() {
+                return Err(ETIMEDOUT);
+            }
+
+            let response =
+                match inner.receive_gmc_and_dispatch(remaining, |header, payload_0, payload_1| {
+                    let header = &header.gmc;
+                    if !header.is_response_to(command_id, expected_sequence) {
+                        let kind = if header.is_response() {
+                            "response"
+                        } else {
+                            "event"
+                        };
+                        dev_dbg!(
+                            dev,
+                            "GSP GMC: skip {} seq {} cmd {:#x}; want response seq {} cmd {:#x}\n",
+                            kind,
+                            header.sequence,
+                            header.command_id(),
+                            expected_sequence,
+                            command_id,
+                        );
+                        return (None, QueuePointers::Unchanged);
+                    }
+
+                    let response: Result<GmcResponse> = (|| {
+                        let mut payload = KVec::with_capacity(
+                            payload_0
+                                .len()
+                                .checked_add(payload_1.len())
+                                .ok_or(EOVERFLOW)?,
+                            GFP_KERNEL,
+                        )?;
+                        payload.extend_from_slice(payload_0, GFP_KERNEL)?;
+                        payload.extend_from_slice(payload_1, GFP_KERNEL)?;
+                        Ok(GmcResponse {
+                            status: header.max_resp_or_status,
+                            payload,
+                        })
+                    })();
+
+                    (Some(response), QueuePointers::Unchanged)
+                }) {
+                    Ok(response) => response,
+                    Err(ERANGE) => continue,
+                    Err(error) => return Err(error),
+                };
+
+            if let Some(response) = response {
+                return response;
+            }
+        }
     }
 
     /// Waits for an unsolicited GSP event of type `M`, consuming any other event that arrives
