@@ -3,7 +3,10 @@
 //! BAR1 user interface for CPU access to GPU virtual memory. Used for USERD
 //! for GPU work submission, and applications to access GPU buffers via mmap().
 
+use core::marker::PhantomData;
+
 use kernel::{
+    devres::Devres,
     io::Io,
     new_mutex,
     prelude::*,
@@ -42,7 +45,8 @@ use kernel::device;
 pub(crate) struct BarUser<'gpu> {
     #[pin]
     vmm: Mutex<Vmm>,
-    bar1: &'gpu Bar1<'gpu>,
+    bar1: Arc<Devres<Bar1<'static>>>,
+    _gpu: PhantomData<&'gpu ()>,
 }
 
 impl<'gpu> BarUser<'gpu> {
@@ -51,12 +55,13 @@ impl<'gpu> BarUser<'gpu> {
         pdb_addr: VramAddress,
         chipset: Chipset,
         va_size: u64,
-        bar1: &'gpu Bar1<'gpu>,
+        bar1: Arc<Devres<Bar1<'static>>>,
     ) -> Result<impl PinInit<Self> + 'gpu> {
         let vmm = Vmm::new(pdb_addr, chipset.mmu_version(), va_size)?;
         Ok(pin_init!(Self {
             vmm <- new_mutex!(vmm, "bar_user_vmm"),
             bar1,
+            _gpu: PhantomData,
         }))
     }
 
@@ -136,36 +141,46 @@ impl BarUserAccess<'_> {
         base.checked_add(offset).ok_or(EOVERFLOW)
     }
 
+    /// Return the revocable BAR1 mapping backing this access object.
+    fn bar1_arc(&self) -> &Arc<Devres<Bar1<'static>>> {
+        &self.bar_user.bar1
+    }
+
     // Fallible accessors with runtime bounds checking.
 
     /// Read a 32-bit value at the given offset.
     pub(crate) fn try_read32(&self, offset: usize) -> Result<u32> {
         let off = self.bar_offset(offset)?;
-        self.bar_user.bar1.try_read32(off)
+        let bar1 = self.bar_user.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_read32(off)
     }
 
     /// Write an 8-bit value at the given offset.
     pub(crate) fn try_write8(&self, value: u8, offset: usize) -> Result {
         let off = self.bar_offset(offset)?;
-        self.bar_user.bar1.try_write8(value, off)
+        let bar1 = self.bar_user.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_write8(value, off)
     }
 
     /// Write a 32-bit value at the given offset.
     pub(crate) fn try_write32(&self, value: u32, offset: usize) -> Result {
         let off = self.bar_offset(offset)?;
-        self.bar_user.bar1.try_write32(value, off)
+        let bar1 = self.bar_user.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_write32(value, off)
     }
 
     /// Read a 64-bit value at the given offset.
     pub(crate) fn try_read64(&self, offset: usize) -> Result<u64> {
         let off = self.bar_offset(offset)?;
-        self.bar_user.bar1.try_read64(off)
+        let bar1 = self.bar_user.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_read64(off)
     }
 
     /// Write a 64-bit value at the given offset.
     pub(crate) fn try_write64(&self, value: u64, offset: usize) -> Result {
         let off = self.bar_offset(offset)?;
-        self.bar_user.bar1.try_write64(value, off)
+        let bar1 = self.bar_user.bar1.try_access().ok_or(ENXIO)?;
+        bar1.try_write64(value, off)
     }
 }
 
@@ -236,6 +251,11 @@ impl<'gpu> Bar1Map<'gpu> {
             page_bias,
             logical_size,
         })
+    }
+
+    /// Clone the revocable BAR1 mapping used by debugfs readers.
+    pub(crate) fn bar1_arc(&self) -> &Arc<Devres<Bar1<'static>>> {
+        self.access.bar1_arc()
     }
 
     /// Returns the mapped physical VRAM region.
@@ -334,7 +354,10 @@ pub(crate) fn run_self_test(
     const PATTERN_PRAMIN: u32 = 0xDEAD_BEEF;
     const PATTERN_BAR1: u32 = 0xCAFE_BABE;
 
-    let bar1 = bar_user.bar1;
+    // A matching bound device proves that devres cannot be revoked while this
+    // self-test runs, so this reference may safely span allocations and other
+    // potentially sleeping operations below.
+    let bar1 = bar_user.bar1.access(dev)?;
     dev_info!(dev, "MM: Starting self-test...\n");
 
     let pdb_addr = VramAddress::from_raw(bar1_pdb);

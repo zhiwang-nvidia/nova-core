@@ -3,6 +3,7 @@
 use core::ops::Range;
 
 use kernel::{
+    devres::Devres,
     device,
     dma::Device,
     fmt,
@@ -32,6 +33,7 @@ use crate::{
         Falcon, //
     },
     fb::SysmemFlush,
+    firmware,
     fsp::Fsp,
     gsp::{
         self,
@@ -374,10 +376,16 @@ impl<'gpu> Gpu<'gpu> {
         self.gsp_resources.gsp.cmdq()
     }
 
+    /// Returns the firmware build identifier, if one was reported.
+    #[expect(dead_code)]
+    pub(crate) fn build_id(&self) -> Option<&firmware::BuildId> {
+        self.gsp_resources.gsp.build_id()
+    }
+
     pub(crate) fn new(
         pdev: &'gpu pci::Device<device::Core<'_>>,
         bar: Bar0<'gpu>,
-        bar1: &'gpu Bar1<'gpu>,
+        bar1: Arc<Devres<Bar1<'static>>>,
         vectors: &'gpu SubtreeVectors<'gpu>,
     ) -> impl PinInit<Self, Error> + 'gpu {
         let dev = pdev.as_ref();
@@ -545,20 +553,19 @@ impl<'gpu> Gpu<'gpu> {
     pub(crate) fn run_selftests(self: Pin<&mut Self>, pdev: &pci::Device<device::Bound>) {
         let this = self.project();
         let dev = pdev.as_ref();
-        let regions = &this
+        let static_info = &this
             .gsp_resources
             .as_ref()
             .get_ref()
             .boot_result
-            .static_info
-            .usable_fb_regions;
+            .static_info;
 
         if let Err(err) = crate::mm::selftest::run(
             dev,
             this.mm,
-            regions,
+            &static_info.usable_fb_regions,
             this.bar_user,
-            this.gsp_static_info.bar1_pde_base,
+            static_info.bar1_pde_base,
             this.spec.chipset,
         ) {
             dev_err!(dev, "self-tests failed: {:?}\n", err);
