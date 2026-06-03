@@ -119,7 +119,6 @@ impl<'gpu> VgpuManager<'gpu> {
     }
 
     /// Returns the firmware-reported VMMU segment size when vGPU is enabled.
-    #[expect(dead_code)]
     pub(crate) const fn vmmu_segment_size(&self) -> Option<u64> {
         self.vmmu_segment_size
     }
