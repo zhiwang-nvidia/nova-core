@@ -6,6 +6,7 @@ use kernel::{
         Bound,
         Core, //
     },
+    devres::Devres,
     io::resource,
     pci,
     pci::{
@@ -15,9 +16,12 @@ use kernel::{
     },
     prelude::*,
     sizes::SZ_16M,
-    sync::atomic::{
-        Atomic,
-        Relaxed, //
+    sync::{
+        atomic::{
+            Atomic,
+            Relaxed, //
+        },
+        Arc, //
     },
     types::ForLt,
 };
@@ -35,18 +39,28 @@ static AUXILIARY_ID_COUNTER: Atomic<u32> = Atomic::new(0);
 
 #[pin_data]
 pub(crate) struct NovaCore<'bound> {
+    /// Auxiliary DRM-device registration.
+    ///
+    /// Declared first so consumers are unregistered before the interrupt and GPU resources are
+    /// torn down.
+    #[allow(clippy::type_complexity)]
+    _reg: auxiliary::Registration<'bound, ForLt!(())>,
     /// GSP event interrupt registration.
     ///
-    /// Declared first so it is dropped first: `free_irq` runs (waiting out any in-flight handler)
-    /// before the GSP is unloaded (`gpu`) or the BAR mapping is released (`bar`).
+    /// Declared before the GPU and BAR resources so `free_irq` runs (waiting out any in-flight
+    /// handler) before the GSP is unloaded (`gpu`) or the BAR mapping is released (`bar`).
     #[pin]
     _gsp_irq: GspIrq<'bound>,
     #[pin]
     pub(crate) gpu: Gpu<'bound>,
     bar: pci::Bar<'bound, BAR0_SIZE>,
-    bar1: Bar1<'bound>,
-    #[allow(clippy::type_complexity)]
-    _reg: auxiliary::Registration<'bound, ForLt!(())>,
+    /// Device-managed BAR1 mapping shared with debugfs readers.
+    ///
+    /// Debugfs file backing types must be `'static`, so readers cannot retain
+    /// the lifetime-bound [`Bar1`] reference used before log export was added.
+    /// [`Devres`] revokes access during unbind, while [`Arc`] keeps the handle
+    /// alive until all scoped readers have drained.
+    bar1: Arc<Devres<Bar1<'static>>>,
     /// Self-referential borrow of `vectors`, so this does not have to be repeated in the
     /// constructor. Will go away with self-referential pin-init.
     vectors_ref: &'bound SubtreeVectors<'bound>,
@@ -129,17 +143,17 @@ impl pci::Driver for NovaCoreDriver {
                 // is dropped after all fields that use `vectors_ref` (struct field drop order).
                 vectors_ref: unsafe { &*core::ptr::from_ref(vectors.as_ref().get_ref()) },
                 bar: pdev.iomap_region_sized::<BAR0_SIZE>(0, c"nova-core/bar0")?,
-                bar1: {
-                    let bar1_idx = bar1_resource_index(pdev)?;
-                    pdev.iomap_region(bar1_idx, c"nova-core/bar1")?
-                },
+                bar1: Arc::new(
+                    pdev.iomap_region(bar1_resource_index(pdev)?, c"nova-core/bar1")?
+                        .into_devres()?,
+                    GFP_KERNEL,
+                )?,
                 // TODO: Use self-referential pin-init syntax once available.
                 gpu <- Gpu::new(
                     pdev,
                     // SAFETY: `bar` is initialized above, pinned, and outlives `gpu`.
                     unsafe { &*core::ptr::from_ref(bar) },
-                    // SAFETY: `bar1` is initialized above, pinned, and outlives `gpu`.
-                    unsafe { &*core::ptr::from_ref(bar1) },
+                    bar1.clone(),
                     vectors_ref,
                 ),
                 // Quiesce the interrupt tree before registering the handler below.

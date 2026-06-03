@@ -6,6 +6,7 @@ use core::num::NonZero;
 pub(crate) mod bootload;
 pub(crate) mod consts;
 pub(crate) mod instance;
+pub(crate) mod log;
 pub(crate) mod plugin_rpc;
 pub(crate) mod scrubber;
 

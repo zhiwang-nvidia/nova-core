@@ -4,6 +4,7 @@ use core::ops::Range;
 
 use kernel::{
     device,
+    devres::Devres,
     dma::Device,
     fmt,
     gpu::buddy::GpuBuddyParams,
@@ -31,6 +32,7 @@ use crate::{
         Falcon, //
     },
     fb::SysmemFlush,
+    firmware,
     fsp::Fsp,
     gsp::{
         self,
@@ -374,10 +376,16 @@ impl<'gpu> Gpu<'gpu> {
         self.gsp_resources.gsp.cmdq()
     }
 
+    /// Returns the firmware build identifier, if one was reported.
+    #[expect(dead_code)]
+    pub(crate) fn build_id(&self) -> Option<firmware::BuildId> {
+        self.gsp_resources.gsp.build_id()
+    }
+
     pub(crate) fn new(
         pdev: &'gpu pci::Device<device::Core<'_>>,
         bar: Bar0<'gpu>,
-        bar1: &'gpu Bar1<'gpu>,
+        bar1: Arc<Devres<Bar1<'static>>>,
         vectors: &'gpu SubtreeVectors<'gpu>,
     ) -> impl PinInit<Self, Error> + 'gpu {
         let dev = pdev.as_ref();
