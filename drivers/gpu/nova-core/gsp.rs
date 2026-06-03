@@ -32,6 +32,7 @@ mod nvkv;
 mod regs;
 
 pub(crate) use fw::{
+    vgpu_bindings,
     GspFmcBootParams,
     GspFwWprMeta,
     LibosMemoryRegionInitArgument,

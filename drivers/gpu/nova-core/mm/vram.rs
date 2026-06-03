@@ -86,16 +86,19 @@ impl VramRegion {
     }
 
     /// Return the physical address of the first byte in this region.
+    #[expect(dead_code)]
     pub(crate) const fn address(&self) -> u64 {
         self.address
     }
 
     /// Return the region size in bytes.
+    #[expect(dead_code)]
     pub(crate) const fn size(&self) -> u64 {
         self.size
     }
 
     /// Return a checked subregion relative to this region.
+    #[expect(dead_code)]
     pub(crate) fn subregion(&self, range: Range<u64>) -> Result<Self> {
         let size = range
             .end

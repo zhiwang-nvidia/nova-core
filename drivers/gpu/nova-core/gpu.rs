@@ -49,12 +49,12 @@ use crate::{
     vgpu::VgpuManager, //
 };
 
-#[cfg_attr(not(CONFIG_KUNIT = "y"), expect(dead_code))]
 mod channel;
 mod hal;
 
 pub(crate) use self::channel::{
     ChannelIdPool,
+    ChannelIdReservation,
     TOTAL_CHANNELS, //
 };
 
@@ -310,6 +310,7 @@ pub(crate) struct Gpu<'gpu> {
     /// vGPU state and firmware parameters.
     ///
     /// Declared before MM and BAR1 so live instances are torn down before their resources.
+    #[pin]
     vgpu: VgpuManager<'gpu>,
     /// GPU memory manager owning memory management resources.
     ///
@@ -421,50 +422,55 @@ impl<'gpu> Gpu<'gpu> {
             // SAFETY: `chid_pool` is initialized before this expression and lives at a pinned
             // stable address. Field order drops `vgpu` before `chid_pool`, including unwind of
             // an incomplete initializer.
-            vgpu: VgpuManager::new(
+            vgpu <- VgpuManager::new(
                 // SAFETY: The lifetime and drop-order rationale above covers this borrow.
                 unsafe { &*core::ptr::from_ref(chid_pool.as_ref().get_ref()) },
             ),
 
-            gsp_resources <- try_pin_init!(GspResources {
-                device: pdev,
+            gsp_resources <- {
+                let mut vgpu = vgpu;
+                try_pin_init!(GspResources {
+                    device: pdev,
 
-                spec: *spec,
+                    spec: *spec,
 
-                bar,
+                    bar,
 
-                gsp_falcon: Falcon::new(
-                    dev,
-                    spec.chipset,
-                    bar
-                )
-                .inspect(|falcon| falcon.clear_swgen0_intr())?,
+                    gsp_falcon: Falcon::new(
+                        dev,
+                        spec.chipset,
+                        bar
+                    )
+                    .inspect(|falcon| falcon.clear_swgen0_intr())?,
 
-                sec2_falcon: Falcon::new(dev, spec.chipset, bar)?,
+                    sec2_falcon: Falcon::new(dev, spec.chipset, bar)?,
 
-                fsp: Fsp::try_new(dev, bar, spec.chipset)?,
+                    fsp: Fsp::try_new(dev, bar, spec.chipset)?,
 
-                _: {
-                    vgpu.detect_state(pdev, spec.chipset, fsp.as_mut());
-                },
-
-                gsp <- Gsp::new(pdev, spec.chipset, vgpu.state()),
-
-                // This member must be initialized last, so the unload bundle can never be dropped
-                // from outside of the constructed `GspResources`, ensuring that the unload sequence
-                // is properly run in case of failure.
-                boot_result: gsp.boot(
-                    GspBootContext {
-                        pdev,
-                        bar,
-                        chipset: spec.chipset,
-                        gsp_falcon,
-                        sec2_falcon,
-                        fsp: fsp.as_mut(),
+                    _: {
+                        vgpu.as_mut().detect_state(pdev, spec.chipset, fsp.as_mut());
                     },
-                    vgpu,
-                )?,
-            }),
+
+                    gsp <- Gsp::new(pdev, spec.chipset, vgpu.as_ref().state()),
+
+                    // This member must be initialized last, so the unload bundle can never be
+                    // dropped from outside of the constructed `GspResources`, ensuring that the
+                    // unload sequence is properly run in case of failure.
+                    boot_result: {
+                        gsp.boot(
+                            GspBootContext {
+                                pdev,
+                                bar,
+                                chipset: spec.chipset,
+                                gsp_falcon,
+                                sec2_falcon,
+                                fsp: fsp.as_mut(),
+                            },
+                            vgpu.as_mut(),
+                        )?
+                    },
+                })
+            },
 
             _: {
                 // The `GSP_INIT` reply already carried this.

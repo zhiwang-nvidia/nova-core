@@ -4,6 +4,14 @@
 pub(crate) mod commands;
 mod r000_00;
 
+/// Raw firmware declarations used by vGPU management.
+pub(crate) mod vgpu_bindings {
+    pub(crate) use super::r000_00::{
+        GMCAPI_COMMANDS_GMCAPI_CMD_QUERY_ASSIGNED_VF_VGPU_TYPE,
+        GMCAPI_COMMANDS_GMCAPI_CMD_QUERY_VGPU_PROPERTIES, //
+    };
+}
+
 // Alias to avoid repeating the version number with every use.
 use r000_00 as bindings;
 
