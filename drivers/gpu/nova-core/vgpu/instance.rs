@@ -31,6 +31,7 @@ use crate::{
 
 use super::{
     gsp_plugin_comm::CommBufferRegion,
+    gsp_plugin_rpc::PluginRpc,
     vram::{
         VgpuVramLayout,
         VgpuVramSlot,
@@ -135,7 +136,7 @@ pub(super) struct VgpuInstance<'gpu> {
     chids: ChannelIdReservation<'gpu>,
     num_plugin_channels: u32,
     vram_slot: VgpuVramSlot,
-    comm: CommBufferRegion<'gpu, 'gpu>,
+    pub(super) plugin_rpc: PluginRpc<'gpu, 'gpu>,
     needs_teardown: bool,
 }
 
@@ -149,7 +150,7 @@ impl VgpuInstance<'_> {
     ) -> Result {
         let fb = &self.vram_slot.fbmem;
         let mgmt = &self.vram_slot.mgmt_heap;
-        let logs = self.comm.plugin_logs();
+        let logs = self.plugin_rpc.comm().plugin_logs();
 
         let payload = encode_vgpu_bootload(
             self.dbdf,
@@ -182,11 +183,11 @@ impl VgpuInstance<'_> {
             payload.len() * size_of::<u64>(),
         );
 
-        self.comm.clear_plugin_ready()?;
+        self.plugin_rpc.comm().clear_plugin_ready()?;
         self.needs_teardown = true;
         send_bootload(cmdq, &payload)?;
 
-        wait_plugin_ready(dev, &self.comm)?;
+        wait_plugin_ready(dev, self.plugin_rpc.comm())?;
 
         dev_dbg!(dev, "bootload: gfid={} plugin ready\n", self.gfid.0);
         Ok(())
@@ -263,9 +264,11 @@ impl<'gpu> VgpuInstances<'gpu> {
 
     fn release_instance(&mut self, instance: VgpuInstance<'gpu>, mm: &mut GpuMm<'_>) -> Result {
         let VgpuInstance {
-            comm, vram_slot, ..
+            plugin_rpc,
+            vram_slot,
+            ..
         } = instance;
-        let result = comm.destroy(mm);
+        let result = plugin_rpc.destroy(mm);
         self.release_vram_slot(vram_slot)?;
         result
     }
@@ -340,7 +343,7 @@ impl<'gpu> VgpuInstances<'gpu> {
             chids,
             num_plugin_channels: 3,
             vram_slot,
-            comm,
+            plugin_rpc: PluginRpc::new(comm),
             needs_teardown: false,
         };
         match self.instances.push_within_capacity(instance) {
