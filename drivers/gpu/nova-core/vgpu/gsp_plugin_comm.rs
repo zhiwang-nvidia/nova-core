@@ -26,7 +26,6 @@ pub(super) struct PluginLogRegions {
     kernel: VramRegion,
 }
 
-#[expect(dead_code)]
 impl PluginLogRegions {
     pub(super) const fn init(&self) -> &VramRegion {
         &self.init
@@ -81,7 +80,6 @@ pub(super) struct CommBufferRegion<'map, 'gpu> {
     kernel_log: VramRegion,
 }
 
-#[expect(dead_code)]
 impl<'map, 'gpu> CommBufferRegion<'map, 'gpu> {
     /// Map the communication portion of a plugin management heap.
     pub(super) fn new(
@@ -185,6 +183,19 @@ impl<'map, 'gpu> CommBufferRegion<'map, 'gpu> {
             vgpu: self.vgpu_log.clone(),
             kernel: self.kernel_log.clone(),
         }
+    }
+
+    /// Clear a previous boot marker before starting the plugin.
+    pub(super) fn clear_plugin_ready(&self) -> Result {
+        let offset = self.io_offset(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.message_seq_num),
+            size_of::<u32>(),
+        )?;
+        self.map.try_write32(0, offset)?;
+        // Complete the posted clear before firmware can publish its new marker.
+        self.map.try_read32(offset)?;
+        Ok(())
     }
 
     /// Return whether firmware has published the plugin boot marker.

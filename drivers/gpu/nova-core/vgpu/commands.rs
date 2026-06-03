@@ -6,7 +6,12 @@
 //! Sends requests, checks responses and coordinates the firmware command
 //! sequences used by instance lifecycle operations.
 
-use kernel::prelude::*;
+use kernel::{
+    device,
+    prelude::*,
+    time::Delta,
+    transmute::AsBytes, //
+};
 
 use crate::gsp::{
     cmdq::Cmdq,
@@ -17,6 +22,8 @@ use crate::gsp::{
     },
 };
 
+use super::instance::Gfid;
+
 use super::fw::commands::VgpuPropertiesSchema;
 
 pub(super) use super::fw::commands::{
@@ -25,8 +32,12 @@ pub(super) use super::fw::commands::{
 };
 
 use super::fw::{
+    GMCAPI_CMD_BOOTLOAD_GSP_VGPU_PLUGIN_TASK,
+    GMCAPI_CMD_CLEANUP_GSP_VGPU_PLUGIN_RESOURCES,
     GMCAPI_CMD_QUERY_ASSIGNED_VF_VGPU_TYPE,
-    GMCAPI_CMD_QUERY_VGPU_PROPERTIES, //
+    GMCAPI_CMD_QUERY_VGPU_PROPERTIES,
+    GMCAPI_CMD_SHUTDOWN_GSP_VGPU_PLUGIN_TASK,
+    GMCAPI_CMD_SHUTDOWN_GSP_VGPU_PLUGIN_TASK_COMPLETE, //
 };
 
 /// Query the vGPU type assigned to a VF by its DBDF.
@@ -67,4 +78,69 @@ fn decode_vgpu_properties(payload: &[u8]) -> Result<KBox<VgpuProperties>> {
     let mut schema = VgpuPropertiesSchema::default();
     let properties = KBox::try_init(decoder.decode(&mut schema)?, GFP_KERNEL)?;
     Ok(properties)
+}
+
+/// Send BOOTLOAD and check its firmware status.
+pub(super) fn send_bootload(cmdq: &Cmdq<'_>, payload: &[u64]) -> Result {
+    let response = cmdq.send_gmc_and_receive_timeout(
+        GMCAPI_CMD_BOOTLOAD_GSP_VGPU_PLUGIN_TASK,
+        AsBytes::as_bytes(payload),
+        0,
+        Delta::from_secs(10),
+    )?;
+    if response.status != 0 {
+        return Err(EIO);
+    }
+    Ok(())
+}
+
+/// Shut down a vGPU plugin task and wait for its completion event.
+pub(super) fn send_shutdown(
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq<'_>,
+    gfid: Gfid,
+) -> Result {
+    let payload = gfid.0.to_le_bytes();
+
+    cmdq.send_gmc_and_wait_event(
+        GMCAPI_CMD_SHUTDOWN_GSP_VGPU_PLUGIN_TASK,
+        &payload,
+        Delta::from_secs(10),
+        |command_id, _max_response_size, _sequence, payload_0, payload_1| {
+            if command_id != GMCAPI_CMD_SHUTDOWN_GSP_VGPU_PLUGIN_TASK_COMPLETE
+                || !payload
+                    .iter()
+                    .copied()
+                    .eq(Iterator::chain(payload_0.iter(), payload_1.iter())
+                        .take(payload.len())
+                        .copied())
+            {
+                return Ok(false);
+            }
+            Ok(true)
+        },
+        |command_id, _max_response_size, _sequence, _payload_0, _payload_1| {
+            dev_dbg!(
+                dev,
+                "shutdown: ignoring unrelated event command={:#x}\n",
+                command_id,
+            );
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+/// Release firmware resources after a plugin task has stopped.
+pub(super) fn send_cleanup(
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq<'_>,
+    gfid: Gfid,
+) -> Result {
+    cmdq.send_gmc_and_check_status(
+        GMCAPI_CMD_CLEANUP_GSP_VGPU_PLUGIN_RESOURCES,
+        &gfid.0.to_le_bytes(),
+    )?;
+    dev_dbg!(dev, "cleanup: gfid={} done\n", gfid.0);
+    Ok(())
 }

@@ -4,19 +4,33 @@
 use core::num::NonZeroUsize;
 
 use kernel::{
+    device,
     prelude::*,
     ptr::Alignment,
     sizes::SizeConstants, //
+    time::{
+        delay::fsleep,
+        Delta,
+        Instant,
+        Monotonic, //
+    },
 };
 
-use crate::gsp::cmdq::Cmdq;
+use crate::gsp::{
+    cmdq::Cmdq,
+    commands::FifoEngineList, //
+};
 
 use crate::{
     gpu::ChannelIdReservation,
-    mm::GpuMm, //
+    mm::{
+        bar_user::BarUser,
+        GpuMm, //
+    },
 };
 
 use super::{
+    gsp_plugin_comm::CommBufferRegion,
     vram::{
         VgpuVramLayout,
         VgpuVramSlot,
@@ -27,9 +41,55 @@ use super::{
 
 use super::commands::{
     query_vgpu_properties,
+    send_bootload,
+    send_cleanup,
+    send_shutdown,
     Dbdf,
     VgpuProperties, //
 };
+
+use super::fw::commands::{
+    encode_vgpu_bootload,
+    ChannelMapEntry, //
+};
+
+/// Ready limit used by `vmiopd_negotiate_cpu_gsp_version()` for the same marker.
+const PLUGIN_READY_TIMEOUT: Delta = Delta::from_secs(10);
+
+/// Build the typed channel mapping from the GSP FIFO engine list.
+fn channel_mapping(
+    fifo_engine_list: &FifoEngineList,
+    chid_offset: u32,
+) -> Result<KVVec<ChannelMapEntry>> {
+    let mut mapping = KVVec::new();
+    for &gmc_id in fifo_engine_list.gmc_ids() {
+        let engine_type = (gmc_id & 0xffff) as usize;
+        let index = gmc_id >> 16;
+        mapping.push(
+            ChannelMapEntry::new(engine_type, index, chid_offset)?,
+            GFP_KERNEL,
+        )?;
+    }
+    Ok(mapping)
+}
+
+fn wait_plugin_ready(
+    dev: &device::Device<device::Bound>,
+    comm: &CommBufferRegion<'_, '_>,
+) -> Result {
+    let start = Instant::<Monotonic>::now();
+
+    loop {
+        if comm.is_plugin_ready()? {
+            dev_dbg!(dev, "vGPU plugin ready after {:?}\n", start.elapsed());
+            return Ok(());
+        }
+        if start.elapsed() >= PLUGIN_READY_TIMEOUT {
+            return Err(ETIMEDOUT);
+        }
+        fsleep(Delta::from_millis(1));
+    }
+}
 
 /// Guest Function ID. GFID 0 is reserved for the PF; VFs start at 1.
 #[repr(transparent)]
@@ -49,6 +109,10 @@ pub(super) struct VgpuType {
 }
 
 impl VgpuType {
+    pub(super) const fn vgpu_type_id(&self) -> u32 {
+        self.vgpu_type_id
+    }
+
     fn from_properties(properties: &VgpuProperties) -> Self {
         Self {
             vgpu_type_id: properties.type_id,
@@ -63,14 +127,79 @@ impl VgpuType {
 }
 
 /// A vGPU instance and the resources reserved for it.
-#[expect(dead_code)]
 pub(super) struct VgpuInstance<'gpu> {
     pub(super) gfid: Gfid,
     dbdf: Dbdf,
     vgpu_type: VgpuType,
     vm_pid: u32,
     chids: ChannelIdReservation<'gpu>,
+    num_plugin_channels: u32,
     vram_slot: VgpuVramSlot,
+    comm: CommBufferRegion<'gpu, 'gpu>,
+    needs_teardown: bool,
+}
+
+impl VgpuInstance<'_> {
+    /// Bootload the GSP vGPU plugin and wait for its BAR1 ready indication.
+    fn bootload(
+        &mut self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq<'_>,
+        fifo_engine_list: &FifoEngineList,
+    ) -> Result {
+        let fb = &self.vram_slot.fbmem;
+        let mgmt = &self.vram_slot.mgmt_heap;
+        let logs = self.comm.plugin_logs();
+
+        let payload = encode_vgpu_bootload(
+            self.dbdf,
+            self.gfid.0,
+            self.vgpu_type.vgpu_type_id(),
+            self.vm_pid,
+            u32::try_from(self.chids.len()).map_err(|_| EOVERFLOW)?,
+            self.num_plugin_channels,
+            channel_mapping(
+                fifo_engine_list,
+                u32::try_from(self.chids.start).map_err(|_| EOVERFLOW)?,
+            )?,
+            fb.address(),
+            fb.size(),
+            mgmt.address(),
+            mgmt.size(),
+            0,
+            logs.init().address(),
+            logs.init().size(),
+            logs.vgpu().address(),
+            logs.vgpu().size(),
+            logs.kernel().address(),
+            logs.kernel().size(),
+        )?;
+
+        dev_dbg!(
+            dev,
+            "bootload: gfid={} sending {} typed NVKV bytes\n",
+            self.gfid.0,
+            payload.len() * size_of::<u64>(),
+        );
+
+        self.comm.clear_plugin_ready()?;
+        self.needs_teardown = true;
+        send_bootload(cmdq, &payload)?;
+
+        wait_plugin_ready(dev, &self.comm)?;
+
+        dev_dbg!(dev, "bootload: gfid={} plugin ready\n", self.gfid.0);
+        Ok(())
+    }
+
+    /// Stop the plugin when firmware may own instance resources.
+    fn shutdown(&mut self, dev: &device::Device<device::Bound>, cmdq: &Cmdq<'_>) -> Result {
+        if self.needs_teardown {
+            send_shutdown(dev, cmdq, self.gfid)?;
+            dev_dbg!(dev, "shutdown: gfid={} stopped\n", self.gfid.0);
+        }
+        Ok(())
+    }
 }
 
 /// Identity and firmware profile used to allocate an instance.
@@ -132,10 +261,20 @@ impl<'gpu> VgpuInstances<'gpu> {
         Ok(())
     }
 
+    fn release_instance(&mut self, instance: VgpuInstance<'gpu>, mm: &mut GpuMm<'_>) -> Result {
+        let VgpuInstance {
+            comm, vram_slot, ..
+        } = instance;
+        let result = comm.destroy(mm);
+        self.release_vram_slot(vram_slot)?;
+        result
+    }
+
     /// Allocate resources and register a new inactive vGPU instance.
     pub(super) fn allocate_instance(
         &mut self,
-        mm: &GpuMm<'_>,
+        bar_user: &'gpu BarUser<'gpu>,
+        mm: &mut GpuMm<'_>,
         vgpu: &VgpuManager<'gpu>,
         info: InstanceInfo,
     ) -> Result<Gfid> {
@@ -185,6 +324,13 @@ impl<'gpu> VgpuInstances<'gpu> {
             fb_align: vgpu.vmmu_segment_size(),
         };
         let vram_slot = self.alloc_vram_slot(mm, layout)?;
+        let comm = match CommBufferRegion::new(bar_user, mm, &vram_slot.mgmt_heap) {
+            Ok(comm) => comm,
+            Err(error) => {
+                self.release_vram_slot(vram_slot)?;
+                return Err(error);
+            }
+        };
 
         let instance = VgpuInstance {
             gfid,
@@ -192,28 +338,56 @@ impl<'gpu> VgpuInstances<'gpu> {
             vgpu_type,
             vm_pid,
             chids,
+            num_plugin_channels: 3,
             vram_slot,
+            comm,
+            needs_teardown: false,
         };
         match self.instances.push_within_capacity(instance) {
             Ok(()) => Ok(gfid),
             Err(error) => {
-                let VgpuInstance { vram_slot, .. } = error.0;
-                self.release_vram_slot(vram_slot)?;
+                self.release_instance(error.0, mm)?;
                 Err(EIO)
             }
         }
     }
 
-    /// Remove an instance and release its channel and VRAM reservations.
-    pub(super) fn destroy_instance(&mut self, gfid: Gfid) -> Result {
+    /// Bootload the GSP plugin for a registered instance.
+    pub(super) fn activate_instance(
+        &mut self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq<'_>,
+        gfid: Gfid,
+        fifo_engine_list: &FifoEngineList,
+    ) -> Result {
+        let instance = self
+            .instances
+            .iter_mut()
+            .find(|instance| instance.gfid == gfid)
+            .ok_or(ENOENT)?;
+        instance.bootload(dev, cmdq, fifo_engine_list)
+    }
+
+    /// Stop the plugin and release the instance's firmware and host resources.
+    pub(super) fn destroy_instance(
+        &mut self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq<'_>,
+        mm: &mut GpuMm<'_>,
+        gfid: Gfid,
+    ) -> Result {
         let index = self
             .instances
             .iter()
             .position(|instance| instance.gfid == gfid)
             .ok_or(ENOENT)?;
+        let instance = &mut self.instances[index];
+        instance.shutdown(dev, cmdq)?;
+        if instance.needs_teardown {
+            send_cleanup(dev, cmdq, gfid)?;
+        }
         let instance = self.instances.remove(index).map_err(|_| EIO)?;
-        let VgpuInstance { vram_slot, .. } = instance;
-        self.release_vram_slot(vram_slot)
+        self.release_instance(instance, mm)
     }
 }
 

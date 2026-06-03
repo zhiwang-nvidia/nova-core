@@ -58,7 +58,6 @@ bitfield! {
 impl ChannelMapEntry {
     const KEY: KeyId = 0x1001;
 
-    #[expect(dead_code)]
     pub(in crate::vgpu) fn new(engine_type: usize, index: u32, chid_offset: u32) -> Result<Self> {
         Self::zeroed()
             .try_with_engine_type(u64::try_from(engine_type).map_err(|_| EOVERFLOW)?)
@@ -136,7 +135,6 @@ impl VgpuBootloadRequest {
 }
 
 /// Encodes a `VGPU_BOOTLOAD` request using the typed NVKV schema.
-#[expect(dead_code)]
 #[expect(clippy::too_many_arguments)]
 pub(in crate::vgpu) fn encode_vgpu_bootload(
     dbdf: Dbdf,

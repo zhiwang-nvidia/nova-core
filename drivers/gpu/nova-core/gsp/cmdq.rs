@@ -734,7 +734,6 @@ impl<'cmdq> Cmdq<'cmdq> {
     }
 
     /// Sends a synchronous GMC command and checks its status-only reply.
-    #[expect(dead_code)]
     pub(crate) fn send_gmc_and_check_status(&self, command_id: u32, payload: &[u8]) -> Result {
         let response = self.send_gmc_and_receive(command_id, payload, 0)?;
         if response.status == 0 {
@@ -753,7 +752,6 @@ impl<'cmdq> Cmdq<'cmdq> {
     ///
     /// Both callbacks run with the queue locked and must not reenter this queue or reset it.
     /// Their second argument is the raw `max_resp_or_status` word of the event header.
-    #[expect(dead_code)]
     pub(crate) fn send_gmc_and_wait_event(
         &self,
         command_id: u32,
