@@ -22,7 +22,6 @@ pub(crate) enum RpcResponse {
 pub(crate) enum RpcMessage {
     VersionNegotiation = r000::MESSAGE_NV_VGPU_CPU_RPC_MSG_VERSION_NEGOTIATION,
     SetupConfigParamsAndInit = r000::MESSAGE_NV_VGPU_CPU_RPC_MSG_SETUP_CONFIG_PARAMS_AND_INIT,
-    #[expect(dead_code)]
     Reset = r000::MESSAGE_NV_VGPU_CPU_RPC_MSG_RESET,
     UpdateBmeState = r000::MESSAGE_NV_VGPU_CPU_RPC_MSG_UPDATE_BME_STATE,
 }
