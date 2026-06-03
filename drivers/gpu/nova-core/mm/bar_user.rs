@@ -259,6 +259,14 @@ impl Bar1Map {
         })
     }
 
+    pub(crate) fn bar1_arc(&self) -> &Arc<Devres<Bar1>> {
+        &self.bar_user.bar1
+    }
+
+    pub(crate) fn gpu_va_addr(&self) -> u64 {
+        self.gpu_va_addr
+    }
+
     pub(crate) fn read32(&self, dev: &device::Device<device::Bound>, off: u64) -> Result<u32> {
         let bar1 = self.bar_user.bar1().access(dev)?;
         bar1.try_read32((self.gpu_va_addr + off) as usize)
