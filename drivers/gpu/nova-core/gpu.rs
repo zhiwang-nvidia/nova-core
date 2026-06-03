@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use core::ops::Range;
+use core::{
+    num::NonZero,
+    ops::Range, //
+};
 
 use kernel::{
     device,
@@ -9,6 +12,7 @@ use kernel::{
     fmt,
     gpu::buddy::GpuBuddyParams,
     io::Io,
+    new_mutex,
     num::Bounded,
     pci,
     prelude::*,
@@ -17,7 +21,10 @@ use kernel::{
         SizeConstants,
         SZ_4K, //
     },
-    sync::Arc,
+    sync::{
+        Arc,
+        Mutex, //
+    },
 };
 
 use crate::{
@@ -318,7 +325,8 @@ pub(crate) struct Gpu<'gpu> {
     ///
     /// Must be kept declared *before* `gsp_resources`, so that its components are dropped while
     /// the GSP is still operational.
-    mm: GpuMm<'gpu>,
+    #[pin]
+    mm: Mutex<GpuMm<'gpu>>,
     /// BAR1 user interface for CPU access to GPU virtual memory.
     #[pin]
     bar_user: BarUser<'gpu>,
@@ -377,9 +385,28 @@ impl<'gpu> Gpu<'gpu> {
     }
 
     /// Returns the firmware build identifier, if one was reported.
-    #[expect(dead_code)]
     pub(crate) fn build_id(&self) -> Option<firmware::BuildId> {
         self.gsp_resources.gsp.build_id()
+    }
+
+    pub(crate) fn vgpu_manager(&self) -> &VgpuManager<'gpu> {
+        &self.vgpu
+    }
+
+    pub(crate) fn vgpu_total_vfs(&self) -> Option<NonZero<u16>> {
+        self.vgpu.total_vfs()
+    }
+
+    pub(crate) fn mm(&self) -> &Mutex<GpuMm<'gpu>> {
+        &self.mm
+    }
+
+    pub(crate) fn bar_user(&self) -> &BarUser<'gpu> {
+        &self.bar_user
+    }
+
+    pub(crate) fn bar0(&self) -> Bar0<'gpu> {
+        self.gsp_resources.bar
     }
 
     pub(crate) fn new(
@@ -505,7 +532,7 @@ impl<'gpu> Gpu<'gpu> {
             },
 
             // Create GPU memory manager owning memory management resources.
-            mm: {
+            mm <- {
                 let info = &gsp_resources.boot_result.static_info;
                 let usable_vram = info.usable_fb_regions.first().ok_or(ENODEV)?;
                 let buddy_params = GpuBuddyParams {
@@ -514,12 +541,15 @@ impl<'gpu> Gpu<'gpu> {
                     chunk_size: Alignment::new::<SZ_4K>(),
                 };
 
-                GpuMm::new(
-                    bar,
-                    gsp_resources.spec.chipset,
-                    buddy_params,
-                    VramAddress::from_raw(info.total_fb_end),
-                )?
+                new_mutex!(
+                    GpuMm::new(
+                        bar,
+                        gsp_resources.spec.chipset,
+                        buddy_params,
+                        VramAddress::from_raw(info.total_fb_end),
+                    )?,
+                    "nova-core::gpu-mm",
+                )
             },
 
             // Create BAR1 user interface for CPU access to GPU virtual memory.
@@ -550,10 +580,11 @@ impl<'gpu> Gpu<'gpu> {
             .boot_result
             .static_info;
         let regions = &info.usable_fb_regions;
+        let mut mm = this.mm.lock();
 
         if let Err(err) = crate::mm::selftest::run(
             dev,
-            this.mm,
+            &mut mm,
             regions,
             this.bar_user.as_ref().get_ref(),
             info.bar1_pde_base,

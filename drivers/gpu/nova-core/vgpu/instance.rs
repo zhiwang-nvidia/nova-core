@@ -9,7 +9,8 @@ use kernel::{
     prelude::*,
     ptr::Alignment,
     sizes::SizeConstants,
-    str::CString, //
+    str::CString,
+    sync::Mutex, //
 };
 
 use crate::{
@@ -42,6 +43,7 @@ use crate::{
         fw::{
             CommBufferRegion,
             MappedPluginLogBuffers, //
+            RpcMessage,
         },
         log::VgpuLogBuffers,
         plugin_rpc::{
@@ -92,6 +94,22 @@ impl VgpuType {
         self.vgpu_type_id
     }
 
+    pub(crate) const fn bar1_length(&self) -> u64 {
+        self.bar1_length
+    }
+
+    pub(crate) const fn pci_dev_id(&self) -> u32 {
+        self.pci_dev_id
+    }
+
+    pub(crate) const fn pci_subsys_id(&self) -> u32 {
+        self.pci_subsys_id
+    }
+
+    pub(crate) const fn fb_length(&self) -> u64 {
+        self.fb_length
+    }
+
     fn from_properties(properties: &VgpuProperties) -> Self {
         let mut name = [0; 64];
         let name_len = properties.name.len().min(name.len());
@@ -127,7 +145,6 @@ impl VgpuType {
 /// Field ordering is load-bearing for drop: `debugfs_logs` must be declared
 /// before `plugin_rpc` so that debugfs entries are removed (and in-progress
 /// readers drained) before the underlying `Bar1Map` is destroyed.
-#[expect(dead_code)]
 pub(crate) struct VgpuInstance<'gpu> {
     pub(crate) gfid: Gfid,
     pub(crate) dbdf: Dbdf,
@@ -139,6 +156,7 @@ pub(crate) struct VgpuInstance<'gpu> {
     pub(crate) vram_slot: VgpuVramSlot,
     debugfs_logs: Option<Pin<KBox<debugfs::Scope<VgpuLogBuffers>>>>,
     pub(crate) plugin_rpc: PluginRpc<'gpu>,
+    active: bool,
 }
 
 impl<'gpu> VgpuInstance<'gpu> {
@@ -221,7 +239,6 @@ pub(crate) struct InstanceInfo {
     pub(crate) vm_pid: u32,
 }
 
-#[expect(dead_code)]
 impl InstanceInfo {
     pub(crate) const fn new(gfid: Gfid, dbdf: Dbdf, vgpu_type: VgpuType, vm_pid: u32) -> Self {
         Self {
@@ -273,7 +290,6 @@ pub(crate) struct VgpuInstances<'gpu> {
     vram_slots: Option<VgpuVramSlotAllocator>,
 }
 
-#[expect(dead_code)]
 impl<'gpu> VgpuInstances<'gpu> {
     pub(crate) const fn new() -> Self {
         Self {
@@ -444,6 +460,7 @@ impl<'gpu> VgpuInstances<'gpu> {
             vram_slot,
             debugfs_logs: None,
             plugin_rpc: PluginRpc::new(comm),
+            active: false,
         };
         match self.instances.push_within_capacity(instance) {
             Ok(()) => Ok(gfid),
@@ -466,6 +483,31 @@ impl<'gpu> VgpuInstances<'gpu> {
         }
     }
 
+    /// Reset an active instance and scrub its guest framebuffer.
+    pub(crate) fn reset_instance(
+        &mut self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+        bar_user: &BarUser<'gpu>,
+        mm: &mut GpuMm<'_>,
+        gfid: Gfid,
+    ) -> Result {
+        let instance = self
+            .instances
+            .iter_mut()
+            .find(|instance| instance.gfid == gfid)
+            .ok_or(ENOENT)?;
+        if !instance.active {
+            return Err(EBUSY);
+        }
+
+        instance
+            .plugin_rpc
+            .rpc_call(dev, bar, gfid, RpcMessage::Reset, &[])?;
+        instance.scrub_guest_fb(dev, cmdq, bar, bar_user, mm)
+    }
+
     /// Shut down an instance, scrub its guest FB, and release its reservations.
     pub(crate) fn destroy_instance(
         &mut self,
@@ -483,6 +525,7 @@ impl<'gpu> VgpuInstances<'gpu> {
             .ok_or(ENOENT)?;
 
         shutdown(dev, cmdq, bar, gfid)?;
+        self.instances[index].active = false;
         self.instances[index].scrub_guest_fb(dev, cmdq, bar, bar_user, mm)?;
         self.instances[index].release_ceutils(dev, cmdq, bar)?;
         cleanup(dev, cmdq, bar, gfid)?;
@@ -494,7 +537,6 @@ impl<'gpu> VgpuInstances<'gpu> {
 }
 
 /// Query the vGPU type assigned to a VF by its DBDF.
-#[expect(dead_code)]
 pub(crate) fn query_assigned_vf_type(cmdq: &Cmdq, bar: Bar0<'_>, dbdf: Dbdf) -> Result<u32> {
     let request = u64::from(dbdf.into_raw()).to_le_bytes();
     let response =
@@ -507,7 +549,6 @@ pub(crate) fn query_assigned_vf_type(cmdq: &Cmdq, bar: Bar0<'_>, dbdf: Dbdf) -> 
 }
 
 /// Query and decode one vGPU type using the typed NVKV schema.
-#[expect(dead_code)]
 pub(crate) fn query_vgpu_type(cmdq: &Cmdq, bar: Bar0<'_>, type_id: u32) -> Result<VgpuType> {
     let response = cmdq.send_gmc_and_receive(
         bar,
@@ -531,8 +572,7 @@ pub(crate) fn query_vgpu_type(cmdq: &Cmdq, bar: Bar0<'_>, type_id: u32) -> Resul
 /// Ask GSP to create the plugin task, wait for its BAR1 ready marker,
 /// initialize the shared RPC buffers, negotiate the protocol, send the
 /// instance configuration, and enable bus mastering.
-#[expect(dead_code)]
-pub(crate) fn activate_instance(
+fn activate_instance(
     dev: &device::Device<device::Bound>,
     cmdq: &Cmdq,
     bar: Bar0<'_>,
@@ -575,4 +615,91 @@ pub(crate) fn activate_instance(
     }
 
     Ok(())
+}
+
+/// Activate an instance already owned by the live-instance registry.
+///
+/// If activation fails, attempt full teardown before returning the original
+/// error.
+#[expect(clippy::too_many_arguments)]
+fn activate_registered_instance<'gpu>(
+    instances: &mut VgpuInstances<'gpu>,
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq,
+    bar: Bar0<'_>,
+    bar_user: &BarUser<'gpu>,
+    mm: &mut GpuMm<'_>,
+    gfid: Gfid,
+    fifo_engine_list: &FifoEngineList,
+    chipset: Chipset,
+    build_id: Option<&BuildId>,
+) -> Result {
+    let index = instances
+        .instances
+        .iter()
+        .position(|instance| instance.gfid == gfid)
+        .ok_or(EIO)?;
+    let activation_result = activate_instance(
+        dev,
+        cmdq,
+        bar,
+        &mut instances.instances[index],
+        fifo_engine_list,
+        chipset,
+        build_id,
+    );
+
+    if let Err(original_error) = activation_result {
+        if let Err(cleanup_error) = instances.destroy_instance(dev, cmdq, bar, bar_user, mm, gfid) {
+            dev_err!(
+                dev,
+                "vgpu_open: cleanup failed for gfid={} after activation error {:?}: {:?}\n",
+                gfid.0,
+                original_error,
+                cleanup_error,
+            );
+        }
+        return Err(original_error);
+    }
+
+    instances.instances[index].active = true;
+    Ok(())
+}
+
+impl<'gpu> VgpuManager<'gpu> {
+    /// Allocate, register, and activate a vGPU instance.
+    ///
+    /// Keep the registry locked from allocation through activation or rollback
+    /// so duplicate checks and profile limits remain stable.
+    #[expect(clippy::too_many_arguments)]
+    pub(crate) fn create_instance(
+        &self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+        bar_user: &BarUser<'gpu>,
+        mm: &Mutex<GpuMm<'gpu>>,
+        info: InstanceInfo,
+        chipset: Chipset,
+        build_id: Option<&BuildId>,
+    ) -> Result {
+        let fifo_engine_list = self.fifo_engine_list()?;
+        let mut instances = self.instances().lock();
+        // Global vGPU lock order: instances -> MM -> BAR-user VMM.
+        let mut mm = mm.lock();
+        let gfid = instances.allocate_instance(dev, cmdq, bar, bar_user, &mut mm, self, info)?;
+
+        activate_registered_instance(
+            &mut instances,
+            dev,
+            cmdq,
+            bar,
+            bar_user,
+            &mut mm,
+            gfid,
+            fifo_engine_list,
+            chipset,
+            build_id,
+        )
+    }
 }

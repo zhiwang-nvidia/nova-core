@@ -9,6 +9,7 @@ pub(crate) mod instance;
 pub(crate) mod log;
 pub(crate) mod plugin_rpc;
 pub(crate) mod scrubber;
+mod vfio;
 
 pub(crate) use self::instance::VgpuInstances;
 
@@ -124,6 +125,14 @@ impl<'gpu> VgpuManager<'gpu> {
         self.state
     }
 
+    /// Returns the number of VFs available to an enabled vGPU boot.
+    pub(crate) fn total_vfs(&self) -> Option<NonZero<u16>> {
+        match self.state {
+            VgpuState::Disabled => None,
+            VgpuState::Enabled { total_vfs } => Some(total_vfs),
+        }
+    }
+
     /// Initializes the runtime parameters returned by GSP_INIT.
     pub(crate) fn init(
         self: Pin<&mut Self>,
@@ -140,7 +149,6 @@ impl<'gpu> VgpuManager<'gpu> {
     }
 
     /// Returns the live-instance registry.
-    #[expect(dead_code)]
     pub(crate) fn instances(&self) -> &Mutex<VgpuInstances<'gpu>> {
         &self.instances
     }
@@ -156,7 +164,6 @@ impl<'gpu> VgpuManager<'gpu> {
     }
 
     /// Returns the ordered FIFO engine list provided by GSP_INIT.
-    #[expect(dead_code)]
     pub(crate) fn fifo_engine_list(&self) -> Result<&FifoEngineList> {
         self.fifo_engine_list.as_ref().ok_or(ENODEV)
     }
