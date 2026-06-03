@@ -35,6 +35,7 @@ pub(crate) mod bar_user;
 pub(super) mod pagetable;
 pub(crate) mod pramin;
 pub(super) mod tlb;
+pub(crate) mod vram;
 pub(super) mod vmm;
 
 use core::ops::Range;
