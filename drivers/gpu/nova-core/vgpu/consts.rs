@@ -18,3 +18,10 @@ pub(crate) mod gmc {
     pub(crate) const CLEANUP: u32 =
         bindings::GMCAPI_COMMANDS_GMCAPI_CMD_CLEANUP_GSP_VGPU_PLUGIN_RESOURCES;
 }
+
+/// vGPU plugin RPC values not provided by the firmware bindings.
+pub(crate) mod plugin_rpc {
+    pub(crate) const DOORBELL_STRIDE: u32 = 32;
+    pub(crate) const DOORBELL_VECTOR: u32 = 17;
+    pub(crate) const NV_VIRTUAL_FUNCTION_PRIV_DOORBELL: usize = 0xb8_0000 + 0x2200;
+}

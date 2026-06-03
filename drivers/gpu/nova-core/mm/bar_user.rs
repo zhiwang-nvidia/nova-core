@@ -141,6 +141,12 @@ impl BarUserAccess<'_, '_> {
         self.bar_user.bar1.try_read32(off)
     }
 
+    /// Write an 8-bit value at the given offset.
+    pub(crate) fn try_write8(&self, value: u8, offset: usize) -> Result {
+        let off = self.bar_offset(offset)?;
+        self.bar_user.bar1.try_write8(value, off)
+    }
+
     /// Write a 32-bit value at the given offset.
     pub(crate) fn try_write32(&self, value: u32, offset: usize) -> Result {
         let off = self.bar_offset(offset)?;
@@ -268,6 +274,11 @@ impl<'gpu> Bar1Map<'gpu> {
     pub(crate) fn try_read32(&self, offset: usize) -> Result<u32> {
         self.bar1
             .try_read32(self.bar_offset(offset, size_of::<u32>())?)
+    }
+
+    pub(crate) fn try_write8(&self, value: u8, offset: usize) -> Result {
+        self.bar1
+            .try_write8(value, self.bar_offset(offset, size_of::<u8>())?)
     }
 
     pub(crate) fn try_write32(&self, value: u32, offset: usize) -> Result {

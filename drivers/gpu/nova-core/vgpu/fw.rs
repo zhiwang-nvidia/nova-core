@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
+mod commands;
+
+pub(crate) use commands::{
+    RpcMessage,
+    RpcResponse, //
+};
+
 use kernel::prelude::*;
 
 use crate::{
@@ -16,6 +23,7 @@ use crate::{
 };
 
 type RawControlRegion = bindings::VGPU_CPU_GSP_CTRL_BUFF_REGION;
+type RawResponseRegion = bindings::VGPU_CPU_GSP_RESPONSE_BUFF_REGION;
 
 /// Physical VRAM regions containing the vGPU plugin logs.
 pub(crate) struct PluginLogRegions {
@@ -64,9 +72,14 @@ fn take_region(region: &VramRegion, cursor: &mut u64, size: u32) -> Result<VramR
 pub(crate) struct CommBufferRegion<'gpu> {
     map: Bar1Map<'gpu>,
     control: VramRegion,
+    response: VramRegion,
+    message: VramRegion,
+    migration: VramRegion,
+    error: VramRegion,
     init_log: VramRegion,
     vgpu_log: VramRegion,
     kernel_log: VramRegion,
+    guest_trace: VramRegion,
 }
 
 impl<'gpu> CommBufferRegion<'gpu> {
@@ -85,22 +98,22 @@ impl<'gpu> CommBufferRegion<'gpu> {
             &mut cursor,
             bindings::VGPU_CPU_GSP_CTRL_BUFF_REGION_SIZE,
         )?;
-        take_region(
+        let response = take_region(
             &region,
             &mut cursor,
             bindings::VGPU_CPU_GSP_RESPONSE_BUFF_REGION_SIZE,
         )?;
-        take_region(
+        let message = take_region(
             &region,
             &mut cursor,
             bindings::VGPU_CPU_GSP_MESSAGE_BUFF_REGION_SIZE,
         )?;
-        take_region(
+        let migration = take_region(
             &region,
             &mut cursor,
             bindings::VGPU_CPU_GSP_MIGRATION_BUFF_REGION_SIZE,
         )?;
-        take_region(
+        let error = take_region(
             &region,
             &mut cursor,
             bindings::VGPU_CPU_GSP_ERROR_BUFF_REGION_SIZE,
@@ -120,13 +133,16 @@ impl<'gpu> CommBufferRegion<'gpu> {
             &mut cursor,
             bindings::VGPU_CPU_GSP_KERNEL_TASK_LOG_BUFF_REGION_SIZE,
         )?;
-        take_region(
+        let guest_trace = take_region(
             &region,
             &mut cursor,
             bindings::VGPU_CPU_GSP_GUEST_RPC_TRACE_BUFF_REGION_SIZE,
         )?;
 
-        if cursor != total_size || control.size() != u64::try_from(size_of::<RawControlRegion>())? {
+        if cursor != total_size
+            || control.size() != u64::try_from(size_of::<RawControlRegion>())?
+            || response.size() != u64::try_from(size_of::<RawResponseRegion>())?
+        {
             return Err(EINVAL);
         }
 
@@ -135,9 +151,14 @@ impl<'gpu> CommBufferRegion<'gpu> {
         Ok(Self {
             map,
             control,
+            response,
+            message,
+            migration,
+            error,
             init_log,
             vgpu_log,
             kernel_log,
+            guest_trace,
         })
     }
 
@@ -169,6 +190,21 @@ impl<'gpu> CommBufferRegion<'gpu> {
             .try_read32(self.io_offset(region, field, size_of::<u32>())?)
     }
 
+    fn write_u8(&self, region: &VramRegion, field: usize, value: u8) -> Result {
+        self.map
+            .try_write8(value, self.io_offset(region, field, size_of::<u8>())?)
+    }
+
+    fn write_u32(&self, region: &VramRegion, field: usize, value: u32) -> Result {
+        self.map
+            .try_write32(value, self.io_offset(region, field, size_of::<u32>())?)
+    }
+
+    fn write_u64(&self, region: &VramRegion, field: usize, value: u64) -> Result {
+        self.map
+            .try_write64(value, self.io_offset(region, field, size_of::<u64>())?)
+    }
+
     /// Return the physical regions occupied by the three plugin logs.
     pub(crate) fn plugin_logs(&self) -> Result<PluginLogRegions> {
         Ok(PluginLogRegions {
@@ -186,6 +222,150 @@ impl<'gpu> CommBufferRegion<'gpu> {
         )?;
 
         Ok(value == bindings::GSP_PLUGIN_BOOTLOADED)
+    }
+
+    /// Initialize the shared control and response buffers for plugin RPC.
+    pub(crate) fn initialize(&self) -> Result {
+        self.write_u64(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.response_buff_offset),
+            u64::try_from(self.region_offset(&self.response)?)?,
+        )?;
+        self.write_u64(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.message_buff_offset),
+            u64::try_from(self.region_offset(&self.message)?)?,
+        )?;
+        self.write_u64(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.migration_buff_offset),
+            u64::try_from(self.region_offset(&self.migration)?)?,
+        )?;
+        self.write_u64(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.error_buff_offset),
+            u64::try_from(self.region_offset(&self.error)?)?,
+        )?;
+        self.write_u64(
+            &self.control,
+            core::mem::offset_of!(
+                RawControlRegion,
+                __bindgen_anon_1.guest_rpc_trace_buff_offset
+            ),
+            u64::try_from(self.region_offset(&self.guest_trace)?)?,
+        )?;
+        self.write_u32(
+            &self.control,
+            core::mem::offset_of!(
+                RawControlRegion,
+                __bindgen_anon_1.migration_buf_cpu_access_offset
+            ),
+            0,
+        )?;
+        self.write_u8(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.is_migration_in_progress),
+            0,
+        )?;
+        self.write_u32(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.error_buff_cpu_get_idx),
+            0,
+        )?;
+        self.write_u32(
+            &self.control,
+            core::mem::offset_of!(
+                RawControlRegion,
+                __bindgen_anon_1.guest_rpc_trace_buff_cpu_get_idx
+            ),
+            0,
+        )?;
+        self.write_u32(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.attached_vgpu_count),
+            1,
+        )?;
+        self.write_u8(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.is_gr_init_done),
+            0,
+        )?;
+
+        // The heap is not guaranteed to have been zeroed. Clear both sides'
+        // sequence state before publishing the control-buffer version.
+        self.write_u32(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.message_type),
+            0,
+        )?;
+        self.write_u32(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.message_seq_num),
+            0,
+        )?;
+        self.write_u32(
+            &self.response,
+            core::mem::offset_of!(
+                RawResponseRegion,
+                __bindgen_anon_1.message_seq_num_processed
+            ),
+            0,
+        )?;
+        self.write_u32(
+            &self.response,
+            core::mem::offset_of!(RawResponseRegion, __bindgen_anon_1.result_code),
+            0,
+        )?;
+        self.write_u32(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.version),
+            bindings::VGPU_CPU_GSP_CTRL_BUFF_VERSION,
+        )
+    }
+
+    /// Copy and publish one RPC request to firmware.
+    pub(crate) fn submit(&self, message: RpcMessage, sequence: u32, data: &[u8]) -> Result {
+        if u64::try_from(data.len()).map_err(|_| EOVERFLOW)? > self.message.size() {
+            return Err(E2BIG);
+        }
+
+        for (index, chunk) in data.chunks(size_of::<u32>()).enumerate() {
+            let mut bytes = [0u8; size_of::<u32>()];
+            bytes[..chunk.len()].copy_from_slice(chunk);
+            let field = index.checked_mul(size_of::<u32>()).ok_or(EOVERFLOW)?;
+            self.write_u32(&self.message, field, u32::from_le_bytes(bytes))?;
+        }
+
+        self.write_u32(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.message_type),
+            message as u32,
+        )?;
+        self.write_u32(
+            &self.control,
+            core::mem::offset_of!(RawControlRegion, __bindgen_anon_1.message_seq_num),
+            sequence,
+        )
+    }
+
+    /// Read firmware's response for an expected RPC sequence.
+    pub(crate) fn response(&self, expected_sequence: u32) -> Result<RpcResponse> {
+        let sequence = self.read_u32(
+            &self.response,
+            core::mem::offset_of!(
+                RawResponseRegion,
+                __bindgen_anon_1.message_seq_num_processed
+            ),
+        )?;
+        if sequence != expected_sequence {
+            return Ok(RpcResponse::Pending { sequence });
+        }
+
+        let status = self.read_u32(
+            &self.response,
+            core::mem::offset_of!(RawResponseRegion, __bindgen_anon_1.result_code),
+        )?;
+        Ok(RpcResponse::Complete { status })
     }
 
     /// Invalidate the PTEs and release the communication mapping.
