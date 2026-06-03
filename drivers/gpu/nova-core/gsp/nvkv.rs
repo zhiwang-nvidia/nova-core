@@ -487,7 +487,6 @@ pub(crate) fn nvkv_read_string8(val: &NvkvValue<'_>, dst: &mut [u8]) {
 // --- NVKV Encoding ---
 
 /// Encode an IMM32 key-value pair and push to the kvs vector.
-#[expect(dead_code)]
 pub(crate) fn nvkv_push_imm32(kvs: &mut KVec<u64>, key: u16, value: u32) -> Result {
     let header = make_header(OPCODE_IMM32, key, value);
     kvs.push(header, GFP_KERNEL)?;
@@ -528,6 +527,18 @@ pub(crate) fn nvkv_push_array64(kvs: &mut KVec<u64>, key: u16, values: &[u64]) -
     kvs.push(header, GFP_KERNEL)?;
     for &v in values {
         kvs.push(v, GFP_KERNEL)?;
+    }
+    Ok(())
+}
+
+/// Encode an ARRAY8 key-value pair: header + ceil(len/8) data u64s.
+pub(crate) fn nvkv_push_array8(kvs: &mut KVec<u64>, key: u16, data: &[u8]) -> Result {
+    let header = make_header(OPCODE_ARRAY8, key, data.len() as u32);
+    kvs.push(header, GFP_KERNEL)?;
+    for chunk in data.chunks(8) {
+        let mut buf = [0u8; 8];
+        buf[..chunk.len()].copy_from_slice(chunk);
+        kvs.push(u64::from_le_bytes(buf), GFP_KERNEL)?;
     }
     Ok(())
 }
