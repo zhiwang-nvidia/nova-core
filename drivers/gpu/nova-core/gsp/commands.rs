@@ -13,6 +13,10 @@ use kernel::{
     device,
     pci,
     prelude::*,
+    time::{
+        Instant,
+        Monotonic, //
+    },
     transmute::AsBytes, //
 };
 
@@ -219,20 +223,27 @@ pub(crate) fn gsp_init(
         GSP_INIT_MAX_RESPONSE_SIZE,
     )?;
 
+    let deadline = Instant::<Monotonic>::now() + Cmdq::RECEIVE_TIMEOUT;
     loop {
-        let reply = cmdq.receive_gmc_and_dispatch(
-            bar,
-            Cmdq::RECEIVE_TIMEOUT,
-            |command_id, max_resp_or_status, payload_0, payload_1| {
-                if command_id == GMCAPI_CMD_GSP_INIT {
+        let remaining = deadline - Instant::<Monotonic>::now();
+        if remaining.is_negative() {
+            return Err(ETIMEDOUT);
+        }
+
+        let reply =
+            match cmdq.receive_gmc_and_dispatch(bar, remaining, |header, payload_0, payload_1| {
+                let command_id = header.command_id();
+                if header.is_response() && command_id == GMCAPI_CMD_GSP_INIT {
                     (
                         Some(decode_gsp_init_reply(
-                            max_resp_or_status,
+                            header.max_resp_or_status,
                             payload_0,
                             payload_1,
                         )),
                         QueuePointers::Unchanged,
                     )
+                } else if header.is_response() {
+                    (None, QueuePointers::Unchanged)
                 } else {
                     // A boot event. Keep waiting for the reply unless handling it failed.
                     match on_boot_event(command_id, payload_0) {
@@ -242,8 +253,11 @@ pub(crate) fn gsp_init(
                         Err(e) => (Some(Err(e)), QueuePointers::Reset),
                     }
                 }
-            },
-        )?;
+            }) {
+                Ok(reply) => reply,
+                Err(ERANGE) => continue,
+                Err(error) => return Err(error),
+            };
 
         if let Some(reply) = reply {
             return reply;

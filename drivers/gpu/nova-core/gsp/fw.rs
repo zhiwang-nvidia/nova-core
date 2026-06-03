@@ -596,6 +596,11 @@ impl GspMsgElement {
         )
     }
 
+    /// Returns `true` if the NVDM header routes this element to the RM RPC dispatcher.
+    pub(crate) fn is_rm_rpc(&self) -> bool {
+        self.nvdm_header.validate(NvdmType::RmRpc)
+    }
+
     // Returns the sequence number of the message.
     pub(crate) fn sequence(&self) -> u32 {
         self.rpc.sequence
@@ -733,6 +738,13 @@ impl GmcApiHeader {
     /// Returns `true` if this header is a reply to a driver request.
     pub(crate) fn is_response(&self) -> bool {
         self.command & GMCAPI_COMMAND_FLAGS_RESPONSE != 0
+    }
+
+    /// Returns `true` if this header is the response to `command_id` and `sequence`.
+    pub(crate) fn is_response_to(&self, command_id: u32, sequence: u64) -> bool {
+        self.is_response()
+            && self.command_id() == (command_id & GMCAPI_COMMAND_ID_MASK)
+            && self.sequence == sequence
     }
 
     /// Returns [`Self::sequence`] with the GSP-initiated-event bit cleared.
@@ -908,6 +920,16 @@ impl GspGmcMsgElement {
             self.mctp_header,
             self.nvdm_header,
             size_of::<Self>(),
+        )
+    }
+
+    pub(crate) fn validate_common_framing(&self) -> Result {
+        validate_mctp_framing(
+            self.mctp_magic,
+            self.mctp_payload_size,
+            self.mctp_header,
+            self.nvdm_header,
+            core::mem::offset_of!(Self, gmc),
         )
     }
 
