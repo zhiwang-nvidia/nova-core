@@ -49,7 +49,10 @@ use crate::{
         VramAddress, //
     },
     num,
-    vgpu::VgpuState, //
+    vgpu::{
+        VgpuManager,
+        VgpuState, //
+    },
 };
 
 #[cfg_attr(not(CONFIG_KUNIT = "y"), expect(dead_code))]
@@ -311,6 +314,7 @@ struct GspResources<'gpu> {
 #[pin_data]
 pub(crate) struct Gpu<'gpu> {
     spec: Spec,
+    vgpu: Option<VgpuManager<'gpu>>,
     /// GSP event interrupt registration.
     ///
     /// Declared before `gsp_resources` so it is dropped first: `free_irq` runs, waiting out any
@@ -435,6 +439,23 @@ impl<'gpu> Gpu<'gpu> {
                     vgpu_state,
                 })?,
             }),
+
+            vgpu: {
+                let info = &gsp_resources.boot_result.static_info;
+                match gsp_resources.vgpu_state {
+                    VgpuState::Disabled => None,
+                    VgpuState::Enabled { .. } => Some(VgpuManager::new(
+                        // SAFETY: `chid_pool` is initialized above at its final pinned address.
+                        // The private manager and its pool borrow cannot escape this `Gpu`.
+                        // Completed field drop order drops the manager before the pool; on failure,
+                        // pin-init drops it before the earlier-initialized pool.
+                        unsafe { &*core::ptr::from_ref(chid_pool.as_ref().get_ref()) },
+                        &info.fifo_engine_list,
+                        info.vmmu_segment_size,
+                        TOTAL_CHANNELS,
+                    )),
+                }
+            },
 
             // GSP boot left the SWGEN0 latch set and pending bits in the tree.
             _: {

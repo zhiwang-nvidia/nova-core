@@ -13,7 +13,11 @@ use crate::{
         Fsp,
         VgpuMode, //
     },
-    gpu::Chipset, //
+    gpu::{
+        ChannelIdPool,
+        Chipset, //
+    },
+    gsp::commands::FifoEngineList, //
 };
 
 mod hal;
@@ -78,5 +82,47 @@ impl VgpuState {
             VgpuMode::Enabled => Ok(VgpuState::Enabled { total_vfs }),
             VgpuMode::Disabled => Ok(VgpuState::Disabled),
         }
+    }
+}
+
+/// Runtime resources for an enabled vGPU boot.
+pub(crate) struct VgpuManager<'gpu> {
+    #[expect(dead_code)]
+    chid_pool: &'gpu ChannelIdPool,
+    vmmu_segment_size: u64,
+    total_channels: u32,
+    fifo_engine_list: FifoEngineList,
+}
+
+impl<'gpu> VgpuManager<'gpu> {
+    /// Retains runtime parameters from a completed vGPU-enabled GSP boot.
+    pub(crate) fn new(
+        chid_pool: &'gpu ChannelIdPool,
+        fifo_engine_list: &FifoEngineList,
+        vmmu_segment_size: u64,
+        total_channels: u32,
+    ) -> Self {
+        Self {
+            chid_pool,
+            vmmu_segment_size,
+            total_channels,
+            fifo_engine_list: *fifo_engine_list,
+        }
+    }
+
+    /// Returns the VMMU segment size in bytes, or zero if GSP-RM omitted it.
+    #[expect(dead_code)]
+    const fn vmmu_segment_size(&self) -> u64 {
+        self.vmmu_segment_size
+    }
+
+    #[expect(dead_code)]
+    const fn total_channels(&self) -> u32 {
+        self.total_channels
+    }
+
+    #[expect(dead_code)]
+    fn fifo_engine_list(&self) -> &FifoEngineList {
+        &self.fifo_engine_list
     }
 }

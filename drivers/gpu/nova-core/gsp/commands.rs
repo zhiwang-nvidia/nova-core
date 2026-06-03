@@ -77,9 +77,7 @@ pub(crate) struct GetGspStaticInfoReply {
     /// Exclusive end of the FB physical address space.
     pub(crate) total_fb_end: u64,
     /// VMMU segment size in bytes, or zero if GSP-RM omitted it.
-    #[expect(dead_code)]
     pub(crate) vmmu_segment_size: u64,
-    #[expect(dead_code)]
     pub(crate) fifo_engine_list: FifoEngineList,
 }
 
