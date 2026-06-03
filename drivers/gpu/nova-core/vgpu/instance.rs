@@ -39,6 +39,7 @@ use crate::{
         fw::{
             CommBufferRegion,
             MappedPluginLogBuffers, //
+            RpcMessage,
         },
         log::VgpuLogBuffers,
         plugin_rpc::{
@@ -117,8 +118,8 @@ impl VgpuType {
 /// Field ordering is load-bearing for drop: `debugfs_logs` must be declared
 /// before `plugin_rpc` so that debugfs entries are removed (and in-progress
 /// readers drained) before the underlying `Bar1Map` is destroyed.
-#[expect(dead_code)]
 pub(crate) struct VgpuInstance<'gpu> {
+    #[expect(dead_code)]
     pub(crate) id: u32,
     pub(crate) gfid: Gfid,
     pub(crate) dbdf: Dbdf,
@@ -130,6 +131,7 @@ pub(crate) struct VgpuInstance<'gpu> {
     pub(crate) vram_slot: VgpuVramSlot,
     debugfs_logs: Option<Pin<KBox<debugfs::Scope<VgpuLogBuffers>>>>,
     pub(crate) plugin_rpc: PluginRpc<'gpu>,
+    active: bool,
 }
 
 impl<'gpu> VgpuInstance<'gpu> {
@@ -161,7 +163,6 @@ pub(crate) struct InstanceInfo {
     pub(crate) vm_pid: u32,
 }
 
-#[expect(dead_code)]
 impl InstanceInfo {
     pub(crate) const fn new(gfid: Gfid, dbdf: Dbdf, vgpu_type: VgpuType, vm_pid: u32) -> Self {
         Self {
@@ -214,7 +215,6 @@ pub(crate) struct VgpuInstances<'gpu> {
     next_instance_id: u32,
 }
 
-#[expect(dead_code)]
 impl<'gpu> VgpuInstances<'gpu> {
     pub(crate) const fn new() -> Self {
         Self {
@@ -295,6 +295,9 @@ impl<'gpu> VgpuInstances<'gpu> {
         {
             return Err(ENOSPC);
         }
+        // Activation failure may require retaining the instance until a later
+        // teardown can safely release firmware-owned resources.
+        self.instances.reserve(1, GFP_KERNEL)?;
         let id = self.next_id()?;
 
         let num_chid = vgpu
@@ -414,7 +417,33 @@ impl<'gpu> VgpuInstances<'gpu> {
             vram_slot,
             debugfs_logs: None,
             plugin_rpc: PluginRpc::new(comm),
+            active: false,
         })
+    }
+
+    /// Reset an active instance and scrub its guest framebuffer.
+    pub(crate) fn reset_instance(
+        &mut self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+        bar_user: &BarUser<'gpu>,
+        mm: &GpuMm<'gpu>,
+        gfid: Gfid,
+    ) -> Result {
+        let instance = self
+            .instances
+            .iter_mut()
+            .find(|instance| instance.gfid == gfid)
+            .ok_or(ENOENT)?;
+        if !instance.active {
+            return Err(EBUSY);
+        }
+
+        instance
+            .plugin_rpc
+            .rpc_call(dev, bar, gfid, RpcMessage::Reset, &[])?;
+        instance.scrub_guest_fb(dev, cmdq, bar, bar_user, mm)
     }
 
     /// Shut down an instance, scrub its guest FB, and release its reservations.
@@ -434,6 +463,7 @@ impl<'gpu> VgpuInstances<'gpu> {
             .ok_or(ENOENT)?;
 
         shutdown(dev, cmdq, bar, gfid)?;
+        self.instances[index].active = false;
         self.instances[index].scrub_guest_fb(dev, cmdq, bar, bar_user, mm)?;
         self.instances[index]
             .ceutils
@@ -457,7 +487,6 @@ impl<'gpu> VgpuInstances<'gpu> {
 }
 
 /// Query the vGPU type assigned to a VF by its DBDF.
-#[expect(dead_code)]
 pub(crate) fn query_assigned_vf_type(cmdq: &Cmdq, bar: Bar0<'_>, dbdf: Dbdf) -> Result<u32> {
     let request = u64::from(dbdf.into_raw()).to_le_bytes();
     let response =
@@ -470,7 +499,6 @@ pub(crate) fn query_assigned_vf_type(cmdq: &Cmdq, bar: Bar0<'_>, dbdf: Dbdf) -> 
 }
 
 /// Query and decode one vGPU type using the typed NVKV schema.
-#[expect(dead_code)]
 pub(crate) fn query_vgpu_type(cmdq: &Cmdq, bar: Bar0<'_>, type_id: u32) -> Result<VgpuType> {
     let response = cmdq.send_gmc_and_receive(
         bar,
@@ -490,10 +518,7 @@ pub(crate) fn query_vgpu_type(cmdq: &Cmdq, bar: Bar0<'_>, type_id: u32) -> Resul
 }
 
 /// Bootload the GSP plugin and negotiate its RPC channel.
-///
-/// Called without holding the runtime lock.
-#[expect(dead_code)]
-pub(crate) fn activate_instance(
+fn activate_unregistered_instance(
     dev: &device::Device<device::Bound>,
     cmdq: &Cmdq,
     bar: Bar0<'_>,
@@ -536,4 +561,71 @@ pub(crate) fn activate_instance(
     }
 
     Ok(())
+}
+
+/// Activate an instance and publish it in the live-instance registry.
+///
+/// Called with the registry locked so rollback capacity remains reserved until
+/// the instance is either published or safely torn down.
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn activate_instance<'gpu>(
+    instances: &mut VgpuInstances<'gpu>,
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq,
+    bar: Bar0<'_>,
+    bar_user: &BarUser<'gpu>,
+    mm: &GpuMm<'gpu>,
+    mut instance: VgpuInstance<'gpu>,
+    engine_masks: &[u64; NVGMC_ENGINE_TYPE_COUNT],
+    chipset: Chipset,
+    build_id: Option<&BuildId>,
+) -> Result {
+    let gfid = instance.gfid;
+    let activation_result = activate_unregistered_instance(
+        dev,
+        cmdq,
+        bar,
+        &mut instance,
+        engine_masks,
+        chipset,
+        build_id,
+    );
+
+    if let Err(original_error) = activation_result {
+        if let Err(error) = instances.instances.push_within_capacity(instance) {
+            dev_err!(
+                dev,
+                "vgpu_open: failed to retain gfid={} after activation error {:?}\n",
+                gfid.0,
+                original_error,
+            );
+            // Firmware may still own resources referenced by this instance.
+            // Leaking is safer than returning them for reuse.
+            core::mem::forget(error.0);
+            return Err(original_error);
+        }
+
+        if let Err(cleanup_error) = instances.destroy_instance(dev, cmdq, bar, bar_user, mm, gfid) {
+            dev_err!(
+                dev,
+                "vgpu_open: retained gfid={} after activation error {:?}: {:?}\n",
+                gfid.0,
+                original_error,
+                cleanup_error,
+            );
+        }
+        return Err(original_error);
+    }
+
+    instance.active = true;
+    match instances.instances.push_within_capacity(instance) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            // Capacity was reserved while holding this same registry lock.
+            // If that invariant is ever violated, leaking is safer than
+            // returning firmware-owned resources for reuse.
+            core::mem::forget(error.0);
+            Err(EIO)
+        }
+    }
 }
