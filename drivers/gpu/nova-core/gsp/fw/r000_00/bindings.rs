@@ -858,6 +858,7 @@ pub struct rpc_unloading_guest_driver_v1F_07 {
     pub __bindgen_padding_0: [u8; 2usize],
     pub newLevel: u32_,
 }
+pub const NV_ADDR_FBMEM: u32 = 2;
 pub const GSP_PLUGIN_BOOTLOADED: u32 = 1315261039;
 pub const VGPU_CPU_GSP_CTRL_BUFF_VERSION: u32 = 2;
 pub const VGPU_CPU_GSP_CTRL_BUFF_REGION_SIZE: u32 = 4096;

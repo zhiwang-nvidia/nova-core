@@ -1,0 +1,474 @@
+// SPDX-License-Identifier: GPL-2.0
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+//! Per-VM CeUtils guest framebuffer scrubbing.
+
+use kernel::{
+    device,
+    prelude::*,
+    time::{
+        delay::fsleep,
+        Delta,
+        Instant,
+        Monotonic, //
+    }, //
+};
+
+use crate::{
+    driver::Bar0,
+    gsp::{
+        cmdq::Cmdq,
+        vgpu_bindings as bindings, //
+    },
+    mm::{
+        bar_user::{
+            Bar1Map,
+            BarUser, //
+        },
+        vram::VramRegion,
+        GpuMm,
+        Pfn,
+        VramAddress,
+        PAGE_SIZE, //
+    },
+    num,
+    vgpu::{
+        consts::gmc,
+        instance::Gfid, //
+    }, //
+};
+
+// OpenRM `channel_utils.h` defines `NV_CEUTILS_SEMA_PAGE_MAGIC` and places
+// `NV_CEUTILS_SEMA_PAGE_PAYLOAD_OFFSET` immediately after it.
+const NV_CEUTILS_SEMA_PAGE_MAGIC: u32 = 0xce5e_5ea0;
+
+#[repr(C)]
+struct CeUtilsSemaphoreHeader {
+    magic: u32,
+    payload: u32,
+}
+
+static_assert!(size_of::<CeUtilsSemaphoreHeader>() == 8);
+
+const SEMA_PAGE_MAGIC_OFFSET: usize = core::mem::offset_of!(CeUtilsSemaphoreHeader, magic);
+const SEMA_PAGE_PAYLOAD_OFFSET: usize = core::mem::offset_of!(CeUtilsSemaphoreHeader, payload);
+
+const SCRUB_REQUEST_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+
+/// OpenRM uses a platform-dependent GPU timeout. Nova instead applies a fixed
+/// five-second host policy so that teardown cannot block a VFIO close forever;
+/// this is not a firmware ABI value.
+const SCRUB_TIMEOUT: Delta = Delta::from_secs(5);
+
+const MAGIC_HEAD: u32 = 0xdead_beef;
+const MAGIC_TAIL: u32 = 0xcafe_babe;
+
+#[repr(C)]
+#[derive(IntoBytes, zerocopy_derive::Immutable)]
+struct AllocCeutilsRequest {
+    gfid: u32,
+    fixed_chid: u32,
+    force_ceid: u32,
+    swizz_id: u32,
+}
+
+static_assert!(size_of::<AllocCeutilsRequest>() == 16);
+
+#[repr(C)]
+#[derive(FromBytes)]
+struct AllocCeutilsResponse {
+    semaphore_address: u64,
+    semaphore_aperture: u32,
+    _reserved: u32,
+}
+
+static_assert!(size_of::<AllocCeutilsResponse>() == 16);
+
+#[repr(C)]
+#[derive(IntoBytes, zerocopy_derive::Immutable)]
+struct FreeCeutilsRequest {
+    gfid: u32,
+}
+
+static_assert!(size_of::<FreeCeutilsRequest>() == 4);
+
+#[repr(C)]
+#[derive(IntoBytes, zerocopy_derive::Immutable)]
+struct ScrubGuestFbRequest {
+    gfid: u32,
+    reserved: u32,
+    fb_offset: u64,
+    fb_size: u64,
+}
+
+static_assert!(size_of::<ScrubGuestFbRequest>() == 24);
+
+#[repr(C)]
+#[derive(FromBytes)]
+struct ScrubGuestFbResponse {
+    work_id: u64,
+}
+
+static_assert!(size_of::<ScrubGuestFbResponse>() == 8);
+
+/// A firmware-owned per-VM CeUtils allocation.
+///
+/// The owner must call [`Self::release`] before returning its CHID or VRAM to
+/// their allocators.
+pub(crate) struct CeUtils {
+    gfid: Gfid,
+    chid: u32,
+    semaphore_address: u64,
+}
+
+/// Whether a failed allocation may still have transferred CHID ownership to firmware.
+pub(crate) enum CeUtilsAllocError {
+    /// A matching firmware response explicitly rejected the allocation.
+    NotOwned(Error),
+    /// The request may have completed despite a transport or response-validation error.
+    MayOwn(Error),
+}
+
+impl CeUtils {
+    /// Allocate a CeUtils channel and validate its semaphore description.
+    pub(crate) fn allocate(
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+        gfid: Gfid,
+        chid: u32,
+        swizz_id: u32,
+    ) -> core::result::Result<Self, CeUtilsAllocError> {
+        let request = AllocCeutilsRequest {
+            gfid: gfid.0.to_le(),
+            fixed_chid: chid.to_le(),
+            force_ceid: u32::MAX.to_le(),
+            swizz_id: swizz_id.to_le(),
+        };
+
+        dev_dbg!(
+            dev,
+            "alloc CeUtils: gfid={} chid={} swizz_id={}\n",
+            gfid.0,
+            chid,
+            swizz_id,
+        );
+
+        let response = cmdq
+            .send_gmc_and_receive(
+                bar,
+                gmc::ALLOC_GSP_CEUTILS,
+                <AllocCeutilsRequest as IntoBytes>::as_bytes(&request),
+                num::usize_into_u32::<{ size_of::<AllocCeutilsResponse>() }>(),
+            )
+            .map_err(CeUtilsAllocError::MayOwn)?;
+        if response.status != 0 {
+            return Err(CeUtilsAllocError::NotOwned(EIO));
+        }
+
+        (|| {
+            let bytes = response
+                .payload
+                .get(..size_of::<AllocCeutilsResponse>())
+                .ok_or(EMSGSIZE)?;
+            let response = AllocCeutilsResponse::read_from_bytes(bytes).map_err(|_| EINVAL)?;
+            let semaphore_address = u64::from_le(response.semaphore_address);
+            let semaphore_aperture = u32::from_le(response.semaphore_aperture);
+            let page_size = u64::try_from(PAGE_SIZE).map_err(|_| EOVERFLOW)?;
+
+            if semaphore_address == 0
+                || !semaphore_address.is_multiple_of(page_size)
+                || semaphore_aperture != bindings::NV_ADDR_FBMEM
+            {
+                return Err(EINVAL);
+            }
+
+            dev_dbg!(
+                dev,
+                "alloc CeUtils: gfid={} semaphore={:#x}\n",
+                gfid.0,
+                semaphore_address,
+            );
+            Ok(Self {
+                gfid,
+                chid,
+                semaphore_address,
+            })
+        })()
+        .map_err(CeUtilsAllocError::MayOwn)
+    }
+
+    /// Scrub the complete guest framebuffer and verify its boundary markers.
+    pub(crate) fn scrub_guest_fb<'gpu>(
+        &self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+        bar_user: &BarUser<'gpu>,
+        mm: &mut GpuMm<'_>,
+        fb: &VramRegion,
+    ) -> Result {
+        write_markers(bar_user, mm, dev, fb)?;
+
+        let mut offset = fb.address();
+        let end = offset.checked_add(fb.size()).ok_or(EOVERFLOW)?;
+        while offset < end {
+            let size = core::cmp::min(SCRUB_REQUEST_SIZE, end - offset);
+            let work_id = submit_scrub(dev, cmdq, bar, self.gfid, offset, size)?;
+            wait_scrub_complete(bar_user, mm, dev, self.semaphore_address, work_id)?;
+            offset = offset.checked_add(size).ok_or(EOVERFLOW)?;
+        }
+
+        verify_markers_zeroed(bar_user, mm, dev, fb)
+    }
+
+    /// Request release of the firmware allocation.
+    ///
+    /// Firmware treats this operation as idempotent, but the GMC transaction
+    /// can fail after firmware has acted. An error therefore means that release
+    /// was not confirmed, and the caller must not return the CHID for reuse.
+    pub(crate) fn release(
+        &self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+    ) -> Result {
+        dev_dbg!(
+            dev,
+            "free CeUtils: gfid={} chid={}\n",
+            self.gfid.0,
+            self.chid,
+        );
+        Self::release_gfid(dev, cmdq, bar, self.gfid)
+    }
+
+    /// Attempt an idempotent release when allocation ownership is uncertain.
+    pub(crate) fn release_gfid(
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+        gfid: Gfid,
+    ) -> Result {
+        let request = FreeCeutilsRequest {
+            gfid: gfid.0.to_le(),
+        };
+
+        dev_dbg!(dev, "free CeUtils: gfid={}\n", gfid.0);
+        cmdq.send_gmc_and_check_status(
+            bar,
+            gmc::FREE_GSP_CEUTILS,
+            <FreeCeutilsRequest as IntoBytes>::as_bytes(&request),
+        )
+    }
+}
+
+/// Submit an asynchronous guest FB scrub and return its work identifier.
+fn submit_scrub(
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq,
+    bar: Bar0<'_>,
+    gfid: Gfid,
+    fb_offset: u64,
+    fb_size: u64,
+) -> Result<u32> {
+    let request = ScrubGuestFbRequest {
+        gfid: gfid.0.to_le(),
+        reserved: 0,
+        fb_offset: fb_offset.to_le(),
+        fb_size: fb_size.to_le(),
+    };
+
+    dev_dbg!(
+        dev,
+        "submit scrub: gfid={} offset={:#x} size={:#x}\n",
+        gfid.0,
+        fb_offset,
+        fb_size,
+    );
+
+    let response = cmdq.send_gmc_and_receive(
+        bar,
+        gmc::SCRUB_GUEST_FB,
+        <ScrubGuestFbRequest as IntoBytes>::as_bytes(&request),
+        num::usize_into_u32::<{ size_of::<ScrubGuestFbResponse>() }>(),
+    )?;
+    if response.status != 0 {
+        return Err(EIO);
+    }
+
+    let bytes = response
+        .payload
+        .get(..size_of::<ScrubGuestFbResponse>())
+        .ok_or(EMSGSIZE)?;
+    let response = ScrubGuestFbResponse::read_from_bytes(bytes).map_err(|_| EINVAL)?;
+    let work_id = u32::try_from(u64::from_le(response.work_id)).map_err(|_| EOVERFLOW)?;
+    if work_id == 0 {
+        return Err(EIO);
+    }
+
+    Ok(work_id)
+}
+
+/// Poll the GSP-owned CeUtils semaphore page through a temporary BAR1 map.
+fn wait_scrub_complete<'gpu>(
+    bar_user: &BarUser<'gpu>,
+    mm: &mut GpuMm<'_>,
+    dev: &device::Device<device::Bound>,
+    semaphore_address: u64,
+    work_id: u32,
+) -> Result {
+    let pfn = Pfn::from(VramAddress::from_raw(semaphore_address));
+    let semaphore_map = bar_user.map(mm, &[pfn], false)?;
+
+    let result = (|| {
+        let magic = semaphore_map.try_read32(SEMA_PAGE_MAGIC_OFFSET)?;
+        if magic != NV_CEUTILS_SEMA_PAGE_MAGIC {
+            dev_warn!(
+                dev,
+                "bad CeUtils semaphore magic {:#x}, expected {:#x}\n",
+                magic,
+                NV_CEUTILS_SEMA_PAGE_MAGIC,
+            );
+            return Err(EIO);
+        }
+
+        let start = Instant::<Monotonic>::now();
+        loop {
+            let value = semaphore_map.try_read32(SEMA_PAGE_PAYLOAD_OFFSET)?;
+            if value.wrapping_sub(work_id) < 0x8000_0000 {
+                dev_dbg!(
+                    dev,
+                    "scrub completed after {:?}: semaphore={:#x}, target={:#x}\n",
+                    start.elapsed(),
+                    value,
+                    work_id,
+                );
+                return Ok(());
+            }
+
+            if start.elapsed() >= SCRUB_TIMEOUT {
+                dev_warn!(
+                    dev,
+                    "scrub timed out: semaphore={:#x}, target={:#x}\n",
+                    value,
+                    work_id,
+                );
+                return Err(ETIMEDOUT);
+            }
+            fsleep(Delta::from_millis(1));
+        }
+    })();
+
+    let cleanup = semaphore_map.release(mm);
+    match result {
+        Ok(()) => cleanup,
+        Err(error) => {
+            if let Err(cleanup_error) = cleanup {
+                dev_err!(
+                    dev,
+                    "failed to release semaphore BAR1 mapping after error {:?}: {:?}\n",
+                    error,
+                    cleanup_error,
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
+fn with_bar1_map<'gpu, T>(
+    bar_user: &BarUser<'gpu>,
+    mm: &mut GpuMm<'_>,
+    dev: &device::Device<device::Bound>,
+    region: VramRegion,
+    writable: bool,
+    operation: impl FnOnce(&Bar1Map<'gpu>) -> Result<T>,
+) -> Result<T> {
+    let map = Bar1Map::new(bar_user, mm, region, writable)?;
+    let result = operation(&map);
+    let cleanup = map.destroy(bar_user, mm);
+
+    match result {
+        Ok(value) => {
+            cleanup?;
+            Ok(value)
+        }
+        Err(error) => {
+            if let Err(cleanup_error) = cleanup {
+                dev_err!(
+                    dev,
+                    "failed to release temporary BAR1 mapping after error {:?}: {:?}\n",
+                    error,
+                    cleanup_error,
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
+fn marker_regions(fb: &VramRegion) -> Result<(VramRegion, VramRegion, usize)> {
+    let page_size = u64::try_from(PAGE_SIZE).map_err(|_| EOVERFLOW)?;
+    let tail_page = fb.size().checked_sub(page_size).ok_or(EINVAL)?;
+    let tail_offset = PAGE_SIZE.checked_sub(size_of::<u32>()).ok_or(EOVERFLOW)?;
+
+    Ok((
+        fb.subregion(0..page_size)?,
+        fb.subregion(tail_page..fb.size())?,
+        tail_offset,
+    ))
+}
+
+/// Write and read back markers at the first and last framebuffer dwords.
+fn write_markers<'gpu>(
+    bar_user: &BarUser<'gpu>,
+    mm: &mut GpuMm<'_>,
+    dev: &device::Device<device::Bound>,
+    fb: &VramRegion,
+) -> Result {
+    let (head_region, tail_region, tail_offset) = marker_regions(fb)?;
+
+    with_bar1_map(bar_user, mm, dev, head_region, true, |map| {
+        map.try_write32(MAGIC_HEAD, 0)?;
+        if map.try_read32(0)? != MAGIC_HEAD {
+            return Err(EIO);
+        }
+        Ok(())
+    })?;
+
+    with_bar1_map(bar_user, mm, dev, tail_region, true, |map| {
+        map.try_write32(MAGIC_TAIL, tail_offset)?;
+        if map.try_read32(tail_offset)? != MAGIC_TAIL {
+            return Err(EIO);
+        }
+        Ok(())
+    })
+}
+
+/// Verify that the first and last framebuffer dwords were zeroed.
+fn verify_markers_zeroed<'gpu>(
+    bar_user: &BarUser<'gpu>,
+    mm: &mut GpuMm<'_>,
+    dev: &device::Device<device::Bound>,
+    fb: &VramRegion,
+) -> Result {
+    let (head_region, tail_region, tail_offset) = marker_regions(fb)?;
+    let head = with_bar1_map(bar_user, mm, dev, head_region, false, |map| {
+        map.try_read32(0)
+    })?;
+    let tail = with_bar1_map(bar_user, mm, dev, tail_region, false, |map| {
+        map.try_read32(tail_offset)
+    })?;
+
+    dev_dbg!(
+        dev,
+        "scrub markers: head={:#010x}, tail={:#010x}\n",
+        head,
+        tail,
+    );
+    if head != 0 || tail != 0 {
+        return Err(EIO);
+    }
+
+    Ok(())
+}

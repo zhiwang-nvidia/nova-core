@@ -38,6 +38,10 @@ use crate::{
             PluginConfigParams,
             PluginRpc, //
         },
+        scrubber::{
+            CeUtils,
+            CeUtilsAllocError, //
+        },
         vram::{
             VgpuVramLayout,
             VgpuVramSlot,
@@ -117,11 +121,22 @@ pub(crate) struct VgpuInstance<'gpu> {
     pub(crate) vm_pid: u32,
     pub(crate) chids: ChannelIdReservation<'gpu>,
     pub(crate) num_plugin_channels: u32,
+    ceutils: CeUtils,
     pub(crate) vram_slot: VgpuVramSlot,
     pub(crate) plugin_rpc: PluginRpc<'gpu>,
 }
 
 impl<'gpu> VgpuInstance<'gpu> {
+    /// Request the idempotent firmware release of this instance's CeUtils.
+    fn release_ceutils(
+        &self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+    ) -> Result {
+        self.ceutils.release(dev, cmdq, bar)
+    }
+
     /// Unmap the plugin communication buffer and return the slot release token.
     fn unmap_and_take_slot(
         self,
@@ -136,6 +151,47 @@ impl<'gpu> VgpuInstance<'gpu> {
         plugin_rpc.destroy(bar_user, mm)?;
         Ok(vram_slot)
     }
+
+    /// Scrub the instance framebuffer with its owned CeUtils allocation.
+    pub(crate) fn scrub_guest_fb(
+        &self,
+        dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
+        bar_user: &BarUser<'gpu>,
+        mm: &mut GpuMm<'_>,
+    ) -> Result {
+        self.ceutils
+            .scrub_guest_fb(dev, cmdq, bar, bar_user, mm, &self.vram_slot.fbmem)
+    }
+}
+
+/// Keep channel IDs unavailable when firmware ownership cannot be determined.
+fn quarantine_channel_ids(chids: ChannelIdReservation<'_>) {
+    // A failed GMC response cannot distinguish a command that was never
+    // executed from one whose reply was lost, and there is no ownership query
+    // for CeUtils. Running the reservation's destructor could therefore let a
+    // second owner reuse a firmware-owned CHID. Skipping it leaves those bits
+    // reserved for the remaining lifetime of the device's channel-ID pool.
+    core::mem::forget(chids);
+}
+
+/// Keep an invariant-violating slot and its backing VRAM unavailable for reuse.
+fn quarantine_vram_slot(slot: VgpuVramSlot) {
+    // A live slot without its allocator should be impossible. If it happens,
+    // stale BAR1 mappings may still refer to this VRAM. There is no recovery
+    // path without the allocator, so permanently retaining the backing
+    // allocation is safer than exposing it again.
+    core::mem::forget(slot);
+}
+
+/// Preserve every guard when publishing a fully built instance unexpectedly fails.
+fn quarantine_instance(instance: VgpuInstance<'_>) {
+    // allocate_instance() reserves registry capacity before acquiring any
+    // resource, so this is an invariant-failure fallback. If firmware release
+    // is also unconfirmed, retaining the complete instance prevents its CHID,
+    // BAR1 mapping, and VRAM from being independently reused.
+    core::mem::forget(instance);
 }
 
 /// Identity and firmware profile used to allocate an instance.
@@ -195,9 +251,7 @@ impl<'gpu> VgpuInstances<'gpu> {
 
     fn release_vram_slot(&mut self, slot: VgpuVramSlot) {
         let Some(allocator) = self.vram_slots.as_mut() else {
-            // A live slot proves that its pool exists. If that invariant is ever broken,
-            // leaking the slot is safer than allowing its backing VRAM to be reused.
-            core::mem::forget(slot);
+            quarantine_vram_slot(slot);
             return;
         };
         allocator.release(slot);
@@ -205,9 +259,12 @@ impl<'gpu> VgpuInstances<'gpu> {
 
     /// Allocate resources, map the management communication region, and
     /// register a new inactive vGPU instance.
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn allocate_instance(
         &mut self,
         dev: &device::Device<device::Bound>,
+        cmdq: &Cmdq,
+        bar: Bar0<'_>,
         bar_user: &BarUser<'gpu>,
         mm: &mut GpuMm<'_>,
         vgpu: &VgpuManager<'gpu>,
@@ -246,12 +303,14 @@ impl<'gpu> VgpuInstances<'gpu> {
             .total_channels()
             .ok_or(ENODEV)?
             .checked_div(vgpu_type.max_instance)
-            .filter(|count| *count != 0)
+            .filter(|count| *count > 1)
             .ok_or(EINVAL)?;
         let chids = vgpu.chid_pool.reserve_ids(
             NonZeroUsize::new(usize::try_from(num_chid).map_err(|_| EOVERFLOW)?).ok_or(EINVAL)?,
             Alignment::SZ_1,
         )?;
+        let ceutils_chid =
+            u32::try_from(chids.end.checked_sub(1).ok_or(EINVAL)?).map_err(|_| EOVERFLOW)?;
         let layout = VgpuVramLayout {
             type_id: vgpu_type.vgpu_type_id,
             max_slots: vgpu_type.max_instance,
@@ -260,12 +319,58 @@ impl<'gpu> VgpuInstances<'gpu> {
             fb_align: vgpu.vmmu_segment_size().ok_or(ENODEV)?,
         };
         let vram_slot = self.alloc_vram_slot(mm, layout)?;
+        let ceutils = match CeUtils::allocate(dev, cmdq, bar, gfid, ceutils_chid, 0) {
+            Ok(ceutils) => ceutils,
+            Err(alloc_error) => {
+                let error = match alloc_error {
+                    CeUtilsAllocError::NotOwned(error) => error,
+                    CeUtilsAllocError::MayOwn(error) => {
+                        if let Err(release_error) = CeUtils::release_gfid(dev, cmdq, bar, gfid) {
+                            dev_err!(
+                                dev,
+                                "CeUtils alloc {:?}; firmware release unconfirmed: {:?}\n",
+                                error,
+                                release_error,
+                            );
+                            quarantine_channel_ids(chids);
+                        }
+                        error
+                    }
+                };
+
+                // CeUtils allocation never receives the FB address, so the slot is safe to
+                // recycle once its local regions have been dropped.
+                self.release_vram_slot(vram_slot);
+                return Err(error);
+            }
+        };
+        if let Err(error) = ceutils.scrub_guest_fb(dev, cmdq, bar, bar_user, mm, &vram_slot.fbmem) {
+            // This error may be an unmap failure, or firmware may still be scrubbing. Keep the
+            // channel reservation and slot out of their allocators in either case.
+            quarantine_channel_ids(chids);
+            dev_err!(
+                dev,
+                "retaining CeUtils and VRAM slot {} after scrub error {:?}\n",
+                vram_slot.index(),
+                error,
+            );
+            return Err(error);
+        }
         let comm = match CommBufferRegion::new(bar_user, mm, &vram_slot.mgmt_heap) {
             Ok(comm) => comm,
             Err(error) => {
                 // A failed page-table update may have installed a partial mapping without
                 // returning a handle that can unmap it. Keep the slot reserved so its backing
                 // VRAM cannot be reused while stale BAR1 PTEs may still reference it.
+                if let Err(release_error) = ceutils.release(dev, cmdq, bar) {
+                    dev_err!(
+                        dev,
+                        "BAR1 error {:?}; CeUtils release unconfirmed: {:?}\n",
+                        error,
+                        release_error,
+                    );
+                    quarantine_channel_ids(chids);
+                }
                 dev_err!(
                     dev,
                     "allocate_instance: retaining slot {} after BAR1 map error {:?}\n",
@@ -283,22 +388,32 @@ impl<'gpu> VgpuInstances<'gpu> {
             vm_pid,
             chids,
             num_plugin_channels: 3,
+            ceutils,
             vram_slot,
             plugin_rpc: PluginRpc::new(comm),
         };
         match self.instances.push_within_capacity(instance) {
             Ok(()) => Ok(gfid),
-            Err(error) => match error.0.unmap_and_take_slot(bar_user, mm) {
-                Ok(vram_slot) => {
-                    self.release_vram_slot(vram_slot);
-                    Err(EIO)
+            Err(error) => {
+                let instance = error.0;
+                if let Err(error) = instance.release_ceutils(dev, cmdq, bar) {
+                    // Firmware may still own the final CHID. Keep every host resource
+                    // quarantined rather than returning any of them to an allocator.
+                    quarantine_instance(instance);
+                    return Err(error);
                 }
-                Err(error) => Err(error),
-            },
+                match instance.unmap_and_take_slot(bar_user, mm) {
+                    Ok(vram_slot) => {
+                        self.release_vram_slot(vram_slot);
+                        Err(EIO)
+                    }
+                    Err(error) => Err(error),
+                }
+            }
         }
     }
 
-    /// Shut down and remove an instance, then release its reservations.
+    /// Shut down an instance, scrub its guest FB, and release its reservations.
     pub(crate) fn destroy_instance(
         &mut self,
         dev: &device::Device<device::Bound>,
@@ -315,6 +430,8 @@ impl<'gpu> VgpuInstances<'gpu> {
             .ok_or(ENOENT)?;
 
         shutdown(dev, cmdq, bar, gfid)?;
+        self.instances[index].scrub_guest_fb(dev, cmdq, bar, bar_user, mm)?;
+        self.instances[index].release_ceutils(dev, cmdq, bar)?;
         cleanup(dev, cmdq, bar, gfid)?;
         let instance = self.instances.remove(index).map_err(|_| EIO)?;
         let vram_slot = instance.unmap_and_take_slot(bar_user, mm)?;
@@ -376,7 +493,7 @@ pub(crate) fn activate_instance(
         instance.dbdf,
         instance.vgpu_type.vgpu_type_id,
         instance.vm_pid,
-        u32::try_from(instance.chids.len()).map_err(|_| EOVERFLOW)?,
+        u32::try_from(instance.chids.len().checked_sub(1).ok_or(EINVAL)?).map_err(|_| EOVERFLOW)?,
         instance.num_plugin_channels,
     );
     let gfid = instance.gfid;

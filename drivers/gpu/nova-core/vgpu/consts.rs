@@ -17,6 +17,12 @@ pub(crate) mod gmc {
         bindings::GMCAPI_COMMANDS_GMCAPI_CMD_SHUTDOWN_GSP_VGPU_PLUGIN_TASK_COMPLETE;
     pub(crate) const CLEANUP: u32 =
         bindings::GMCAPI_COMMANDS_GMCAPI_CMD_CLEANUP_GSP_VGPU_PLUGIN_RESOURCES;
+    pub(crate) const SCRUB_GUEST_FB: u32 =
+        bindings::GMCAPI_COMMANDS_GMCAPI_CMD_VGPU_MGR_SCRUB_GUEST_FB;
+    pub(crate) const ALLOC_GSP_CEUTILS: u32 =
+        bindings::GMCAPI_COMMANDS_GMCAPI_CMD_VGPU_MGR_ALLOC_GSP_CEUTILS;
+    pub(crate) const FREE_GSP_CEUTILS: u32 =
+        bindings::GMCAPI_COMMANDS_GMCAPI_CMD_VGPU_MGR_FREE_GSP_CEUTILS;
 }
 
 /// vGPU plugin RPC values not provided by the firmware bindings.
