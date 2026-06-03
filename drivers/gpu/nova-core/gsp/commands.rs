@@ -53,6 +53,9 @@ pub(crate) struct GetGspStaticInfoReply {
     pub(crate) usable_fb_regions: KVec<Range<u64>>,
     /// Exclusive end of the FB physical address space.
     pub(crate) total_fb_end: u64,
+    /// VMMU segment size in bytes, or zero if GSP-RM omitted it.
+    #[expect(dead_code)]
+    pub(crate) vmmu_segment_size: u64,
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -276,6 +279,7 @@ fn decode_gsp_info(words: &[u64]) -> Result<GetGspStaticInfoReply> {
         bar1_pde_base: decoded.bar1_pde_base(),
         usable_fb_regions,
         total_fb_end: decoded.total_fb_end().ok_or(EINVAL)?,
+        vmmu_segment_size: decoded.vmmu_segment_size(),
     })
 }
 

@@ -367,6 +367,11 @@ impl GspInitResponse {
             .max()?
             .checked_add(1)
     }
+
+    /// Returns the VMMU segment size in bytes, or zero if GSP-RM omitted it.
+    pub(in crate::gsp) const fn vmmu_segment_size(&self) -> u64 {
+        self.vmmu_segment_size
+    }
 }
 
 nvkv_decode! {
