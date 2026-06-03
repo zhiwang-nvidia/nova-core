@@ -253,10 +253,10 @@ pub(crate) fn gsp_init(
         if remaining.is_negative() {
             return Err(ETIMEDOUT);
         }
-        let reply = cmdq.receive_gmc_and_dispatch(
+        let reply = match cmdq.receive_gmc_and_dispatch(
             bar,
             remaining,
-            |id, status, p0, p1| -> Result<Option<GetGspStaticInfoReply>> {
+            |id, status, _sequence, p0, p1| -> Result<Option<GetGspStaticInfoReply>> {
                 if id == CMD_GSP_INIT {
                     if status != 0 {
                         return Err(EIO);
@@ -271,7 +271,11 @@ pub(crate) fn gsp_init(
                     Ok(None)
                 }
             },
-        )??;
+        ) {
+            Ok(reply) => reply?,
+            Err(ERANGE) => continue,
+            Err(error) => return Err(error),
+        };
 
         if let Some(reply) = reply {
             return Ok(reply);
