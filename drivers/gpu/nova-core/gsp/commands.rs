@@ -46,6 +46,9 @@ const GSP_INIT_MAX_RESPONSE_SIZE: u32 = 8192;
 /// Matches `GMCAPI_COMMANDS_GMCAPI_CMD_GSP_INIT` in the r000 bindings.
 const CMD_GSP_INIT: u32 = 0x0001_0001;
 
+/// Number of GMC engine types, from `NONE` through `OFA`.
+pub(crate) const NVGMC_ENGINE_TYPE_COUNT: usize = 20;
+
 /// Hardcoded registry entries the driver always sends to GSP-RM.
 ///
 /// `RMSecBusResetEnable` enables PCI secondary bus reset. `RMForcePcieConfigSave`
@@ -67,6 +70,10 @@ pub(crate) struct GetGspStaticInfoReply {
     pub(crate) usable_fb_regions: KVec<Range<u64>>,
     /// End of VRAM.
     pub(crate) total_fb_end: u64,
+    /// VMMU segment size reported by GSP-RM, in bytes.
+    pub(crate) vmmu_segment_size: u64,
+    /// Available instances for each GMC engine type.
+    pub(crate) gmc_engine_masks: [u64; NVGMC_ENGINE_TYPE_COUNT],
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -110,12 +117,16 @@ fn decode_gsp_info(payload: &[u8]) -> Result<GetGspStaticInfoReply> {
         usable_fb_regions.push(region, GFP_KERNEL)?;
     }
     let total_fb_end = decoded.total_fb_end().ok_or(ENODEV)?;
+    let vmmu_segment_size = decoded.vmmu_segment_size();
+    let gmc_engine_masks = *decoded.gmc_engine_masks();
 
     Ok(GetGspStaticInfoReply {
         gpu_name,
         bar1_pde_base: decoded.bar1_pde_base(),
         usable_fb_regions,
         total_fb_end,
+        vmmu_segment_size,
+        gmc_engine_masks,
     })
 }
 

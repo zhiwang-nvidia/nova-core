@@ -21,6 +21,9 @@ use kernel::{
     }, //
 };
 
+/// Total channel ID capacity available to vGPU instances.
+pub(crate) const TOTAL_CHANNELS: u32 = 2048;
+
 /// Pool for tracking reservations of channel IDs.
 #[pin_data]
 pub(crate) struct ChannelIdPool {

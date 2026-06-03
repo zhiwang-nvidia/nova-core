@@ -524,6 +524,16 @@ impl GspInitResponse {
             .filter_map(|region| region.limit.checked_add(1))
             .max()
     }
+
+    /// Returns the VMMU segment size reported by GSP-RM.
+    pub(super) const fn vmmu_segment_size(&self) -> u64 {
+        self.vmmu_segment_size
+    }
+
+    /// Returns the available-instance masks indexed by GMC engine type.
+    pub(super) const fn gmc_engine_masks(&self) -> &[u64; Self::NVGMC_ENGINE_TYPE_COUNT] {
+        &self.gmc_engine_masks
+    }
 }
 
 nvkv_decode! {
@@ -981,7 +991,10 @@ mod tests {
         assert_eq!(fb_region1.limit, FB_REGION1_LIMIT);
         assert_eq!(fb_region1.flags.into_raw(), FB_REGION1_FLAGS);
         assert_eq!(fb_region1.tag, FB_REGION1_TAG);
-        assert_eq!(response.gmc_engine_masks.get(1).copied(), Some(ENGINE_MASK));
+        assert_eq!(
+            response.gmc_engine_masks().get(1).copied(),
+            Some(ENGINE_MASK)
+        );
 
         Ok(())
     }
