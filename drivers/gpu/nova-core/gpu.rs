@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use core::ops::Range;
+use core::{
+    num::NonZero,
+    ops::Range, //
+};
 
 use kernel::{
     device,
@@ -371,9 +374,28 @@ impl<'gpu> Gpu<'gpu> {
     }
 
     /// Returns the firmware build identifier, if one was reported.
-    #[expect(dead_code)]
     pub(crate) fn build_id(&self) -> Option<&firmware::BuildId> {
         self.gsp_resources.gsp.build_id()
+    }
+
+    pub(crate) fn vgpu_manager(&self) -> &VgpuManager<'gpu> {
+        &self.vgpu
+    }
+
+    pub(crate) fn vgpu_total_vfs(&self) -> Option<NonZero<u16>> {
+        self.vgpu.total_vfs()
+    }
+
+    pub(crate) fn mm(&self) -> &GpuMm<'gpu> {
+        &self.mm
+    }
+
+    pub(crate) fn bar_user(&self) -> &BarUser<'gpu> {
+        &self.bar_user
+    }
+
+    pub(crate) fn bar0(&self) -> Bar0<'gpu> {
+        self.gsp_resources.bar
     }
 
     pub(crate) fn new(
