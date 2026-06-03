@@ -28,6 +28,11 @@ use crate::{
 /// Maximum response size for the `GSP_INIT` reply.
 const GSP_INIT_MAX_RESPONSE_SIZE: u32 = 8192;
 
+/// Number of GMC engine types (NONE through OFA).
+///
+/// Mirrors `NVGMC_ENGINE_TYPE_COUNT` from `gmcapi_engine_types.h`.
+pub(crate) const NVGMC_ENGINE_TYPE_COUNT: usize = 20;
+
 /// The reply from the GSP to the `GSP_INIT` GMC command.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
@@ -37,6 +42,13 @@ pub(crate) struct GetGspStaticInfoReply {
     pub(crate) usable_fb_region: Range<u64>,
     /// End of physical VRAM (exclusive), covering all FB regions.
     pub(crate) total_fb_end: u64,
+    /// VMMU segment size reported by GSP-RM (bytes).
+    pub(crate) vmmu_segment_size: u64,
+    /// Per-GMC-engine-type bitmask of available engine instances.
+    ///
+    /// Indexed by `NVGMC_ENGINE_TYPE` (GR=1, COPY=2, ..., OFA=19).
+    /// Each `u64` is a bitmask where bit N means engine instance N exists.
+    pub(crate) gmc_engine_masks: [u64; NVGMC_ENGINE_TYPE_COUNT],
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -211,11 +223,31 @@ pub(crate) fn gsp_init(
                     let total_fb_end = total_fb_end(&blob)?
                         .ok_or(ENODEV)?;
 
+                    let vmmu_segment_size = nvkv::find_seq64_indexed(
+                        &blob,
+                        nvkv::gsp_config_key::VMMU_SEGMENT_SIZE,
+                        0,
+                    )?
+                    .unwrap_or(0);
+
+                    let mut gmc_engine_masks = [0u64; NVGMC_ENGINE_TYPE_COUNT];
+                    for (i, slot) in gmc_engine_masks.iter_mut().enumerate() {
+                        if let Some(mask) = nvkv::find_seq64_indexed(
+                            &blob,
+                            nvkv::gsp_config_key::ENGINE_MASK,
+                            i as u16,
+                        )? {
+                            *slot = mask;
+                        }
+                    }
+
                     Ok(Some(GetGspStaticInfoReply {
                         gpu_name,
                         bar1_pde_base,
                         usable_fb_region,
                         total_fb_end,
+                        vmmu_segment_size,
+                        gmc_engine_masks,
                     }))
                 } else {
                     on_boot_event(id, p0)?;
