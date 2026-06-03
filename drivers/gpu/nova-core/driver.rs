@@ -35,6 +35,12 @@ use crate::{
     }, //
 };
 
+#[cfg(CONFIG_PCI_IOV)]
+use kernel::types::ForLt;
+
+#[cfg(CONFIG_PCI_IOV)]
+use crate::vgpu::vgpu_api::NovaCoreVfApi;
+
 /// Counter for generating unique auxiliary device IDs.
 static AUXILIARY_ID_COUNTER: Atomic<u32> = Atomic::new(0);
 
@@ -42,6 +48,10 @@ static AUXILIARY_ID_COUNTER: Atomic<u32> = Atomic::new(0);
 pub(crate) struct NovaCore<'bound> {
     /// Firmware-control registration.
     _fwctl: fwctl::Registration<'bound, NovaCoreFwCtl>,
+    #[cfg(CONFIG_PCI_IOV)]
+    #[allow(clippy::type_complexity)]
+    #[pin]
+    _vf_registration: pci::VfRegistration<'bound, ForLt!(NovaCoreVfApi<'_>)>,
     #[pin]
     pub(crate) gpu: Gpu<'bound>,
     bar: pci::Bar<'bound, BAR0_SIZE>,
@@ -114,6 +124,11 @@ impl pci::Driver for NovaCoreDriver {
         pin_init::pin_init_scope(move || {
             dev_dbg!(pdev, "Probe Nova Core GPU driver.\n");
 
+            #[cfg(CONFIG_PCI_IOV)]
+            if pdev.is_virtfn() {
+                return Err(ENODEV);
+            }
+
             pdev.enable_device_mem()?;
             pdev.set_master();
 
@@ -144,6 +159,18 @@ impl pci::Driver for NovaCoreDriver {
                 // Run optional GPU selftests.
                 #[cfg(CONFIG_NOVA_CORE_SELFTESTS)]
                 _: { gpu.run_selftests(pdev) },
+                #[cfg(CONFIG_PCI_IOV)]
+                _vf_registration <- {
+                    // SAFETY: `gpu` is initialized at its pinned address and
+                    // outlives the registration and its borrowed API data.
+                    let gpu = unsafe { &(*this.as_ptr()).gpu };
+                    let api = NovaCoreVfApi::new(gpu, pdev);
+                    // SAFETY: Probe has exclusive access to the registration
+                    // slot and no VFs are enabled before successful probe. The
+                    // registration keeps PF services available until VF removal
+                    // completes and is dropped before its borrowed GPU resources.
+                    unsafe { pci::VfRegistration::new(pdev, Ok(api)) }
+                },
                 _reg: auxiliary::Registration::new(
                     pdev.as_ref(),
                     c"nova-drm",
@@ -175,5 +202,25 @@ impl pci::Driver for NovaCoreDriver {
                 },
             }))
         })
+    }
+
+    #[cfg(CONFIG_PCI_IOV)]
+    fn sriov_enable<'bound, 'callback>(
+        _dev: &'bound pci::Device<Core<'_>>,
+        _this: Pin<&Self::Data<'bound>>,
+        token: pci::SriovEnable<'callback>,
+    ) -> Result<pci::SriovEnabled<'callback>> {
+        let num_vfs = token.num_vfs();
+        token.enable(num_vfs)
+    }
+
+    #[cfg(CONFIG_PCI_IOV)]
+    fn sriov_disable<'bound>(
+        _dev: &'bound pci::Device<Core<'_>>,
+        _this: Pin<&Self::Data<'bound>>,
+        token: pci::SriovDisable<'_>,
+    ) -> Result {
+        token.disable();
+        Ok(())
     }
 }
