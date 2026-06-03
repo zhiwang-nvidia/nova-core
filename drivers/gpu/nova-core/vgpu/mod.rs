@@ -2,10 +2,17 @@
 
 use core::num::NonZero;
 
+pub(crate) mod consts;
+pub(crate) mod instance;
+
+pub(crate) use self::instance::VgpuInstances;
+
 use kernel::{
     device,
+    new_mutex,
     pci,
-    prelude::*, //
+    prelude::*,
+    sync::Mutex, //
 };
 
 use crate::{
@@ -37,9 +44,12 @@ pub(crate) enum VgpuState {
 }
 
 /// vGPU state manager.
+#[pin_data(PinnedDrop)]
 pub(crate) struct VgpuManager<'gpu> {
+    /// Live vGPU instances owned by this manager.
+    #[pin]
+    instances: Mutex<VgpuInstances<'gpu>>,
     /// Channel ID pool the per-VF areas are reserved from.
-    #[expect(dead_code)]
     pub(crate) chid_pool: &'gpu ChannelIdPool,
     state: VgpuState,
     vmmu_segment_size: Option<u64>,
@@ -49,19 +59,20 @@ pub(crate) struct VgpuManager<'gpu> {
 
 impl<'gpu> VgpuManager<'gpu> {
     /// Creates an empty vGPU manager for initialization during GPU construction.
-    pub(crate) const fn new(chid_pool: &'gpu ChannelIdPool) -> Self {
-        Self {
+    pub(crate) fn new(chid_pool: &'gpu ChannelIdPool) -> impl PinInit<Self> + 'gpu {
+        pin_init!(Self {
+            instances <- new_mutex!(VgpuInstances::new(), "nova-core::vgpu-instances"),
             chid_pool,
             state: VgpuState::Disabled,
             vmmu_segment_size: None,
             total_channels: None,
             engine_masks: None,
-        }
+        })
     }
 
     /// Detects and stores vGPU state before GSP boot.
     pub(crate) fn detect_state(
-        &mut self,
+        self: Pin<&mut Self>,
         pdev: &pci::Device<device::Core<'_>>,
         chipset: Chipset,
         fsp: Option<&mut Fsp<'_>>,
@@ -90,7 +101,7 @@ impl<'gpu> VgpuManager<'gpu> {
             }
         })();
 
-        self.state = state.unwrap_or_else(|e| {
+        let state = state.unwrap_or_else(|e| {
             dev_warn!(
                 pdev,
                 "vGPU state detection failed: {:?}; disabling vGPU\n",
@@ -98,7 +109,9 @@ impl<'gpu> VgpuManager<'gpu> {
             );
             VgpuState::Disabled
         });
-        dev_dbg!(pdev, "vGPU state: {:?}\n", self.state);
+        let this = self.project();
+        *this.state = state;
+        dev_dbg!(pdev, "vGPU state: {:?}\n", state);
     }
 
     /// Returns the detected vGPU state for this boot.
@@ -108,16 +121,23 @@ impl<'gpu> VgpuManager<'gpu> {
 
     /// Initializes the runtime parameters returned by GSP_INIT.
     pub(crate) fn init(
-        &mut self,
+        self: Pin<&mut Self>,
         gmc_engine_masks: &[u64; NVGMC_ENGINE_TYPE_COUNT],
         vmmu_segment_size: u64,
         total_channels: u32,
     ) {
-        if matches!(self.state, VgpuState::Enabled { .. }) {
-            self.vmmu_segment_size = Some(vmmu_segment_size);
-            self.total_channels = Some(total_channels);
-            self.engine_masks = Some(*gmc_engine_masks);
+        let this = self.project();
+        if matches!(*this.state, VgpuState::Enabled { .. }) {
+            *this.vmmu_segment_size = Some(vmmu_segment_size);
+            *this.total_channels = Some(total_channels);
+            *this.engine_masks = Some(*gmc_engine_masks);
         }
+    }
+
+    /// Returns the live-instance registry.
+    #[expect(dead_code)]
+    pub(crate) fn instances(&self) -> &Mutex<VgpuInstances<'gpu>> {
+        &self.instances
     }
 
     /// Returns the firmware-reported VMMU segment size when vGPU is enabled.
@@ -126,7 +146,6 @@ impl<'gpu> VgpuManager<'gpu> {
     }
 
     /// Returns the number of channel IDs available to vGPU instances.
-    #[expect(dead_code)]
     pub(crate) const fn total_channels(&self) -> Option<u32> {
         self.total_channels
     }
@@ -135,5 +154,17 @@ impl<'gpu> VgpuManager<'gpu> {
     #[expect(dead_code)]
     pub(crate) fn engine_masks(&self) -> Result<&[u64; NVGMC_ENGINE_TYPE_COUNT]> {
         self.engine_masks.as_ref().ok_or(ENODEV)
+    }
+}
+
+#[pinned_drop]
+impl PinnedDrop for VgpuManager<'_> {
+    fn drop(self: Pin<&mut Self>) {
+        let this = self.project();
+        let count = this.instances.lock().len();
+
+        if count != 0 {
+            kernel::pr_warn!("VgpuManager dropped with {} live instance(s)\n", count);
+        }
     }
 }

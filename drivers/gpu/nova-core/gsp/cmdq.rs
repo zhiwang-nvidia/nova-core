@@ -651,9 +651,9 @@ struct GmcMessage<'a> {
 /// Response from a GMC API command.
 ///
 /// Returned by [`Cmdq::send_gmc_and_receive`].
-#[expect(dead_code)]
 pub(crate) struct GmcResponse {
     /// The 24-bit GMC command identifier from the response (flags stripped).
+    #[expect(dead_code)]
     pub(crate) command: u32,
     /// Response status (`NV_STATUS` code). Zero means success.
     pub(crate) status: u32,
@@ -843,7 +843,6 @@ impl Cmdq {
     /// - `EMSGSIZE` if the command exceeds the maximum queue element size.
     /// - `ETIMEDOUT` if space is not available or the response is not received in time.
     /// - `ENOMEM` if the response payload buffer cannot be allocated.
-    #[expect(dead_code)]
     pub(crate) fn send_gmc_and_receive(
         &self,
         bar: Bar0<'_>,

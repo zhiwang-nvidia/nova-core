@@ -105,7 +105,7 @@ impl super::Gsp {
     pub(crate) fn boot(
         self: Pin<&mut Self>,
         mut ctx: super::GspBootContext<'_, '_>,
-        vgpu: &mut VgpuManager<'_>,
+        mut vgpu: Pin<&mut VgpuManager<'_>>,
     ) -> Result<super::BootResult> {
         let pdev = ctx.pdev;
         let bar = ctx.bar;
@@ -149,7 +149,7 @@ impl super::Gsp {
         };
         GspArgumentsPadded::set_bindata(&self.rmargs, bindata.as_ref());
 
-        let fb_layout = FbLayout::new(chipset, bar, &gsp_fw, vgpu.state())?;
+        let fb_layout = FbLayout::new(chipset, bar, &gsp_fw, vgpu.as_ref().state())?;
         dev_dbg!(dev, "{:#x?}\n", fb_layout);
 
         let wpr_meta = Coherent::init(dev, GFP_KERNEL, GspFwWprMeta::new(&gsp_fw, &fb_layout))?;
@@ -190,7 +190,7 @@ impl super::Gsp {
         // synchronous GSP_INIT reply arrives only after GSP-RM is fully up,
         // and any LOAD_EXEC events GSP-RM raises in the meantime are
         // dispatched inline by the GMC boot-event handler.
-        let init_payload = commands::build_gsp_init_payload(pdev, chipset, vgpu.state())?;
+        let init_payload = commands::build_gsp_init_payload(pdev, chipset, vgpu.as_ref().state())?;
         let bootloader_app_version = gsp_fw.bootloader.app_version;
         let libos_dma_handle = self.libos.dma_handle();
         let static_info = commands::gsp_init(&self.cmdq, bar, &init_payload, |id, payload| {
@@ -206,7 +206,7 @@ impl super::Gsp {
             )
         })?;
 
-        vgpu.init(
+        vgpu.as_mut().init(
             &static_info.gmc_engine_masks,
             static_info.vmmu_segment_size,
             TOTAL_CHANNELS,
