@@ -26,7 +26,8 @@ use crate::{
                 GspInitResponse,
                 GspInitResponseSchema,
                 RegKey,
-                VfInfo, //
+                VfInfo,
+                MAX_FIFO_ENGINES, //
             },
             GMCAPI_CMD_GSP_INIT,
             GMCAPI_CMD_GSP_SUSPEND, //
@@ -44,6 +45,28 @@ use crate::{
     vgpu::VgpuState, //
 };
 
+/// Bit mask for `NVGMC_SC_ENGINE_FLAGS_IS_HOST_DRIVEN`.
+const ENGINE_FLAGS_IS_HOST_DRIVEN: u32 = 1 << 0;
+
+/// Host-driven GMC engine IDs in hardware FIFO order, including any repeated IDs.
+///
+/// # Invariants
+///
+/// `count` is at most [`MAX_FIFO_ENGINES`]. The first `count` slots are the retained engine IDs.
+#[derive(Copy, Clone)]
+pub(crate) struct FifoEngineList {
+    gmc_ids: [u32; MAX_FIFO_ENGINES],
+    count: usize,
+}
+
+impl FifoEngineList {
+    #[expect(dead_code)]
+    pub(crate) fn gmc_ids(&self) -> &[u32] {
+        // PANIC: The type invariant bounds `count` by the array capacity.
+        &self.gmc_ids[..self.count]
+    }
+}
+
 /// The static GPU configuration, as decoded from the `GSP_INIT` reply.
 pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
@@ -56,6 +79,8 @@ pub(crate) struct GetGspStaticInfoReply {
     /// VMMU segment size in bytes, or zero if GSP-RM omitted it.
     #[expect(dead_code)]
     pub(crate) vmmu_segment_size: u64,
+    #[expect(dead_code)]
+    pub(crate) fifo_engine_list: FifoEngineList,
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -274,12 +299,32 @@ fn decode_gsp_info(words: &[u64]) -> Result<GetGspStaticInfoReply> {
         usable_fb_regions.push(region, GFP_KERNEL)?;
     }
 
+    // INVARIANT: The list starts empty and appends at most one ID per supported input slot.
+    let mut fifo_engine_list = FifoEngineList {
+        gmc_ids: [0; MAX_FIFO_ENGINES],
+        count: 0,
+    };
+    for (&gmc_id, &flags) in decoded
+        .fifo_engine_gmc_ids()
+        .iter()
+        .zip(decoded.fifo_engine_flags())
+        .take(decoded.fifo_engine_count())
+    {
+        if flags & ENGINE_FLAGS_IS_HOST_DRIVEN != 0 {
+            // PANIC: At most one slot is filled per input, and the input has at most
+            // MAX_FIFO_ENGINES entries, so the next retained ID always fits.
+            fifo_engine_list.gmc_ids[fifo_engine_list.count] = gmc_id;
+            fifo_engine_list.count += 1;
+        }
+    }
+
     Ok(GetGspStaticInfoReply {
         gpu_name,
         bar1_pde_base: decoded.bar1_pde_base(),
         usable_fb_regions,
         total_fb_end: decoded.total_fb_end().ok_or(EINVAL)?,
         vmmu_segment_size: decoded.vmmu_segment_size(),
+        fifo_engine_list,
     })
 }
 

@@ -12,7 +12,10 @@ use kernel::{
     transmute::AsBytes, //
 };
 
-use crate::gpu::Chipset;
+use crate::{
+    gpu::Chipset,
+    num, //
+};
 
 use crate::gsp::nvkv::{
     nvkv_decode,
@@ -22,6 +25,7 @@ use crate::gsp::nvkv::{
     DecoderValue,
     Encodable,
     Encoder,
+    Indexed,
     Key,
     KeyId,
     Required, //
@@ -286,6 +290,8 @@ impl GspInitRequest {
 
 // Decode:
 
+pub(in crate::gsp) const MAX_FIFO_ENGINES: usize = 64;
+
 // Should decode with UnknownKeyPolicy::Ignore.
 nvkv_decode! {
     /// Schema for the `GSP_INIT` response.
@@ -298,6 +304,9 @@ nvkv_decode! {
         fb_regions: Accumulated<FbRegionSchema>,
         bar1_pde_base: Required<u64, { Self::BAR1_PDE_BASE_KEY }>,
         vmmu_segment_size: Key<u64, { Self::VMMU_SEGMENT_SIZE_KEY }>,
+        fifo_engine_count: Key<u32, { Self::FIFO_ENGINE_COUNT_KEY }>,
+        fifo_engine_gmc_ids: Indexed<u32, MAX_FIFO_ENGINES, { Self::FIFO_ENGINE_GMC_ID_KEY }>,
+        fifo_engine_flags: Indexed<u32, MAX_FIFO_ENGINES, { Self::FIFO_ENGINE_FLAGS_KEY }>,
     }
 }
 
@@ -306,6 +315,9 @@ impl GspInitResponseSchema {
     const GPU_NAME_STRING_KEY: KeyId = 0x2000;
     const BAR1_PDE_BASE_KEY: KeyId = 0x1020;
     const VMMU_SEGMENT_SIZE_KEY: KeyId = 0x1050;
+    const FIFO_ENGINE_COUNT_KEY: KeyId = 0x0500;
+    const FIFO_ENGINE_GMC_ID_KEY: KeyId = 0x0501;
+    const FIFO_ENGINE_FLAGS_KEY: KeyId = 0x0502;
 }
 
 /// Payload of the `GSP_INIT` response.
@@ -315,6 +327,9 @@ pub(crate) struct GspInitResponse {
     fb_regions: KVVec<FbRegion>,
     bar1_pde_base: u64,
     vmmu_segment_size: u64,
+    fifo_engine_count: u32,
+    fifo_engine_gmc_ids: [u32; MAX_FIFO_ENGINES],
+    fifo_engine_flags: [u32; MAX_FIFO_ENGINES],
 }
 
 impl GspInitResponse {
@@ -371,6 +386,23 @@ impl GspInitResponse {
     /// Returns the VMMU segment size in bytes, or zero if GSP-RM omitted it.
     pub(in crate::gsp) const fn vmmu_segment_size(&self) -> u64 {
         self.vmmu_segment_size
+    }
+
+    /// Returns the FIFO engine count, limited to the supported table capacity.
+    ///
+    /// An omitted count is zero. Indexed entries outside the capacity are rejected during decode.
+    pub(in crate::gsp) fn fifo_engine_count(&self) -> usize {
+        num::u32_as_usize(self.fifo_engine_count).min(MAX_FIFO_ENGINES)
+    }
+
+    /// Returns GMC engine IDs by hardware FIFO order; omitted slots contain zero.
+    pub(in crate::gsp) fn fifo_engine_gmc_ids(&self) -> &[u32; MAX_FIFO_ENGINES] {
+        &self.fifo_engine_gmc_ids
+    }
+
+    /// Returns per-engine flags by hardware FIFO order; omitted slots contain zero.
+    pub(in crate::gsp) fn fifo_engine_flags(&self) -> &[u32; MAX_FIFO_ENGINES] {
+        &self.fifo_engine_flags
     }
 }
 
