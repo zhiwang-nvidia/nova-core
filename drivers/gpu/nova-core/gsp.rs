@@ -24,6 +24,7 @@ use kernel::{
 pub(crate) mod cmdq;
 pub(crate) mod commands;
 mod fw;
+#[expect(dead_code, unused_imports, unused_macros)]
 mod nvkv;
 mod regs;
 mod sequencer;
