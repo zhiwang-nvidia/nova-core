@@ -283,6 +283,73 @@ impl VgpuBootloadRequest {
     const MIG_RM_HEAP_LENGTH_KEY: KeyId = 0x100E;
 }
 
+// VGPU_MGMT_QUERY_PROPERTIES
+
+nvkv_decode! {
+    #[derive(Default)]
+    struct VgpuPropertiesSchema => VgpuProperties {
+        // TODO: `name`/`class` required?
+        name: Array<u8, { VgpuProperties::STRING_LEN }, { Self::TYPE_NAME_KEY }>,
+        class: Array<u8, { VgpuProperties::STRING_LEN }, { Self::CLASS_KEY }>,
+        type_id: Required<u32, { Self::TYPE_ID_KEY }>,
+        bar1_length: Required<u64, { Self::BAR1_LENGTH_KEY }>,
+        max_instance: Required<u32, { Self::MAX_INSTANCE_KEY }>,
+        ecc: Key<u32, { Self::ECC_KEY }>,
+        profile_size: Required<u64, { Self::PROFILE_SIZE_KEY }>,
+        max_fps: Key<u32, { Self::MAX_FPS_KEY }>,
+        num_heads: Key<u32, { Self::NUM_HEADS_KEY }>,
+        max_res_x: Key<u32, { Self::MAX_RES_X_KEY }>,
+        max_res_y: Key<u32, { Self::MAX_RES_Y_KEY }>,
+        dev_id: Required<u32, { Self::DEV_ID_KEY }>,
+        subsystem_id: Required<u32, { Self::SUBSYSTEM_ID_KEY }>,
+        fb_length: Required<u64, { Self::FB_LENGTH_KEY }>,
+        gsp_heap_size: Required<u64, { Self::GSP_HEAP_SIZE_KEY }>,
+        fb_reservation: Required<u64, { Self::FB_RESERVATION_KEY }>,
+    }
+}
+
+impl VgpuPropertiesSchema {
+    const TYPE_NAME_KEY: KeyId = 0x3100;
+    const CLASS_KEY: KeyId = 0x3101;
+    const TYPE_ID_KEY: KeyId = 0x3102;
+    const BAR1_LENGTH_KEY: KeyId = 0x3103;
+    const MAX_INSTANCE_KEY: KeyId = 0x3104;
+    const ECC_KEY: KeyId = 0x3105;
+    const PROFILE_SIZE_KEY: KeyId = 0x3106;
+    const MAX_FPS_KEY: KeyId = 0x3107;
+    const NUM_HEADS_KEY: KeyId = 0x3108;
+    const MAX_RES_X_KEY: KeyId = 0x3109;
+    const MAX_RES_Y_KEY: KeyId = 0x310A;
+    const DEV_ID_KEY: KeyId = 0x310B;
+    const SUBSYSTEM_ID_KEY: KeyId = 0x310C;
+    const FB_LENGTH_KEY: KeyId = 0x310D;
+    const GSP_HEAP_SIZE_KEY: KeyId = 0x310E;
+    const FB_RESERVATION_KEY: KeyId = 0x310F;
+}
+
+struct VgpuProperties {
+    name: ArrayVec<u8, { Self::STRING_LEN }>,
+    class: ArrayVec<u8, { Self::STRING_LEN }>,
+    type_id: u32,
+    bar1_length: u64,
+    max_instance: u32,
+    ecc: u32,
+    profile_size: u64,
+    max_fps: u32,
+    num_heads: u32,
+    max_res_x: u32,
+    max_res_y: u32,
+    dev_id: u32,
+    subsystem_id: u32,
+    fb_length: u64,
+    gsp_heap_size: u64,
+    fb_reservation: u64,
+}
+
+impl VgpuProperties {
+    const STRING_LEN: usize = 64;
+}
+
 // SETUP_CONFIG_PARAMS_AND_INIT
 
 nvkv_encode! {
@@ -333,8 +400,92 @@ impl PluginSetBmeRequest {
     const BME_ENABLE_KEY: KeyId = 0x0100;
 }
 
+// Decode:
+
+// Should decode with UnknownKeyPolicy::Ignore.
+nvkv_decode! {
+    #[derive(Default)]
+    struct GspInitResponseSchema => GspInitResponse {
+        gpu_name:
+            Array<u8, { GspInitResponse::MAX_GPU_NAME_LEN }, { Self::GPU_NAME_STRING_KEY }>,
+        fb_regions: Accumulated<FbRegionSchema>,
+        bar1_pde_base: Required<u64, { Self::BAR1_PDE_BASE_KEY }>,
+        vmmu_segment_size: Key<u64, { Self::VMMU_SEGMENT_SIZE_KEY }>,
+        gmc_engine_masks:
+            Indexed<u64, { GspInitResponse::NVGMC_ENGINE_TYPE_COUNT }, { Self::ENGINE_MASK_KEY }>,
+    }
+}
+
+impl GspInitResponseSchema {
+    #[expect(dead_code)]
+    const FB_REGION_COUNT_KEY: KeyId = 0x0010;
+    const GPU_NAME_STRING_KEY: KeyId = 0x2000;
+    const BAR1_PDE_BASE_KEY: KeyId = 0x1020;
+    const VMMU_SEGMENT_SIZE_KEY: KeyId = 0x1050;
+    const ENGINE_MASK_KEY: KeyId = 0x1100;
+}
+
+struct GspInitResponse {
+    gpu_name: ArrayVec<u8, { Self::MAX_GPU_NAME_LEN }>,
+    fb_regions: KVVec<FbRegion>,
+    bar1_pde_base: u64,
+    vmmu_segment_size: u64,
+    gmc_engine_masks: [u64; Self::NVGMC_ENGINE_TYPE_COUNT],
+}
+
+impl GspInitResponse {
+    const MAX_GPU_NAME_LEN: usize = 64;
+    const NVGMC_ENGINE_TYPE_COUNT: usize = 20;
+}
+
+nvkv_decode! {
+    #[derive(Default)]
+    struct FbRegionSchema => FbRegion {
+        base: Required<u64, { Self::BASE_KEY }>,
+        limit: Required<u64, { Self::LIMIT_KEY }>,
+        flags: Required<FbRegionFlags, { Self::FLAGS_KEY }>,
+        tag: Required<u32, { Self::TAG_KEY }>,
+    }
+}
+
+impl FbRegionSchema {
+    const BASE_KEY: KeyId = 0x1011;
+    const LIMIT_KEY: KeyId = 0x1012;
+    const FLAGS_KEY: KeyId = 0x0012;
+    const TAG_KEY: KeyId = 0x0013;
+}
+
+bitfield! {
+    struct FbRegionFlags(u32) {
+        0:0 support_compressed => bool;
+        1:1 support_iso => bool;
+        2:2 protected => bool;
+    }
+}
+
+impl TryFrom<DecoderValue<'_>> for FbRegionFlags {
+    type Error = Error;
+
+    fn try_from(value: DecoderValue<'_>) -> Result<Self> {
+        if let DecoderValue::Scalar32(v) = value {
+            Ok(v.into())
+        } else {
+            Err(EINVAL)
+        }
+    }
+}
+
+struct FbRegion {
+    base: u64,
+    limit: u64,
+    flags: FbRegionFlags,
+    tag: u32,
+}
+
 #[kunit_tests(nova_core_nvkv)]
 mod tests {
+    use pin_init::stack_try_pin_init;
+
     use super::*;
 
     #[test]
@@ -496,6 +647,253 @@ mod tests {
         encoder.encode_array8(KEY, index, &[0x12, 0x34, 0x56])?;
         encoder.encode_array32(KEY, index, &[0x0123_4567, 0x89ab_cdef])?;
         encoder.encode_array64(KEY, index, &[0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210])?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn decode_test() -> Result {
+        const SCALAR32_KEY: KeyId = 0x1234;
+        const SCALAR64_KEY: KeyId = 0x1235;
+        const ARRAY8_KEY: KeyId = 0x1236;
+        const ARRAY32_KEY: KeyId = 0x1237;
+        const ARRAY64_KEY: KeyId = 0x1238;
+
+        const SCALAR32_VALUE: u32 = 0x89ab_cdef;
+        const SCALAR64_VALUE: u64 = 0x0123_4567_89ab_cdef;
+        const ARRAY8_VALUE: &[u8] = &[0x12, 0x34, 0x56];
+        const ARRAY32_VALUE: &[u32] = &[0x0123_4567, 0x89ab_cdef];
+        const ARRAY64_VALUE: &[u64] = &[0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210];
+
+        let mut encoder = Encoder::new();
+        let index = Index::new::<0>();
+        encoder.encode_u32(SCALAR32_KEY, index, SCALAR32_VALUE)?;
+        encoder.encode_u64(SCALAR64_KEY, index, SCALAR64_VALUE)?;
+        encoder.encode_array8(ARRAY8_KEY, index, ARRAY8_VALUE)?;
+        encoder.encode_array32(ARRAY32_KEY, index, ARRAY32_VALUE)?;
+        encoder.encode_array64(ARRAY64_KEY, index, ARRAY64_VALUE)?;
+        let serialized = encoder.finish();
+
+        nvkv_decode! {
+            #[derive(Default)]
+            struct TestSchema => TestDecodeable {
+                scalar32: Required<u32, { SCALAR32_KEY }>,
+                scalar64: Required<u64, { SCALAR64_KEY }>,
+                array8: Array<u8, 64, { ARRAY8_KEY }>,
+                array32: Array<u32, 64, { ARRAY32_KEY }>,
+                array64: Array<u64, 64, { ARRAY64_KEY }>,
+            }
+        }
+
+        struct TestDecodeable {
+            scalar32: u32,
+            scalar64: u64,
+            array8: ArrayVec<u8, 64>,
+            array32: ArrayVec<u32, 64>,
+            array64: ArrayVec<u64, 64>,
+        }
+
+        let decoder = Decoder::new(&serialized, UnknownKeyPolicy::Error)?;
+        let decoded = KBox::try_init(decoder.decode(TestSchema::default())?, GFP_KERNEL)?;
+
+        assert_eq!(decoded.scalar32, SCALAR32_VALUE);
+        assert_eq!(decoded.scalar64, SCALAR64_VALUE);
+        assert_eq!(*decoded.array8, *ARRAY8_VALUE);
+        assert_eq!(*decoded.array32, *ARRAY32_VALUE);
+        assert_eq!(*decoded.array64, *ARRAY64_VALUE);
+
+        Ok(())
+    }
+
+    #[test]
+    fn gsp_init_response() -> Result {
+        let name = b"test name\0";
+        const BAR1_PDE_BASE: u64 = 0xdead_0000;
+
+        let index = Index::new::<0>();
+        let mut encoder = Encoder::new();
+        encoder.encode_array8(GspInitResponseSchema::GPU_NAME_STRING_KEY, index, name)?;
+        encoder.encode_u64(
+            GspInitResponseSchema::BAR1_PDE_BASE_KEY,
+            index,
+            BAR1_PDE_BASE,
+        )?;
+        let data = encoder.finish();
+
+        let decoder = Decoder::new(&data, UnknownKeyPolicy::Ignore)?;
+        let response = KBox::try_init(
+            decoder.decode(GspInitResponseSchema::default())?,
+            GFP_KERNEL,
+        )?;
+        assert_eq!(&*response.gpu_name, &name[..]);
+        assert_eq!(response.bar1_pde_base, BAR1_PDE_BASE);
+        assert!(response.fb_regions.is_empty());
+
+        // A single FB region decoded via its own schema.
+        const FB_REGION_BASE: u64 = 0x1000_0000;
+        const FB_REGION_LIMIT: u64 = 0x1fff_ffff;
+        const FB_REGION_FLAGS: u32 = 0x7;
+        const FB_REGION_TAG: u32 = 0;
+        let mut encoder = Encoder::new();
+        encoder.encode_u64(FbRegionSchema::BASE_KEY, index, FB_REGION_BASE)?;
+        encoder.encode_u64(FbRegionSchema::LIMIT_KEY, index, FB_REGION_LIMIT)?;
+        encoder.encode_u32(FbRegionSchema::FLAGS_KEY, index, FB_REGION_FLAGS)?;
+        encoder.encode_u32(FbRegionSchema::TAG_KEY, index, FB_REGION_TAG)?;
+        let data = encoder.finish();
+
+        let decoder = Decoder::new(&data, UnknownKeyPolicy::Ignore)?;
+        // Stack allocation for demonstration purposes.
+        stack_try_pin_init!(
+            let fb_region: FbRegion =? decoder.decode(FbRegionSchema::default())?
+        );
+        assert_eq!(fb_region.base, FB_REGION_BASE);
+        assert_eq!(fb_region.limit, FB_REGION_LIMIT);
+        assert_eq!(fb_region.flags.into_raw(), FB_REGION_FLAGS);
+        assert!(fb_region.flags.support_compressed());
+        assert!(fb_region.flags.support_iso());
+        assert!(fb_region.flags.protected());
+        assert_eq!(fb_region.tag, FB_REGION_TAG);
+
+        Ok(())
+    }
+
+    #[test]
+    fn decode_vgpu_properties() -> Result {
+        let name = b"test name\0";
+        let class = b"test class\0";
+        const TYPE_ID: u32 = 0x42;
+        const BAR1_LENGTH: u64 = 0x1_0000_0000;
+        const MAX_INSTANCE: u32 = 4;
+        const ECC: u32 = 1;
+        const PROFILE_SIZE: u64 = 0x1_0000_0000;
+        const MAX_FPS: u32 = 60;
+        const NUM_HEADS: u32 = 4;
+        const MAX_RES_X: u32 = 7680;
+        const MAX_RES_Y: u32 = 4320;
+        const DEV_ID: u32 = 0x1db4;
+        const SUBSYSTEM_ID: u32 = 0x1234;
+        const FB_LENGTH: u64 = 0x1_0000_0000;
+        const GSP_HEAP_SIZE: u64 = 0x10_0000;
+        const FB_RESERVATION: u64 = 0x40_0000;
+
+        let index = Index::new::<0>();
+        let mut encoder = Encoder::new();
+        encoder.encode_array8(VgpuPropertiesSchema::TYPE_NAME_KEY, index, name)?;
+        encoder.encode_array8(VgpuPropertiesSchema::CLASS_KEY, index, class)?;
+        encoder.encode_u32(VgpuPropertiesSchema::TYPE_ID_KEY, index, TYPE_ID)?;
+        encoder.encode_u64(VgpuPropertiesSchema::BAR1_LENGTH_KEY, index, BAR1_LENGTH)?;
+        encoder.encode_u32(VgpuPropertiesSchema::MAX_INSTANCE_KEY, index, MAX_INSTANCE)?;
+        encoder.encode_u32(VgpuPropertiesSchema::ECC_KEY, index, ECC)?;
+        encoder.encode_u64(VgpuPropertiesSchema::PROFILE_SIZE_KEY, index, PROFILE_SIZE)?;
+        encoder.encode_u32(VgpuPropertiesSchema::MAX_FPS_KEY, index, MAX_FPS)?;
+        encoder.encode_u32(VgpuPropertiesSchema::NUM_HEADS_KEY, index, NUM_HEADS)?;
+        encoder.encode_u32(VgpuPropertiesSchema::MAX_RES_X_KEY, index, MAX_RES_X)?;
+        encoder.encode_u32(VgpuPropertiesSchema::MAX_RES_Y_KEY, index, MAX_RES_Y)?;
+        encoder.encode_u32(VgpuPropertiesSchema::DEV_ID_KEY, index, DEV_ID)?;
+        encoder.encode_u32(VgpuPropertiesSchema::SUBSYSTEM_ID_KEY, index, SUBSYSTEM_ID)?;
+        encoder.encode_u64(VgpuPropertiesSchema::FB_LENGTH_KEY, index, FB_LENGTH)?;
+        encoder.encode_u64(
+            VgpuPropertiesSchema::GSP_HEAP_SIZE_KEY,
+            index,
+            GSP_HEAP_SIZE,
+        )?;
+        encoder.encode_u64(
+            VgpuPropertiesSchema::FB_RESERVATION_KEY,
+            index,
+            FB_RESERVATION,
+        )?;
+        let data = encoder.finish();
+
+        let decoder = Decoder::new(&data, UnknownKeyPolicy::Ignore)?;
+        let props = KBox::try_init(decoder.decode(VgpuPropertiesSchema::default())?, GFP_KERNEL)?;
+
+        assert_eq!(&*props.name, &name[..]);
+        assert_eq!(&*props.class, &class[..]);
+        assert_eq!(props.type_id, TYPE_ID);
+        assert_eq!(props.bar1_length, BAR1_LENGTH);
+        assert_eq!(props.max_instance, MAX_INSTANCE);
+        assert_eq!(props.ecc, ECC);
+        assert_eq!(props.profile_size, PROFILE_SIZE);
+        assert_eq!(props.max_fps, MAX_FPS);
+        assert_eq!(props.num_heads, NUM_HEADS);
+        assert_eq!(props.max_res_x, MAX_RES_X);
+        assert_eq!(props.max_res_y, MAX_RES_Y);
+        assert_eq!(props.dev_id, DEV_ID);
+        assert_eq!(props.subsystem_id, SUBSYSTEM_ID);
+        assert_eq!(props.fb_length, FB_LENGTH);
+        assert_eq!(props.gsp_heap_size, GSP_HEAP_SIZE);
+        assert_eq!(props.fb_reservation, FB_RESERVATION);
+
+        Ok(())
+    }
+
+    #[test]
+    fn decode_vgpu_properties_missing_required_fails() -> Result {
+        let index = Index::new::<0>();
+        let mut encoder = Encoder::new();
+        encoder.encode_u32(VgpuPropertiesSchema::ECC_KEY, index, 1)?;
+        let data = encoder.finish();
+
+        let decoder = Decoder::new(&data, UnknownKeyPolicy::Ignore)?;
+        let init = decoder.decode(VgpuPropertiesSchema::default())?;
+        assert!(KBox::try_init(init, GFP_KERNEL).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn gsp_init_response_interleaved_indexed_field() -> Result {
+        let name = b"test name\0";
+        const BAR1_PDE_BASE: u64 = 0xdead_0000;
+        const FB_REGION0_BASE: u64 = 0x1000_0000;
+        const FB_REGION0_LIMIT: u64 = 0x1fff_ffff;
+        const FB_REGION0_FLAGS: u32 = 0x7;
+        const FB_REGION0_TAG: u32 = 0;
+        const FB_REGION1_BASE: u64 = 0x2000_0000;
+        const FB_REGION1_LIMIT: u64 = 0x2fff_ffff;
+        const FB_REGION1_FLAGS: u32 = 0x3;
+        const FB_REGION1_TAG: u32 = 1;
+        const ENGINE_MASK: u64 = 0x1234_5678;
+
+        let index0 = Index::new::<0>();
+        let index1 = Index::new::<1>();
+        let mut encoder = Encoder::new();
+        encoder.encode_array8(GspInitResponseSchema::GPU_NAME_STRING_KEY, index0, name)?;
+        encoder.encode_u64(
+            GspInitResponseSchema::BAR1_PDE_BASE_KEY,
+            index0,
+            BAR1_PDE_BASE,
+        )?;
+        encoder.encode_u64(FbRegionSchema::BASE_KEY, index0, FB_REGION0_BASE)?;
+        encoder.encode_u64(GspInitResponseSchema::ENGINE_MASK_KEY, index1, ENGINE_MASK)?;
+        encoder.encode_u64(FbRegionSchema::LIMIT_KEY, index0, FB_REGION0_LIMIT)?;
+        encoder.encode_u32(FbRegionSchema::FLAGS_KEY, index0, FB_REGION0_FLAGS)?;
+        encoder.encode_u32(FbRegionSchema::TAG_KEY, index0, FB_REGION0_TAG)?;
+        encoder.encode_u64(FbRegionSchema::BASE_KEY, index1, FB_REGION1_BASE)?;
+        encoder.encode_u64(FbRegionSchema::LIMIT_KEY, index1, FB_REGION1_LIMIT)?;
+        encoder.encode_u32(FbRegionSchema::FLAGS_KEY, index1, FB_REGION1_FLAGS)?;
+        encoder.encode_u32(FbRegionSchema::TAG_KEY, index1, FB_REGION1_TAG)?;
+        let data = encoder.finish();
+
+        let decoder = Decoder::new(&data, UnknownKeyPolicy::Error)?;
+        let response = KBox::try_init(
+            decoder.decode(GspInitResponseSchema::default())?,
+            GFP_KERNEL,
+        )?;
+
+        assert_eq!(response.fb_regions.len(), 2);
+        // PANIC: The assertion above verifies that two FB regions were decoded.
+        let fb_region0 = &response.fb_regions[0];
+        assert_eq!(fb_region0.base, FB_REGION0_BASE);
+        assert_eq!(fb_region0.limit, FB_REGION0_LIMIT);
+        assert_eq!(fb_region0.flags.into_raw(), FB_REGION0_FLAGS);
+        assert_eq!(fb_region0.tag, FB_REGION0_TAG);
+        let fb_region1 = &response.fb_regions[1];
+        assert_eq!(fb_region1.base, FB_REGION1_BASE);
+        assert_eq!(fb_region1.limit, FB_REGION1_LIMIT);
+        assert_eq!(fb_region1.flags.into_raw(), FB_REGION1_FLAGS);
+        assert_eq!(fb_region1.tag, FB_REGION1_TAG);
+        assert_eq!(response.gmc_engine_masks.get(1).copied(), Some(ENGINE_MASK));
 
         Ok(())
     }
