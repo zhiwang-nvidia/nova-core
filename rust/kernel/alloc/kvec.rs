@@ -51,6 +51,7 @@ use core::{
         SliceIndex, //
     }, //
 };
+use pin_init::Init;
 
 use pin_init::Zeroable;
 
@@ -356,6 +357,37 @@ where
         // SAFETY: The call to `reserve` was successful, so the capacity is at least one greater
         // than the length.
         unsafe { self.push_within_capacity_unchecked(v) };
+        Ok(())
+    }
+
+    /// Appends an element to the back of the [`Vec`] instance by initializing it in place.
+    ///
+    /// The new element is initialized directly in the vector's storage from `init`, without
+    /// first materializing it as a temporary value. This is useful for large elements, or for
+    /// elements produced by an [`Init`] (for instance via [`init!`](pin_init::init!)).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut v: KVec<i32> = KVec::new();
+    /// // `Ok(x)` is a (fallible) initializer yielding `x`; real callers usually pass an
+    /// // `impl Init` from `try_init!` or a combinator.
+    /// v.push_init(Ok::<_, Error>(1), GFP_KERNEL)?;
+    /// assert_eq!(&v, &[1]);
+    /// # Ok::<(), Error>(())
+    /// ```
+    pub fn push_init<E>(&mut self, init: impl Init<T, E>, flags: Flags) -> Result<(), E>
+    where
+        E: From<AllocError>,
+    {
+        self.reserve(1, flags)?;
+        // SAFETY: The call to `reserve` was successful, so there is at least one spare slot; the
+        // pointer therefore refers to allocated, aligned memory valid for a write of one `T`.
+        unsafe { init.__init(self.spare_capacity_mut().as_mut_ptr().cast::<T>())? };
+        // SAFETY: The call to `__init` returned `Ok`, so the first spare slot now holds an
+        // initialized `T`. The new length does not exceed the capacity because `reserve` ensured
+        // the capacity is greater than the length by at least one.
+        unsafe { self.inc_len(1) };
         Ok(())
     }
 

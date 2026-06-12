@@ -10,6 +10,10 @@ pub(crate) use encode::*;
 mod types;
 pub(crate) use types::*;
 
+#[macro_use]
+mod decode;
+pub(crate) use decode::*;
+
 // Stability assumed:
 //  1. Fixed struct serialized calls are append only.
 //  2. Max response size for fixed struct serialized calls will not be broken by future firmware versions.
