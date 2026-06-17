@@ -158,6 +158,20 @@ static ssize_t nvidia_vgpu_pci_read_config(struct vfio_device *core_vdev,
 			return -EFAULT;
 	}
 
+	/*
+	 * Present as VGA compatible controller (class 0x0300) instead of the
+	 * VF's hardware 3D controller class (0x0302).  This makes the guest
+	 * OS treat the vGPU as the primary display adapter.
+	 */
+	if (vfio_pci_core_range_intersect_range(pos, count, PCI_CLASS_DEVICE,
+						sizeof(val16), &copy_offset,
+						&copy_count, &register_offset)) {
+		val16 = cpu_to_le16(PCI_CLASS_DISPLAY_VGA);
+		if (copy_to_user(buf + copy_offset,
+				 (void *)&val16 + register_offset, copy_count))
+			return -EFAULT;
+	}
+
 	return count;
 }
 
