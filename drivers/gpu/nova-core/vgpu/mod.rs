@@ -38,6 +38,7 @@ use crate::{
 /// Each `u64` is a bitmask where bit N means engine instance N exists.
 #[derive(Copy, Clone)]
 pub(crate) struct GmcEngineMasks {
+    #[allow(dead_code)]
     pub masks: [u64; NVGMC_ENGINE_TYPE_COUNT],
 }
 
