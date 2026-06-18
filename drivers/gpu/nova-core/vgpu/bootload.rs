@@ -34,6 +34,28 @@ fn gmc_engine_id(engine_type: usize, index: usize) -> u64 {
     (engine_type as u64) | ((index as u64) << 16)
 }
 
+fn blackwell_vgpu_channel_mapping_masks() -> [u64; NVGMC_ENGINE_TYPE_COUNT] {
+    const GMC_ENGINE_TYPE_GR: usize = 0x01;
+    const GMC_ENGINE_TYPE_COPY: usize = 0x02;
+    const GMC_ENGINE_TYPE_NVDEC: usize = 0x03;
+    const GMC_ENGINE_TYPE_NVENC: usize = 0x04;
+    const GMC_ENGINE_TYPE_SEC2: usize = 0x0d;
+    const GMC_ENGINE_TYPE_NVJPEG: usize = 0x12;
+    const GMC_ENGINE_TYPE_OFA: usize = 0x13;
+
+    let mut masks = [0u64; NVGMC_ENGINE_TYPE_COUNT];
+
+    masks[GMC_ENGINE_TYPE_GR] = 0x000f; // GR0-3
+    masks[GMC_ENGINE_TYPE_COPY] = 0x00ff; // COPY0-7
+    masks[GMC_ENGINE_TYPE_NVDEC] = 0x000f; // NVDEC0-3
+    masks[GMC_ENGINE_TYPE_NVENC] = 0x000f; // NVENC0-3
+    masks[GMC_ENGINE_TYPE_SEC2] = 0x0001; // SEC2
+    masks[GMC_ENGINE_TYPE_NVJPEG] = 0x000f; // NVJPEG0-3
+    masks[GMC_ENGINE_TYPE_OFA] = 0x0001; // OFA0
+
+    masks
+}
+
 /// Send GMCAPI VGPU_BOOTLOAD with NVKV-encoded parameters, then wait for
 /// the plugin to signal readiness via the ctrl_buf magic value.
 pub(crate) fn bootload(
@@ -41,7 +63,7 @@ pub(crate) fn bootload(
     cmdq: &Cmdq,
     bar: &Bar0,
     instance: &VgpuInstance,
-    engine_masks: &GmcEngineMasks,
+    _engine_masks: &GmcEngineMasks,
 ) -> Result {
     let mut kvs: KVec<u64> = KVec::new();
 
@@ -70,8 +92,8 @@ pub(crate) fn bootload(
 
     // ARRAY64: CHANNEL_MAPPING
     let mut channel_map: KVec<u64> = KVec::new();
-    for engine_type in 1..NVGMC_ENGINE_TYPE_COUNT {
-        let mask = engine_masks.masks[engine_type];
+    let channel_mapping_masks = blackwell_vgpu_channel_mapping_masks();
+    for (engine_type, &mask) in channel_mapping_masks.iter().enumerate().skip(1) {
         let mut bit = 0u32;
         let mut remaining = mask;
         while remaining != 0 {
