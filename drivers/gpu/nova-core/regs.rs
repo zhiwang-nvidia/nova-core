@@ -589,6 +589,53 @@ register! {
     }
 }
 
+// GIN (GPU Interrupt and Notification): the Physical Function (PF) CPU interrupt tree.
+//
+// GIN is the GPU's interrupt controller, also known in older material as
+// `NV_CTRL` or `INTR_CTRL` (central register namespace `NV_GIN`). These
+// registers are the host (PF) self-view of the two-level interrupt tree at the
+// `NV_VIRTUAL_FUNCTION_PRIV` aperture (base `0x00b8_0000`). The leaf arrays are
+// sized for the Hopper-and-later maximum of 16 leaves. Pre-Hopper parts use
+// only indices 0 through 7, and the per-architecture leaf count is provided by
+// the interrupt HAL. See `Documentation/gpu/nova/core/interrupts.rst`.
+
+register! {
+    /// Per-leaf pending interrupt bitmap. Bit `b` is set when vector `leaf * 32 + b` is pending.
+    /// Reading returns the pending bitmap. Writing a `1` to a bit acknowledges it
+    /// (write-1-to-clear).
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF(u32)[16] @ 0x00b81000 {}
+
+    /// Per-leaf interrupt enable set. Writing a `1` to bit `b` enables ("allows") vector
+    /// `leaf * 32 + b`. Writing a `0` has no effect.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_EN_SET(u32)[16] @ 0x00b81200 {}
+
+    /// Per-leaf interrupt enable clear. Writing a `1` to bit `b` disables ("blocks") vector
+    /// `leaf * 32 + b`. Writing a `0` has no effect.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_EN_CLEAR(u32)[16] @ 0x00b81400 {}
+
+    /// Top-level pending summary. Bit `N` is set when any pending vector exists
+    /// in subtree `N`, that is, in `LEAF[2 * N]` or `LEAF[2 * N + 1]`. The
+    /// hardware tracks the leaves automatically, so this register is read-only.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_TOP(u32) @ 0x00b81600 {}
+
+    /// Top-level enable set. Writing a `1` to bit `N` arms MSI delivery for subtree `N`
+    /// (write-1-to-set). The ISR writes the active subtree mask here to rearm after draining.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_TOP_EN_SET(u32) @ 0x00b81608 {}
+
+    /// Top-level enable clear. Writing a `1` to bit `N` disarms MSI delivery for subtree `N`
+    /// (write-1-to-clear). The ISR writes the active subtree mask here on entry to stop MSIs while
+    /// it drains the leaves.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_TOP_EN_CLEAR(u32) @ 0x00b81610 {}
+
+    /// Software interrupt trigger. Writing a vector number latches that vector's `LEAF` bit as if
+    /// its hardware source had asserted, which delivers an MSI when the subtree is armed and the
+    /// vector is enabled. Used by the doorbell self-test to exercise the MSI path without GSP.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_TRIGGER(u32) @ 0x00b81640 {
+        /// Vector number to inject.
+        11:0    vector;
+    }
+}
+
 // The modules below provide registers that are not identical on all supported chips. They should
 // only be used in HAL modules.
 
