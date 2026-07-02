@@ -14,7 +14,10 @@ use kernel::{
 
 use crate::{
     driver::Bar0,
-    gsp::nvkv,
+    gsp::{
+        cmdq::Cmdq,
+        nvkv, //
+    },
     mm::bar_user::Bar1Map,
     vgpu::{
         consts::{
@@ -54,30 +57,12 @@ impl PluginRpc {
         self.bar1_map.destroy(dev)
     }
 
-    /// Poll ctrl_buf for plugin boot completion magic.
-    pub(crate) fn wait_plugin_ready(&self, dev: &device::Device<device::Bound>) -> Result {
-        let start = Instant::<Monotonic>::now();
-        let timeout = Delta::from_millis(consts::PLUGIN_BOOT_TIMEOUT_MS as i64);
-        loop {
-            let val = self
-                .bar1_map
-                .read32(dev, consts::CTRL_BUF_MSG_SEQ_NUM_OFFSET)?;
-            if val == consts::GSP_PLUGIN_BOOTLOADED {
-                let elapsed = start.elapsed();
-                dev_dbg!(dev, "wait_plugin_ready: got magic {:#x} after {:?}\n", val, elapsed);
-                return Ok(());
-            }
-            if start.elapsed() > timeout {
-                dev_dbg!(
-                    dev,
-                    "wait_plugin_ready: timeout after {}ms, last val={:#x}\n",
-                    consts::PLUGIN_BOOT_TIMEOUT_MS,
-                    val
-                );
-                return Err(ETIMEDOUT);
-            }
-            fsleep(Delta::from_millis(1));
-        }
+    /// Non-blocking check of ctrl_buf for plugin boot completion.
+    ///
+    /// Returns `true` if the plugin has written the bootloaded magic, `false` otherwise.
+    pub(crate) fn is_ready(&self, dev: &device::Device<device::Bound>) -> Result<bool> {
+        let val = self.bar1_map.read32(dev, consts::CTRL_BUF_MSG_SEQ_NUM_OFFSET)?;
+        Ok(val == consts::GSP_PLUGIN_BOOTLOADED)
     }
 
     fn write_ctrl_u64(&self, dev: &device::Device<device::Bound>, off: usize, val: u64) -> Result {
@@ -113,6 +98,7 @@ impl PluginRpc {
         &mut self,
         dev: &device::Device<device::Bound>,
         bar0: &Bar0,
+        cmdq: &Cmdq,
         gfid: Gfid,
         msg_type: RpcMsg,
         data: &[u8],
@@ -142,10 +128,15 @@ impl PluginRpc {
             .write32(dev, (self.ctrl_off + 8) as u64, self.msg_seq_num)?;
 
         ring_doorbell(bar0, gfid);
-        self.wait_response(dev)
+        self.wait_response(dev, bar0, cmdq)
     }
 
-    fn wait_response(&self, dev: &device::Device<device::Bound>) -> Result {
+    fn wait_response(
+        &self,
+        dev: &device::Device<device::Bound>,
+        bar0: &Bar0,
+        cmdq: &Cmdq,
+    ) -> Result {
         let start = Instant::<Monotonic>::now();
         let timeout = Delta::from_secs(120);
         loop {
@@ -179,6 +170,11 @@ impl PluginRpc {
                 );
                 return Err(ETIMEDOUT);
             }
+            // Drain the GSP→CPU queue each polling tick.  GSP may post GMCAPI events
+            // (e.g. VGPU_PLUGIN_TRIGGERED_EVENT from NVDEC RISC-V bootstrap) concurrently
+            // with plugin initialisation; it then stalls in GspMsgQueueSyncStatus_GSP
+            // until the host consumes them, which prevents it from responding here.
+            cmdq.drain_gsp_tx_events(bar0);
             fsleep(Delta::from_millis(1));
         }
     }
@@ -188,9 +184,10 @@ impl PluginRpc {
         &mut self,
         dev: &device::Device<device::Bound>,
         bar0: &Bar0,
+        cmdq: &Cmdq,
         gfid: Gfid,
     ) -> Result {
-        self.rpc_call(dev, bar0, gfid, RpcMsg::VersionNegotiation, &[])
+        self.rpc_call(dev, bar0, cmdq, gfid, RpcMsg::VersionNegotiation, &[])
     }
 
     /// Send configuration parameters as NVKV-encoded msg_buff_v2.
@@ -198,6 +195,7 @@ impl PluginRpc {
         &mut self,
         dev: &device::Device<device::Bound>,
         bar0: &Bar0,
+        cmdq: &Cmdq,
         instance: &VgpuInstance,
     ) -> Result {
         let mut kvs: KVec<u64> = KVec::new();
@@ -254,6 +252,7 @@ impl PluginRpc {
         self.rpc_call(
             dev,
             bar0,
+            cmdq,
             instance.gfid,
             RpcMsg::SetupConfigParamsAndInit,
             payload,
@@ -265,6 +264,7 @@ impl PluginRpc {
         &mut self,
         dev: &device::Device<device::Bound>,
         bar0: &Bar0,
+        cmdq: &Cmdq,
         gfid: Gfid,
         enable: bool,
     ) -> Result {
@@ -281,7 +281,7 @@ impl PluginRpc {
         // slice of the same total size. The pointer is valid for `len * 8` bytes.
         let payload: &[u8] =
             unsafe { core::slice::from_raw_parts(msg.as_ptr().cast::<u8>(), msg.len() * 8) };
-        self.rpc_call(dev, bar0, gfid, RpcMsg::UpdateBmeState, payload)
+        self.rpc_call(dev, bar0, cmdq, gfid, RpcMsg::UpdateBmeState, payload)
     }
 }
 

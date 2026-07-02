@@ -148,11 +148,11 @@ fn nvidia_vgpu_reset_inner(pf_pdev: *mut kernel::bindings::pci_dev, gfid: u32) -
         .find(|i| i.gfid == gfid)
         .ok_or(ENOENT)?;
 
+    let cmdq = &gpu.gsp.cmdq;
     let plugin_rpc = instance.plugin_rpc.as_mut().ok_or(EINVAL)?;
-    plugin_rpc.rpc_call(dev, bar, gfid, RpcMsg::Reset, &[])?;
+    plugin_rpc.rpc_call(dev, bar, cmdq, gfid, RpcMsg::Reset, &[])?;
 
     if let Some(fb) = instance.fbmem_heap.as_ref() {
-        let cmdq = &gpu.gsp.cmdq;
         let sema_phys = instance.sema_phys_addr;
         scrubber::scrub_guest_fb(
             dev, cmdq, bar, &gpu.bar_user, gfid, fb.addr, fb.size, sema_phys,

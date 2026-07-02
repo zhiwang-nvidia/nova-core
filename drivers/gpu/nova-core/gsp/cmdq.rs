@@ -48,6 +48,7 @@ use pin_init::pin_init_scope;
 
 use crate::{
     driver::Bar0,
+    mctp,
     gsp::{
         fw,
         fw::{
@@ -703,6 +704,10 @@ impl Cmdq {
         Error: From<<M::Reply as MessageFromGsp>::InitError>,
     {
         let mut inner = self.inner.lock();
+        // Drain any GMCAPI events that accumulated since the last RPC.  GSP stalls in
+        // GspMsgQueueSyncStatus_GSP until these are consumed; clearing them here ensures
+        // the queue is clean before we block waiting for this command's reply.
+        inner.drain_available_gsp_messages(bar);
         inner.send_command(bar, command)?;
 
         loop {
@@ -906,6 +911,16 @@ impl Cmdq {
             }
         }
     }
+
+    /// Drain all immediately available messages from the GSP→CPU queue without blocking.
+    ///
+    /// Must be called periodically whenever nova-core is not inside an active RPC wait
+    /// (e.g. while polling for vGPU plugin readiness after a fire-and-forget GMC command).
+    /// GSP stalls in `GspMsgQueueSyncStatus_GSP` until the host drains all pending messages
+    /// before proceeding with ACR lockdown.
+    pub(crate) fn drain_gsp_tx_events(&self, bar: &Bar0) {
+        self.inner.lock().drain_available_gsp_messages(bar);
+    }
 }
 
 /// Inner mutex protected state of [`Cmdq`].
@@ -1091,6 +1106,53 @@ impl CmdqInner {
         Ok(())
     }
 
+    /// Drain immediately available GMCAPI messages from the GSP→CPU queue.
+    ///
+    /// Advances the CPU read pointer past each GMCAPI message at the head of the queue.
+    /// Stops as soon as the queue is empty or a non-GMCAPI message (RM_RPC event or reply)
+    /// is encountered — those must be left for `receive_msg`/`receive_and_dispatch`.
+    /// Does not block.
+    ///
+    /// Safe to call from any context where nova-core is not actively consuming the queue
+    /// (e.g. `bootload()` wait loop, plugin RPC `wait_response`).  GSP posts GMCAPI events
+    /// such as `VGPU_PLUGIN_TRIGGERED_EVENT` during NVDEC RISC-V bootstrap and then stalls
+    /// in `GspMsgQueueSyncStatus_GSP` until the host advances the read pointer past them.
+    fn drain_available_gsp_messages(&mut self, bar: &Bar0) {
+        loop {
+            let (pages, nvdm_type) = {
+                let (pages_slice, _) = self.gsp_mem.driver_read_area_v2(bar);
+                #[allow(clippy::incompatible_msrv)]
+                let flat = pages_slice.as_flattened();
+                if flat.is_empty() {
+                    return;
+                }
+                let Some((header, _)) = GspMsgElement::from_bytes_prefix(flat) else {
+                    return;
+                };
+                if !header.has_valid_magic() {
+                    return;
+                }
+                let Ok(pages) = u32::try_from(header.length().div_ceil(GSP_PAGE_SIZE)) else {
+                    return;
+                };
+                if pages == 0 {
+                    return;
+                }
+                (pages, header.nvdm_type())
+            }; // borrows from self.gsp_mem released before advance
+            if nvdm_type != mctp::nvdm_type::GMCAPI {
+                // Non-GMCAPI message (RM_RPC event or reply): leave it for receive_msg.
+                return;
+            }
+            dev_info!(
+                &self.dev,
+                "GSP: drained GMCAPI event nvdm_type=0x{:x} during plugin boot/wait\n",
+                nvdm_type
+            );
+            DmaGspMem::advance_cpu_read_ptr_v2(bar, pages);
+        }
+    }
+
     /// Wait for a message to become available on the message queue.
     ///
     /// This works purely at the transport layer and does not interpret or validate the message
@@ -1181,7 +1243,26 @@ impl CmdqInner {
         // This allows all error types, including `Infallible`, to be used for `M::InitError`.
         Error: From<M::InitError>,
     {
-        let message = self.wait_for_msg(bar, timeout)?;
+        // Drain any GMCAPI messages that arrived ahead of the expected RM_RPC reply.
+        // GSP-RM may enqueue GMCAPI events at any time; if they sit at the head of the
+        // queue when we are waiting for an RM_RPC response the read pointer stalls and
+        // the GSP lockdown sync spins indefinitely.
+        let message = loop {
+            {
+                let message = self.wait_for_msg(bar, timeout)?;
+                if message.header.nvdm_type() != mctp::nvdm_type::GMCAPI {
+                    break message;
+                }
+            }
+            // Re-read the same bytes through the GMC path so the GspGmcMsgElement
+            // header is used for page-count calculation and sequence tracking.
+            let cmd = self.receive_gmc_and_dispatch(bar, timeout, |cmd, _, _, _| cmd)?;
+            dev_dbg!(
+                &self.dev,
+                "GSP RPC: drained unsolicited GMCAPI event cmd=0x{:x} in RM_RPC receive path\n",
+                cmd
+            );
+        };
         let function = message.header.function().map_err(|_| EINVAL)?;
         let is_event = function.is_event();
 
@@ -1254,7 +1335,24 @@ impl CmdqInner {
         timeout: Delta,
         handler: impl FnOnce(MsgFunction, &[u8], &[u8]) -> R,
     ) -> Result<R> {
-        let message = self.wait_for_msg(bar, timeout)?;
+        // Same GMCAPI drain as receive_msg — see that function for rationale.
+        // FnOnce handler is not called or consumed during GMCAPI drain iterations.
+        let message = loop {
+            {
+                let message = self.wait_for_msg(bar, timeout)?;
+                if message.header.nvdm_type() != mctp::nvdm_type::GMCAPI {
+                    break message;
+                }
+            }
+            // Re-read the same bytes through the GMC path so the GspGmcMsgElement
+            // header is used for page-count calculation and sequence tracking.
+            let cmd = self.receive_gmc_and_dispatch(bar, timeout, |cmd, _, _, _| cmd)?;
+            dev_dbg!(
+                &self.dev,
+                "GSP RPC: drained unsolicited GMCAPI event cmd=0x{:x} in RM_RPC receive path\n",
+                cmd
+            );
+        };
         let function = message.header.function().map_err(|_| EINVAL)?;
         let is_event = function.is_event();
 

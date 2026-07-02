@@ -3,7 +3,12 @@
 use kernel::{
     device,
     prelude::*,
-    time::Delta, //
+    time::{
+        delay::fsleep,
+        Delta,
+        Instant,
+        Monotonic, //
+    },
 };
 
 use crate::{
@@ -187,8 +192,29 @@ pub(crate) fn bootload(
         instance.gfid.0
     );
 
+    // Wait for the plugin to signal readiness via ctrl_buf while concurrently draining
+    // the GSP→CPU queue.  GSP may post GMCAPI events during NVDEC RISC-V bootstrap and
+    // then stall in GspMsgQueueSyncStatus_GSP until the host consumes them before ACR
+    // lockdown.  fire-and-forget VGPU_BOOTLOAD means nova-core is not inside an RPC wait
+    // loop, so the drain must happen here.
     let rpc = instance.plugin_rpc.as_ref().ok_or(EINVAL)?;
-    rpc.wait_plugin_ready(dev)?;
+    let start = Instant::<Monotonic>::now();
+    let timeout = Delta::from_millis(rpc_consts::PLUGIN_BOOT_TIMEOUT_MS as i64);
+    loop {
+        if rpc.is_ready(dev)? {
+            break;
+        }
+        if start.elapsed() > timeout {
+            dev_dbg!(
+                dev,
+                "bootload: gfid={} plugin ready timeout\n",
+                instance.gfid.0
+            );
+            return Err(ETIMEDOUT);
+        }
+        cmdq.drain_gsp_tx_events(bar);
+        fsleep(Delta::from_millis(1));
+    }
 
     dev_dbg!(dev, "bootload: gfid={} plugin ready\n", instance.gfid.0);
 

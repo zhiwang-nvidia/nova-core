@@ -369,9 +369,9 @@ pub(crate) fn activate_instance(
 
     let mut rpc = instance.plugin_rpc.take().ok_or(EINVAL)?;
     rpc.init_rpc(dev)?;
-    rpc.negotiate_rpc_version(dev, bar, instance.gfid)?;
-    rpc.send_config_params(dev, bar, instance)?;
-    rpc.set_bme(dev, bar, instance.gfid, true)?;
+    rpc.negotiate_rpc_version(dev, bar, cmdq, instance.gfid)?;
+    rpc.send_config_params(dev, bar, cmdq, instance)?;
+    rpc.set_bme(dev, bar, cmdq, instance.gfid, true)?;
     instance.plugin_rpc = Some(rpc);
 
     instance.active = true;

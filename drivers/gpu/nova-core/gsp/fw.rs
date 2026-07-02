@@ -627,6 +627,11 @@ impl GspMsgElement {
         self.mctp_magic == MCTP_MAGIC
     }
 
+    /// Returns the NVDM type byte from the message header (bits 31:24 of `nvdm_header`).
+    pub(crate) fn nvdm_type(&self) -> u8 {
+        (self.nvdm_header >> 24) as u8
+    }
+
     // Returns the sequence number of the message.
     pub(crate) fn sequence(&self) -> u32 {
         self.rpc.sequence
