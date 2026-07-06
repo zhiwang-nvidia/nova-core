@@ -29,7 +29,7 @@ pub(crate) fn alloc_vram(mm: &GpuMm, size: u64, align: u64) -> Result<VramBlock>
             GpuBuddyAllocMode::Simple,
             size,
             min_block_size,
-            GpuBuddyAllocFlag::Contiguous,
+            GpuBuddyAllocFlag::Contiguous | GpuBuddyAllocFlag::MultiOrderContig,
         ),
         GFP_KERNEL,
     )?;

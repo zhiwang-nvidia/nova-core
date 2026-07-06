@@ -288,6 +288,11 @@ crate::impl_flags!(
 
         /// Disable trimming of partially used blocks.
         TrimDisable = bindings::GPU_BUDDY_TRIM_DISABLE,
+
+        /// For contiguous allocations, descend through smaller orders and
+        /// stitch the run across block/root boundaries when no single block
+        /// of the ideal order is free.
+        MultiOrderContig = bindings::GPU_BUDDY_CONTIG_MULTI_ORDER,
     }
 );
 
