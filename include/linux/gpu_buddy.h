@@ -67,6 +67,16 @@
  */
 #define GPU_BUDDY_TRIM_DISABLE			BIT(5)
 
+/**
+ * GPU_BUDDY_CONTIG_MULTI_ORDER - Stitch a contiguous run across smaller blocks
+ *
+ * For a contiguous allocation that cannot be satisfied by a single free block
+ * at the ideal order, descend through smaller orders and tile the run across
+ * block/root boundaries (anchor + RHS/LHS range allocation). Without this flag
+ * the contiguous fallback only anchors at the ideal order (legacy behavior).
+ */
+#define GPU_BUDDY_CONTIG_MULTI_ORDER		BIT(6)
+
 enum gpu_buddy_free_tree {
 	GPU_BUDDY_CLEAR_TREE = 0,
 	GPU_BUDDY_DIRTY_TREE,

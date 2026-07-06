@@ -1078,63 +1078,164 @@ static int __gpu_buddy_alloc_range(struct gpu_buddy *mm,
 			     blocks, total_allocated_on_err);
 }
 
+/*
+ * Trim @excess bytes off the top (highest addresses) of an otherwise satisfied
+ * contiguous run. lhs_size in __try_contig_anchor() is rounded up to keep the
+ * base @min_block_size aligned, so the run can be up to (min_block_size - 1)
+ * bytes too large; the surplus always sits at the tail. Best-effort: on a
+ * block-trim failure keep the slightly oversized run rather than fail an
+ * otherwise successful allocation.
+ */
+static void __gpu_buddy_trim_contig_tail(struct gpu_buddy *mm,
+					 struct list_head *blocks,
+					 u64 excess)
+{
+	struct gpu_buddy_block *block;
+	LIST_HEAD(tail);
+	u64 bsize;
+
+	while (excess) {
+		block = list_last_entry(blocks, struct gpu_buddy_block, link);
+		bsize = gpu_buddy_block_size(mm, block);
+
+		if (bsize <= excess) {
+			list_del(&block->link);
+			gpu_buddy_free_block(mm, block);
+			excess -= bsize;
+			continue;
+		}
+
+		/*
+		 * Split the boundary block: keep the low (bsize - excess) part,
+		 * free the surplus.
+		 */
+		list_move_tail(&block->link, &tail);
+		if (!gpu_buddy_block_trim(mm, NULL, bsize - excess, &tail))
+			excess = 0;
+		list_splice_tail(&tail, blocks);
+		break;
+	}
+}
+
+/*
+ * Try to build a contiguous run of @size bytes anchored at @block.
+ *
+ * An anchor block only marks where the run could begin (RHS) or end (LHS);
+ * __gpu_buddy_alloc_range() tiles the run out of whatever blocks/roots it
+ * spans, so the anchor's own order need not match the request. First grow
+ * upward (RHS) from the anchor offset; if that alone covers @size we are done.
+ * Otherwise cover the shortfall by growing downward (LHS) from just below the
+ * anchor, then trim any alignment surplus off the top.
+ *
+ * On success @blocks holds exactly @size bytes with an @min_block_size aligned
+ * base and 0 is returned. Returns -ENOSPC (with @blocks emptied) if no run can
+ * be anchored here so the caller can try the next candidate; any other negative
+ * errno is fatal.
+ */
+static int __try_contig_anchor(struct gpu_buddy *mm,
+			       struct gpu_buddy_block *block,
+			       u64 size,
+			       u64 min_block_size,
+			       struct list_head *blocks)
+{
+	u64 rhs_offset, lhs_offset, lhs_size, filled, excess;
+	LIST_HEAD(blocks_lhs);
+	int err;
+
+	/* Allocate blocks traversing RHS */
+	rhs_offset = gpu_buddy_block_offset(block);
+	err = __gpu_buddy_alloc_range(mm, rhs_offset, size, &filled, blocks);
+	if (!err || err != -ENOSPC)
+		return err;
+
+	lhs_size = max((size - filled), min_block_size);
+	if (!IS_ALIGNED(lhs_size, min_block_size))
+		lhs_size = round_up(lhs_size, min_block_size);
+
+	/*
+	 * Not enough space to the left of the anchor to cover the shortfall;
+	 * drop the RHS partial so the caller can move on to the next candidate.
+	 */
+	if (rhs_offset < lhs_size) {
+		gpu_buddy_free_list_internal(mm, blocks);
+		return -ENOSPC;
+	}
+
+	/* Allocate blocks traversing LHS */
+	lhs_offset = rhs_offset - lhs_size;
+	err = __gpu_buddy_alloc_range(mm, lhs_offset, lhs_size, NULL, &blocks_lhs);
+	if (err) {
+		gpu_buddy_free_list_internal(mm, blocks);
+		return err;
+	}
+
+	list_splice(&blocks_lhs, blocks);
+
+	excess = (filled + lhs_size) - size;
+	__gpu_buddy_trim_contig_tail(mm, blocks, excess);
+
+	return 0;
+}
+
 static int __alloc_contig_try_harder(struct gpu_buddy *mm,
 				     u64 size,
 				     u64 min_block_size,
+				     unsigned long flags,
 				     struct list_head *blocks)
 {
-	u64 rhs_offset, lhs_offset, lhs_size, filled;
 	struct gpu_buddy_block *block;
-	unsigned int tree, order;
-	LIST_HEAD(blocks_lhs);
+	unsigned int tree, start_order, min_order, floor_order;
 	unsigned long pages;
 	u64 modify_size;
+	int order;
 	int err;
 
 	modify_size = rounddown_pow_of_two(size);
 	pages = modify_size >> ilog2(mm->chunk_size);
-	order = fls(pages) - 1;
-	if (order == 0)
+	start_order = fls(pages) - 1;
+	if (start_order == 0)
 		return -ENOSPC;
 
-	for_each_free_tree(tree) {
-		struct rb_root *root;
-		struct rb_node *iter;
+	/*
+	 * min_order is the smallest order whose blocks are still guaranteed to
+	 * be @min_block_size aligned (a block of order O always sits at an
+	 * offset that is a multiple of chunk_size << O), which keeps the
+	 * resulting base correctly aligned.
+	 */
+	min_order = ilog2(min_block_size) - ilog2(mm->chunk_size);
 
-		root = &mm->free_trees[tree][order];
-		if (rbtree_is_empty(root))
-			continue;
+	/*
+	 * Legacy callers (flag clear) anchor only at the ideal order, giving a
+	 * single loop iteration and matching the historical behavior.
+	 * GPU_BUDDY_CONTIG_MULTI_ORDER lets the descent continue to smaller
+	 * orders (down to min_order) and stitch the run across roots.
+	 */
+	floor_order = (flags & GPU_BUDDY_CONTIG_MULTI_ORDER) ? min_order : start_order;
 
-		iter = rb_last(root);
-		while (iter) {
-			block = rbtree_get_free_block(iter);
+	/*
+	 * Descend from the ideal order down to floor_order. Once the large
+	 * orders have been consumed (e.g. a previous big allocation split the
+	 * top-level roots and left no order == start_order block to anchor on),
+	 * we can still anchor on smaller free blocks and range-allocate the run
+	 * across root boundaries.
+	 */
+	for (order = start_order; order >= (int)floor_order; order--) {
+		for_each_free_tree(tree) {
+			struct rb_root *root = &mm->free_trees[tree][order];
+			struct rb_node *iter;
 
-			/* Allocate blocks traversing RHS */
-			rhs_offset = gpu_buddy_block_offset(block);
-			err =  __gpu_buddy_alloc_range(mm, rhs_offset, size,
-						       &filled, blocks);
-			if (!err || err != -ENOSPC)
-				return err;
+			if (rbtree_is_empty(root))
+				continue;
 
-			lhs_size = max((size - filled), min_block_size);
-			if (!IS_ALIGNED(lhs_size, min_block_size))
-				lhs_size = round_up(lhs_size, min_block_size);
+			/* Walk free blocks highest-offset first. */
+			for (iter = rb_last(root); iter; iter = rb_prev(iter)) {
+				block = rbtree_get_free_block(iter);
 
-			/* Allocate blocks traversing LHS */
-			lhs_offset = gpu_buddy_block_offset(block) - lhs_size;
-			err =  __gpu_buddy_alloc_range(mm, lhs_offset, lhs_size,
-						       NULL, &blocks_lhs);
-			if (!err) {
-				list_splice(&blocks_lhs, blocks);
-				return 0;
-			} else if (err != -ENOSPC) {
-				gpu_buddy_free_list_internal(mm, blocks);
-				return err;
+				err = __try_contig_anchor(mm, block, size,
+							  min_block_size, blocks);
+				if (!err || err != -ENOSPC)
+					return err;
 			}
-			/* Free blocks for the next iteration */
-			gpu_buddy_free_list_internal(mm, blocks);
-
-			iter = rb_prev(iter);
 		}
 	}
 
@@ -1336,7 +1437,8 @@ int gpu_buddy_alloc_blocks(struct gpu_buddy *mm,
 		if ((flags & GPU_BUDDY_CONTIGUOUS_ALLOCATION) &&
 		    !(flags & GPU_BUDDY_RANGE_ALLOCATION))
 			return __alloc_contig_try_harder(mm, original_size,
-							 original_min_size, blocks);
+							 original_min_size,
+							 flags, blocks);
 
 		return -EINVAL;
 	}
@@ -1395,7 +1497,7 @@ int gpu_buddy_alloc_blocks(struct gpu_buddy *mm,
 				return __alloc_contig_try_harder(mm,
 								 original_size,
 								 original_min_size,
-								 blocks);
+								 flags, blocks);
 			err = -ENOSPC;
 			goto err_free;
 		} while (1);
