@@ -15,3 +15,20 @@ config NOVA_CORE
 	  This driver is work in progress and may not be functional.
 
 	  If M is selected, the module will be called nova-core.
+
+config NOVA_CORE_IRQ_SELFTEST
+	bool "Nova Core CPU doorbell IRQ self-test"
+	depends on NOVA_CORE
+	help
+	  Run a CPU doorbell interrupt self-test during nova-core probe. The
+	  test injects a known vector through the GPU interrupt controller's
+	  software trigger and confirms the interrupt is delivered to the host
+	  handler, validating the MSI path from the GPU through PCIe to the CPU
+	  with no dependency on GSP firmware. The result is printed to dmesg.
+
+	  NOTE: this test actually changes the driver's behavior! Specifically,
+	  it fails the PCI probe step (which, in turn, fails the driver load) if
+	  the test fails.
+
+	  This is intended for driver bring-up and for debugging PCI, MSI, or
+	  passthrough setups. If unsure, say N.
