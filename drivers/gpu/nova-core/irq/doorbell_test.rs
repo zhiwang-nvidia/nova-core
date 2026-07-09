@@ -54,9 +54,14 @@ const DOORBELL_BIT: u32 = 1 << DOORBELL_LOC.1;
 
 /// Subtree carrying the doorbell vector, and the only subtree this test arms.
 ///
-/// Derived from the vector so that changing `DOORBELL_VECTOR` moves the allocation, the arming,
-/// and the handler together.
+/// Derived from the vector so that changing `DOORBELL_VECTOR` moves the arming and the handler
+/// together.
 const DOORBELL_SUBTREE: u32 = subtree_bit(DOORBELL_VECTOR);
+
+// The self-test reuses the vector probe allocated for the GSP notification, and that vector serves
+// the highest armed subtree, so the doorbell vector has to lie in the same subtree as the GSP
+// notification.
+static_assert!(DOORBELL_SUBTREE == subtree_bit(super::gsp::GSP_INTR_0_VECTOR));
 
 /// Index of the subtree carrying the doorbell vector. Under MSI-X this is also the index of the
 /// table entry that subtree raises.
@@ -179,10 +184,9 @@ pub(crate) fn run_selftest<'a>(
     pdev: &'a pci::Device<Bound>,
     bar: Bar0<'a>,
     chipset: Chipset,
+    vector: pci::IrqVector<'_>,
 ) -> Result {
-    // The allocated interrupt type decides how the handler rearms delivery, so
-    // the vector is needed before the tree can be built.
-    let vector = super::alloc_vectors(pdev, DOORBELL_SUBTREE)?;
+    // The granted interrupt type decides how the handler rearms delivery.
     let irq_type = vector.irq_type();
     let tree = Tree::new(chipset, irq_type, DOORBELL_SUBTREE);
     let doorbell = LeafIndex::new::<DOORBELL_LEAF>();

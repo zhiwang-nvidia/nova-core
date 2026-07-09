@@ -153,12 +153,28 @@ impl Tree {
     /// `EINVAL` if `vector` lies outside this tree (`vector >= num_leaves *
     /// 32`). `EOVERFLOW` if `vector` does not fit in the trigger register's
     /// vector field.
+    // Only the interrupt self-test injects a software interrupt.
+    #[cfg_attr(not(CONFIG_NOVA_CORE_IRQ_SELFTEST), expect(dead_code))]
     pub(super) fn trigger(&self, bar: Bar0<'_>, vector: u32) -> Result {
         if crate::num::u32_as_usize(vector) >= self.num_leaves * 32 {
             return Err(EINVAL);
         }
         bar.write_reg(CPU_INTR_LEAF_TRIGGER::zeroed().try_with_vector(vector)?);
         Ok(())
+    }
+
+    /// Masks every vector in every implemented leaf (`LEAF_EN_CLEAR`).
+    ///
+    /// Boot, or a driver that ran before this one, can leave leaf enables set
+    /// for vectors nova-core does not service, and such a vector delivers to
+    /// nova-core's handler once its subtree is armed. Clearing all of them
+    /// first means only the vectors nova-core goes on to allow can deliver.
+    pub(super) fn block_all_leaves(&self, bar: Bar0<'_>) {
+        for index in 0..self.num_leaves {
+            if let Some(index) = LeafIndex::try_new(index) {
+                self.leaf(index).block(bar, u32::MAX);
+            }
+        }
     }
 
     /// Drains any pending interrupts on this tree.
@@ -307,6 +323,19 @@ impl Leaf<Pending> {
         if self.state.mask != 0 {
             if let Some(loc) = CPU_INTR_LEAF::try_at(self.index.get()) {
                 bar.write(loc, self.state.mask.into());
+            }
+        }
+    }
+
+    /// Acknowledges only the bits in `mask` (write-1-to-clear), leaving any other pending bits
+    /// set for their owners.
+    ///
+    /// A handler that owns a single vector uses this instead of [`Self::ack`] so it does not clear
+    /// a co-pending vector in the same leaf.
+    pub(super) fn ack_bits(&self, bar: Bar0<'_>, mask: u32) {
+        if mask != 0 {
+            if let Some(loc) = CPU_INTR_LEAF::try_at(self.index.get()) {
+                bar.write(loc, mask.into());
             }
         }
     }
