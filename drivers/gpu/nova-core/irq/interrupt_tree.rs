@@ -46,6 +46,16 @@ use crate::{
 /// register arrays.
 pub(super) type LeafIndex = Bounded<usize, 4>;
 
+/// Maps an interrupt `vector` to its position in the tree: the leaf that carries it
+/// (`vector / 32`) and the bit index within that leaf (`vector % 32`).
+///
+/// This is the single definition of the vector encoding, shared by the GSP interrupt handler and
+/// the unit tests. The returned leaf is a raw index; a caller validates it against the
+/// architecture's leaf count, for example via [`LeafIndex::try_new`].
+pub(super) const fn vector_leaf_bit(vector: u32) -> (usize, u32) {
+    (crate::num::u32_as_usize(vector / 32), vector % 32)
+}
+
 /// Type state of a [`Top`] or [`Leaf`] handle.
 ///
 /// A `Top` follows `Idle` -> `Unarmed` -> `Pending`, and a `Leaf` follows
@@ -80,6 +90,8 @@ mod private {
 #[derive(Clone)]
 pub(super) struct Tree {
     /// Number of implemented leaves in this tree, either 8 or 16.
+    // Read only by `trigger`, which the self-test alone uses today.
+    #[cfg_attr(not(CONFIG_NOVA_CORE_IRQ_SELFTEST), expect(dead_code))]
     num_leaves: usize,
     /// Mask of valid subtree bits in the `TOP` enable registers.
     subtree_mask: u32,
@@ -115,6 +127,8 @@ impl Tree {
     /// `EINVAL` if `vector` lies outside this tree (`vector >= num_leaves *
     /// 32`). `EOVERFLOW` if `vector` does not fit in the trigger register's
     /// vector field.
+    // Only the interrupt self-test injects a software interrupt.
+    #[cfg_attr(not(CONFIG_NOVA_CORE_IRQ_SELFTEST), expect(dead_code))]
     pub(super) fn trigger(&self, bar: Bar0<'_>, vector: u32) -> Result {
         if crate::num::u32_as_usize(vector) >= self.num_leaves * 32 {
             return Err(EINVAL);
@@ -159,6 +173,8 @@ impl Top<Idle> {
     /// Used for one-shot initial setup before any interrupts are expected. The
     /// handler's normal rearm path goes through [`Top::unarm`] ->
     /// [`Top::read_pending`] -> [`Top::rearm`] instead.
+    // Only the interrupt self-test arms the tree directly; the GSP path arms via `drain`.
+    #[cfg_attr(not(CONFIG_NOVA_CORE_IRQ_SELFTEST), expect(dead_code))]
     pub(super) fn arm(self, bar: Bar0<'_>) {
         bar.write(CPU_INTR_TOP_EN_SET, self.subtree_mask.into());
     }
@@ -309,6 +325,19 @@ impl Leaf<Pending> {
         if self.state.mask != 0 {
             if let Some(loc) = CPU_INTR_LEAF::try_at(self.index.get()) {
                 bar.write(loc, self.state.mask.into());
+            }
+        }
+    }
+
+    /// Acknowledges only the bits in `mask` (write-1-to-clear), leaving any other pending bits
+    /// set for their owners.
+    ///
+    /// A handler that owns a single vector uses this instead of [`Self::ack`] so it does not clear
+    /// a co-pending vector in the same leaf.
+    pub(super) fn ack_bits(&self, bar: Bar0<'_>, mask: u32) {
+        if mask != 0 {
+            if let Some(loc) = CPU_INTR_LEAF::try_at(self.index.get()) {
+                bar.write(loc, mask.into());
             }
         }
     }

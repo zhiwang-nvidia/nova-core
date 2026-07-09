@@ -20,6 +20,7 @@ use kernel::{
     },
     pci,
     prelude::*,
+    sync::Arc,
     uaccess::UserSliceWriter, //
 };
 
@@ -284,9 +285,8 @@ pub(crate) struct Gsp {
     /// Log buffers for all LIBOS3 tasks, exposed via debugfs.
     #[pin]
     logs: debugfs::Scope<LogBuffers>,
-    /// Command queue.
-    #[pin]
-    pub(crate) cmdq: Cmdq,
+    /// Command queue, shared with the GSP event interrupt handler.
+    pub(crate) cmdq: Arc<Cmdq>,
     /// RM arguments.
     rmargs: Coherent<GspArgumentsPadded>,
     /// RM state monitor buffer (required by r000+ GSP-RM for diagnostics).
@@ -321,12 +321,12 @@ impl Gsp {
 
             Ok(try_pin_init!(Self {
                 gsp_tlv,
-                cmdq <- Cmdq::new(dev),
+                cmdq: Arc::pin_init(Cmdq::new(dev), GFP_KERNEL)?,
                 rm_state_monitor: Coherent::zeroed(dev, GFP_KERNEL)?,
                 rmargs: Coherent::init(
                     dev,
                     GFP_KERNEL,
-                    GspArgumentsPadded::new(&cmdq, None, rm_state_monitor),
+                    GspArgumentsPadded::new(cmdq, None, rm_state_monitor),
                 )?,
                 libos: {
                     let mut libos = CoherentBox::zeroed_slice(
@@ -394,6 +394,11 @@ impl Gsp {
                 },
             }))
         })
+    }
+
+    /// Returns a shared handle to the GSP command queue.
+    pub(crate) fn cmdq(&self) -> Arc<Cmdq> {
+        self.cmdq.clone()
     }
 }
 

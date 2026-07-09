@@ -855,6 +855,21 @@ impl Cmdq {
         inner.send_gmc(bar, command_id, payload, max_response_size)?;
         inner.receive_gmc(bar, Self::RECEIVE_TIMEOUT)
     }
+
+    /// Drains and dispatches every message currently pending in the GSP-to-CPU queue.
+    ///
+    /// Non-blocking: routes each message the GSP has already posted through its event handler
+    /// (see [`CmdqInner::dispatch_event`]) and returns without waiting for more. This is the
+    /// worker for the GSP event interrupt's threaded handler, and can also be driven from a
+    /// polling path.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a receive error, in particular the `EIO` of a queue poisoned by corrupt framing.
+    /// The caller (the interrupt owner) can then report or stop servicing it.
+    pub(crate) fn drain(&self, bar: Bar0<'_>) -> Result {
+        self.inner.lock().drain(bar)
+    }
 }
 
 /// Inner mutex protected state of [`Cmdq`].
@@ -1466,5 +1481,63 @@ impl CmdqInner {
                 );
             }
         }
+    }
+
+    /// Drains and dispatches all messages currently pending in the GSP-to-CPU queue.
+    ///
+    /// Processes whatever the GSP has already posted, dispatching each message as an event, and
+    /// stops once the queue is empty. There is no awaited reply during a drain, so every message
+    /// is routed to [`Self::dispatch_event`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the receive error that stopped the drain, in particular the `EIO` of a queue
+    /// poisoned by corrupt framing (see [`Self::wait_for_msg`]).
+    fn drain(&mut self, bar: Bar0<'_>) -> Result {
+        while !self.gsp_mem.driver_read_area_v2(bar).0.is_empty() {
+            // A message is available, so this returns without waiting.
+            let msg = self.wait_for_msg(bar, Delta::ZERO)?;
+
+            let pages =
+                u32::try_from(msg.header.length().div_ceil(GSP_PAGE_SIZE)).map_err(|_| {
+                    dev_err!(&self.dev, "GSP drain: message length overflow\n");
+                    EIO
+                })?;
+            let function = msg.header.function();
+            let is_event = matches!(function, Ok(f) if f.is_event());
+            let display_seq = if is_event {
+                self.rx_event_seq
+            } else {
+                msg.header.sequence()
+            };
+
+            if let Ok(function) = function {
+                if is_event {
+                    dev_dbg!(
+                        &self.dev,
+                        "GSP RPC: async received: seq# {}, function={:?}, length=0x{:x}\n",
+                        display_seq,
+                        function,
+                        msg.header.length(),
+                    );
+                } else {
+                    dev_dbg!(
+                        &self.dev,
+                        "GSP RPC: response received: seq# {}, function={:?}, length=0x{:x}\n",
+                        display_seq,
+                        function,
+                        msg.header.length(),
+                    );
+                }
+            }
+
+            DmaGspMem::advance_cpu_read_ptr_v2(bar, pages);
+            if is_event {
+                self.rx_event_seq += 1;
+            }
+            self.dispatch_event(function, display_seq);
+        }
+
+        Ok(())
     }
 }
