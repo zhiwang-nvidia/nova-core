@@ -14,6 +14,7 @@ use kernel::{
 };
 
 use crate::{
+    driver::Bar0,
     falcon::{
         Falcon,
         FalconEngine,
@@ -35,6 +36,28 @@ impl RegisterBase<PFalcon2Base> for Gsp {
 }
 
 impl FalconEngine for Gsp {}
+
+impl Gsp {
+    /// Reads the GSP falcon SWGEN0 interrupt latch, clearing it if it was set.
+    ///
+    /// Returns whether SWGEN0 was pending. The GSP raises SWGEN0 when it has posted messages for
+    /// the host, so the event interrupt handler uses this to decide whether to drain the message
+    /// queue.
+    pub(crate) fn take_swgen0_intr(bar: Bar0<'_>) -> bool {
+        let pending = bar
+            .read(regs::NV_PFALCON_FALCON_IRQSTAT::of::<Self>())
+            .swgen0();
+
+        if pending {
+            bar.write(
+                WithBase::of::<Self>(),
+                regs::NV_PFALCON_FALCON_IRQSCLR::zeroed().with_swgen0(true),
+            );
+        }
+
+        pending
+    }
+}
 
 impl<'a> Falcon<'a, Gsp> {
     /// Clears the SWGEN0 bit in the Falcon's IRQ status clear register to

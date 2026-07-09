@@ -8,6 +8,7 @@
 
 #[cfg(CONFIG_NOVA_CORE_IRQ_SELFTEST)]
 pub(crate) mod doorbell_test;
+pub(crate) mod gsp;
 mod hal;
 mod interrupt_tree;
 

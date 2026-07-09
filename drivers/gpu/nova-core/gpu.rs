@@ -10,7 +10,8 @@ use kernel::{
     num::Bounded,
     pci,
     prelude::*,
-    sizes::SizeConstants, //
+    sizes::SizeConstants,
+    sync::Arc, //
 };
 
 use crate::{
@@ -25,6 +26,7 @@ use crate::{
     fsp::Fsp,
     gsp::{
         self,
+        cmdq::Cmdq,
         Gsp,
         GspBootContext, //
     },
@@ -320,11 +322,27 @@ impl PinnedDrop for GspResources<'_> {
 }
 
 impl<'gpu> Gpu<'gpu> {
+    /// Returns the chipset this GPU was identified as.
+    pub(crate) fn chipset(&self) -> Chipset {
+        self.spec.chipset
+    }
+
+    /// Returns a shared handle to the GSP command queue.
+    pub(crate) fn cmdq(&self) -> Arc<Cmdq> {
+        self.gsp_resources.gsp.cmdq()
+    }
+
     pub(crate) fn new(
         pdev: &'gpu pci::Device<device::Core<'_>>,
         bar: Bar0<'gpu>,
+        vector: pci::IrqVector<'gpu>,
     ) -> impl PinInit<Self, Error> + 'gpu {
         let dev = pdev.as_ref();
+
+        // `vector` is shared with the permanent GSP handler in probe and used here only by the
+        // interrupt self-test.
+        #[cfg(not(CONFIG_NOVA_CORE_IRQ_SELFTEST))]
+        let _ = vector;
 
         try_pin_init!(Self {
             spec: Spec::new(dev, bar).inspect(|spec| {
@@ -349,7 +367,7 @@ impl<'gpu> Gpu<'gpu> {
             // never observes or acknowledges GSP or PRIV_RING interrupts.
             _: {
                 #[cfg(CONFIG_NOVA_CORE_IRQ_SELFTEST)]
-                crate::irq::doorbell_test::run_selftest(pdev, bar, spec.chipset)?;
+                crate::irq::doorbell_test::run_selftest(pdev, bar, spec.chipset, vector)?;
             },
 
             // Initialize this early because `gsp_resources` depends on it.

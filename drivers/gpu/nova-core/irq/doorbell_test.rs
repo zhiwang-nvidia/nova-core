@@ -140,6 +140,7 @@ pub(crate) fn run_selftest<'a>(
     pdev: &'a pci::Device<Bound>,
     bar: Bar0<'a>,
     chipset: Chipset,
+    vector: pci::IrqVector<'_>,
 ) -> Result {
     let tree = Tree::new(chipset);
     let doorbell = LeafIndex::new::<DOORBELL_LEAF>();
@@ -164,8 +165,6 @@ pub(crate) fn run_selftest<'a>(
         );
         return Err(EIO);
     }
-
-    let vector = super::alloc_vector(pdev)?;
 
     // `try_pin_init!` moves its captures into a closure, so clone `tree` into a
     // local up front rather than inline, which would move `tree` and leave none
