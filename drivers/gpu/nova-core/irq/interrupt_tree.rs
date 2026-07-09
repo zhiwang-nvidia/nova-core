@@ -340,3 +340,108 @@ impl Leaf<Pending> {
         }
     }
 }
+
+#[kunit_tests(nova_core_gin_tree)]
+mod tests {
+    use super::*;
+
+    /// A leaf index is a `Bounded<usize, 4>`, so it accepts 0..=15 and rejects 16.
+    #[test]
+    fn leaf_index_bounds() {
+        assert!(LeafIndex::try_new(0).is_some());
+        assert!(LeafIndex::try_new(15).is_some());
+        assert!(LeafIndex::try_new(16).is_none());
+    }
+
+    /// Subtree `N` covers the two adjacent leaves `2N` and `2N + 1`.
+    #[test]
+    fn subtree_covers_two_adjacent_leaves() {
+        let tree = Tree {
+            num_leaves: 16,
+            armed_mask: 0xff,
+            rearm_method: None,
+        };
+
+        for index in 0..8usize {
+            let mut leaves = Subtree { index }.iter_leaves(&tree);
+            assert_eq!(leaves.next().map(|leaf| leaf.index.get()), Some(index * 2));
+            assert_eq!(
+                leaves.next().map(|leaf| leaf.index.get()),
+                Some(index * 2 + 1)
+            );
+            assert!(leaves.next().is_none());
+        }
+    }
+
+    /// Leaves that fall outside the addressable range are filtered out, never panicking.
+    #[test]
+    fn subtree_leaves_out_of_range_are_filtered() {
+        let tree = Tree {
+            num_leaves: 0,
+            armed_mask: 0,
+            rearm_method: None,
+        };
+
+        // Subtree 8 would cover leaves 16 and 17, both beyond the leaf index range.
+        assert!(Subtree { index: 8 }.iter_leaves(&tree).next().is_none());
+    }
+
+    /// The production [`vector_leaf_bit`] maps every vector to a `(leaf, bit)` pair, valid leaves
+    /// stay within [`LeafIndex`], and the fixed doorbell (129) and GSP (155) vectors land where
+    /// the handlers expect.
+    #[test]
+    fn vector_maps_to_leaf_and_bit() {
+        // Every vector of a 16-leaf tree maps to an addressable leaf and a bit in 0..32.
+        for vector in 0u32..(16 * 32) {
+            let (leaf, bit) = vector_leaf_bit(vector);
+
+            assert!(LeafIndex::try_new(leaf).is_some());
+            assert!(bit < 32);
+            assert_eq!(leaf as u32 * 32 + bit, vector);
+        }
+
+        // The fixed vectors the handlers rely on: CPU doorbell 129 and GSP notification 155, both
+        // in leaf 4, which is present on both the 8-leaf (pre-Hopper) and 16-leaf trees.
+        assert_eq!(vector_leaf_bit(129), (4, 1));
+        assert_eq!(vector_leaf_bit(155), (4, 27));
+        assert!(LeafIndex::try_new(vector_leaf_bit(155).0).is_some());
+
+        // The first vector beyond the 16-leaf tree lands in leaf 16, which is out of range.
+        assert!(LeafIndex::try_new(vector_leaf_bit(16 * 32).0).is_none());
+    }
+
+    /// [`subtree_bit`] agrees with [`vector_leaf_bit`] on which subtree holds a vector, and the
+    /// doorbell (129) and GSP (155) vectors share one, which is what lets them share an
+    /// allocation and a handler's arming.
+    #[test]
+    fn vector_maps_to_subtree() {
+        for vector in 0u32..(16 * 32) {
+            let (leaf, _) = vector_leaf_bit(vector);
+
+            assert_eq!(subtree_bit(vector), 1u32 << (leaf / 2));
+        }
+
+        assert_eq!(subtree_bit(155), 1 << 2);
+        assert_eq!(subtree_bit(129), subtree_bit(155));
+    }
+
+    /// The mask nova-core arms is the single subtree carrying the GSP notification, and every
+    /// supported chipset implements it.
+    #[test]
+    fn armed_mask_is_one_implemented_subtree() {
+        let armed = crate::irq::gsp::GSP_SUBTREE;
+
+        assert_eq!(armed.count_ones(), 1);
+
+        for chipset in [
+            Chipset::TU102,
+            Chipset::GA102,
+            Chipset::AD102,
+            Chipset::GH100,
+            Chipset::GB100,
+            Chipset::GB202,
+        ] {
+            assert_eq!(armed & !pf_cpu_interrupt_hal(chipset).subtree_mask(), 0);
+        }
+    }
+}

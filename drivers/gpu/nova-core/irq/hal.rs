@@ -8,7 +8,8 @@ mod tu102;
 
 use kernel::{
     io::Io,
-    pci::IrqType, //
+    pci::IrqType,
+    prelude::*, //
 };
 
 use crate::{
@@ -106,6 +107,109 @@ pub(super) fn pf_cpu_interrupt_hal(chipset: Chipset) -> &'static dyn PfCpuInterr
         Architecture::Turing | Architecture::Ampere | Architecture::Ada => tu102::TU102_HAL,
         Architecture::Hopper | Architecture::BlackwellGB10x | Architecture::BlackwellGB20x => {
             gh100::GH100_HAL
+        }
+    }
+}
+
+#[kunit_tests(nova_core_gin_hal)]
+mod tests {
+    use super::*;
+
+    use crate::gpu::Chipset;
+
+    /// Pre-Hopper parts have an 8-leaf tree (4 subtrees, mask `0x0f`).
+    #[test]
+    fn pre_hopper_tree_size() {
+        for chipset in [Chipset::TU102, Chipset::GA102, Chipset::AD102] {
+            let hal = pf_cpu_interrupt_hal(chipset);
+            assert_eq!(hal.num_leaves(), 8);
+            assert_eq!(hal.subtree_mask(), 0x0f);
+        }
+    }
+
+    /// Hopper and later implement a 16-leaf tree (8 subtrees, mask `0xff`).
+    #[test]
+    fn hopper_plus_tree_size() {
+        for chipset in [Chipset::GH100, Chipset::GB100, Chipset::GB202] {
+            let hal = pf_cpu_interrupt_hal(chipset);
+            assert_eq!(hal.num_leaves(), 16);
+            assert_eq!(hal.subtree_mask(), 0xff);
+        }
+    }
+
+    /// The subtree mask always has exactly `num_leaves / 2` bits set, one per subtree.
+    #[test]
+    fn subtree_mask_matches_leaf_count() {
+        for chipset in [
+            Chipset::TU102,
+            Chipset::GA102,
+            Chipset::AD102,
+            Chipset::GH100,
+            Chipset::GB100,
+            Chipset::GB202,
+        ] {
+            let hal = pf_cpu_interrupt_hal(chipset);
+            assert_eq!(
+                hal.subtree_mask().count_ones() as usize,
+                hal.num_leaves() / 2
+            );
+        }
+    }
+
+    /// Only pre-Hopper MSI rearms through the configuration-space mirror. MSI on Hopper and later
+    /// cycles the `TOP` enables of every armed subtree.
+    #[test]
+    fn pci_irq_rearm_method_per_arch_and_type() {
+        for chipset in [Chipset::TU102, Chipset::GA102, Chipset::AD102] {
+            let hal = pf_cpu_interrupt_hal(chipset);
+            assert_eq!(
+                hal.pci_irq_rearm_method(IrqType::Msi),
+                Some(PciIrqRearmMethod::ConfigMirrorEoi)
+            );
+        }
+
+        for chipset in [Chipset::GH100, Chipset::GB100, Chipset::GB202] {
+            let hal = pf_cpu_interrupt_hal(chipset);
+            assert_eq!(
+                hal.pci_irq_rearm_method(IrqType::Msi),
+                Some(PciIrqRearmMethod::TopEnableCycleArmed)
+            );
+        }
+    }
+
+    /// MSI-X gives each subtree its own table entry, so on every architecture its rearm cycles
+    /// only the subtree the handler serves.
+    #[test]
+    fn msix_rearms_one_subtree_on_every_arch() {
+        for chipset in [
+            Chipset::TU102,
+            Chipset::GA102,
+            Chipset::AD102,
+            Chipset::GH100,
+            Chipset::GB100,
+            Chipset::GB202,
+        ] {
+            let hal = pf_cpu_interrupt_hal(chipset);
+            assert_eq!(
+                hal.pci_irq_rearm_method(IrqType::MsiX),
+                Some(PciIrqRearmMethod::TopEnableCycleSubtree)
+            );
+        }
+    }
+
+    /// `INTx` is level-triggered and needs no rearm write on any architecture.
+    #[test]
+    fn intx_needs_no_rearm() {
+        for chipset in [
+            Chipset::TU102,
+            Chipset::GA102,
+            Chipset::AD102,
+            Chipset::GH100,
+            Chipset::GB100,
+            Chipset::GB202,
+        ] {
+            let hal = pf_cpu_interrupt_hal(chipset);
+            assert_eq!(hal.pci_irq_rearm_method(IrqType::Intx), None);
         }
     }
 }
