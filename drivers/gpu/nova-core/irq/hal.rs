@@ -6,6 +6,8 @@
 mod gh100;
 mod tu102;
 
+use kernel::prelude::*;
+
 use crate::gpu::{
     Architecture,
     Chipset, //
@@ -42,6 +44,52 @@ pub(super) fn gin_hal(chipset: Chipset) -> &'static dyn GinHal {
         Architecture::Turing | Architecture::Ampere | Architecture::Ada => tu102::TU102_HAL,
         Architecture::Hopper | Architecture::BlackwellGB10x | Architecture::BlackwellGB20x => {
             gh100::GH100_HAL
+        }
+    }
+}
+
+#[kunit_tests(nova_core_gin_hal)]
+mod tests {
+    use super::*;
+
+    use crate::gpu::Chipset;
+
+    /// Pre-Hopper parts have an 8-leaf tree (4 subtrees, mask `0x0f`).
+    #[test]
+    fn pre_hopper_tree_size() {
+        for chipset in [Chipset::TU102, Chipset::GA102, Chipset::AD102] {
+            let hal = gin_hal(chipset);
+            assert_eq!(hal.num_leaves(), 8);
+            assert_eq!(hal.subtree_mask(), 0x0f);
+        }
+    }
+
+    /// Hopper and later implement a 16-leaf tree (8 subtrees, mask `0xff`).
+    #[test]
+    fn hopper_plus_tree_size() {
+        for chipset in [Chipset::GH100, Chipset::GB100, Chipset::GB202] {
+            let hal = gin_hal(chipset);
+            assert_eq!(hal.num_leaves(), 16);
+            assert_eq!(hal.subtree_mask(), 0xff);
+        }
+    }
+
+    /// The subtree mask always has exactly `num_leaves / 2` bits set, one per subtree.
+    #[test]
+    fn subtree_mask_matches_leaf_count() {
+        for chipset in [
+            Chipset::TU102,
+            Chipset::GA102,
+            Chipset::AD102,
+            Chipset::GH100,
+            Chipset::GB100,
+            Chipset::GB202,
+        ] {
+            let hal = gin_hal(chipset);
+            assert_eq!(
+                hal.subtree_mask().count_ones() as usize,
+                hal.num_leaves() / 2
+            );
         }
     }
 }
