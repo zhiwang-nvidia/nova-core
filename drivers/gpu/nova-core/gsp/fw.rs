@@ -581,9 +581,23 @@ impl GspMsgElement {
         num::u32_as_usize(self.mctp_payload_size)
     }
 
-    /// Returns `true` if the MCTP magic field contains the expected value.
-    pub(crate) fn has_valid_magic(&self) -> bool {
+    /// Returns `true` if the MCTP/NVDM framing and redundant lengths are consistent.
+    pub(crate) fn has_valid_framing(&self) -> bool {
+        let nvdm_payload_size = num::u32_as_usize(self.nvdm_payload_size);
+        let Some(payload_size) =
+            nvdm_payload_size.checked_sub(size_of::<r000::rpc_message_header_v>())
+        else {
+            return false;
+        };
+        let Some(mctp_payload_size) = size_of::<Self>().checked_add(payload_size) else {
+            return false;
+        };
+
         self.mctp_magic == MCTP_MAGIC
+            && self.mctp_header.is_single_packet()
+            && self.nvdm_header.validate(NvdmType::RmRpc)
+            && num::u32_as_usize(self.mctp_payload_size) == mctp_payload_size
+            && num::u32_as_usize(self.rpc.length) == nvdm_payload_size
     }
 
     // Returns the sequence number of the message.
@@ -732,9 +746,21 @@ impl GspGmcMsgElement {
         num::u32_as_usize(self.mctp_payload_size)
     }
 
-    /// Returns `true` if the MCTP magic field contains the expected value.
-    pub(crate) fn has_valid_magic(&self) -> bool {
+    /// Returns `true` if the MCTP/NVDM framing and redundant lengths are consistent.
+    pub(crate) fn has_valid_framing(&self) -> bool {
+        let nvdm_payload_size = num::u32_as_usize(self.nvdm_payload_size);
+        let Some(payload_size) = nvdm_payload_size.checked_sub(size_of::<GmcApiHeader>()) else {
+            return false;
+        };
+        let Some(mctp_payload_size) = size_of::<Self>().checked_add(payload_size) else {
+            return false;
+        };
+
         self.mctp_magic == MCTP_MAGIC
+            && self.mctp_header.is_single_packet()
+            && self.nvdm_header.validate(NvdmType::GmcApi)
+            && num::u32_as_usize(self.mctp_payload_size) == mctp_payload_size
+            && num::u32_as_usize(self.gmc.size) == payload_size
     }
 
     /// Returns the number of elements (i.e. memory pages) used by this message.
