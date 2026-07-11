@@ -3,6 +3,7 @@
 mod continuation;
 
 use core::{
+    cell::Cell,
     mem,
     sync::atomic::{
         fence,
@@ -702,6 +703,7 @@ impl Cmdq {
                     seq: 0,
                     tx_async_seq: 0,
                     rx_event_seq: 0,
+                    poisoned: Cell::new(false),
                 }),
             }))
         })
@@ -857,6 +859,10 @@ struct CmdqInner {
     /// Async event receive sequence number, for debug logging. GSP does not populate
     /// rpc.sequence for async events today, so the driver counts them itself.
     rx_event_seq: u32,
+    /// Set once a message with corrupt MCTP/NVDM framing or an untrusted length is seen. The queue
+    /// cannot safely advance past such a message, so every later receive fails until reset. This
+    /// is a [`Cell`] so the shared-borrow read paths can set it.
+    poisoned: Cell<bool>,
     /// Memory area shared with the GSP for communicating commands and messages.
     gsp_mem: DmaGspMem,
 }
@@ -1053,11 +1059,17 @@ impl CmdqInner {
     /// # Errors
     ///
     /// - `ETIMEDOUT` if `timeout` has elapsed before any message becomes available.
-    /// - `EIO` if there was some inconsistency (e.g. message shorter than advertised) on the
-    ///   message queue.
+    /// - `EIO` if the MCTP/NVDM framing or advertised length is invalid, or the queue was already
+    ///   poisoned by an earlier such failure. Recovery requires a reset rather than advancing
+    ///   past an untrusted message boundary.
     ///
     /// Error codes returned by the message constructor are propagated as-is.
     fn wait_for_msg(&self, bar: Bar0<'_>, timeout: Delta) -> Result<GspMessage<'_>> {
+        // A prior framing failure left the queue head untrusted; refuse to re-parse it.
+        if self.poisoned.get() {
+            return Err(EIO);
+        }
+
         // Wait for a message to arrive from the GSP.
         let (slice_1, slice_2) = read_poll_timeout(
             || Ok(self.gsp_mem.driver_read_area_v2(bar)),
@@ -1068,12 +1080,26 @@ impl CmdqInner {
         .map(|(slice_1, slice_2)| (slice_1.as_flattened(), slice_2.as_flattened()))?;
 
         // Extract the `GspMsgElement`.
-        let (header, slice_1) = GspMsgElement::from_bytes_prefix(slice_1).ok_or(EIO)?;
+        let Some((header, slice_1)) = GspMsgElement::from_bytes_prefix(slice_1) else {
+            self.poisoned.set(true);
+            return Err(EIO);
+        };
+
+        if !header.has_valid_framing() {
+            dev_err!(
+                &self.dev,
+                "GSP RPC: receive: Call {} - invalid MCTP/NVDM framing\n",
+                header.sequence()
+            );
+            self.poisoned.set(true);
+            return Err(EIO);
+        }
 
         let payload_length = header.payload_length();
 
         // Check that the driver read area is large enough for the message.
         if slice_1.len() + slice_2.len() < payload_length {
+            self.poisoned.set(true);
             return Err(EIO);
         }
 
@@ -1089,15 +1115,6 @@ impl CmdqInner {
                 slice_2.split_at(payload_length - slice_1.len()).0,
             )
         };
-
-        if !header.has_valid_magic() {
-            dev_err!(
-                &self.dev,
-                "GSP RPC: receive: Call {} - bad MCTP magic\n",
-                header.sequence()
-            );
-            return Err(EIO);
-        }
 
         Ok(GspMessage {
             header,
@@ -1168,23 +1185,29 @@ impl CmdqInner {
             }
         }
 
-        // Extract the message if it is the awaited reply. Store the result as we want to advance
-        // the read pointer even in case of failure.
+        // Extract the message if it is the awaited reply. Store the result, because the read
+        // pointer must advance past this message even on failure. MCTP/NVDM framing and redundant
+        // lengths are already validated by `wait_for_msg`, so a typed-decode failure still
+        // advances rather than leaving the message at the queue head.
         let result = if matched {
-            let (cmd, contents_1) = M::Message::from_bytes_prefix(message.contents.0).ok_or(EIO)?;
-            let mut sbuffer = SBufferIter::new_reader([contents_1, message.contents.1]);
+            match M::Message::from_bytes_prefix(message.contents.0) {
+                Some((cmd, contents_1)) => {
+                    let mut sbuffer = SBufferIter::new_reader([contents_1, message.contents.1]);
 
-            M::read(cmd, &mut sbuffer)
-                .map_err(|e| e.into())
-                .inspect(|_| {
-                    if !sbuffer.is_empty() {
-                        dev_warn!(
-                            &self.dev,
-                            "GSP message {:?} has unprocessed data\n",
-                            M::FUNCTION
-                        );
-                    }
-                })
+                    M::read(cmd, &mut sbuffer)
+                        .map_err(|e| e.into())
+                        .inspect(|_| {
+                            if !sbuffer.is_empty() {
+                                dev_warn!(
+                                    &self.dev,
+                                    "GSP message {:?} has unprocessed data\n",
+                                    M::FUNCTION
+                                );
+                            }
+                        })
+                }
+                None => Err(EIO),
+            }
         } else {
             Err(ERANGE)
         };
@@ -1273,6 +1296,10 @@ impl CmdqInner {
     /// This is the GMC counterpart to [`CmdqInner::wait_for_msg`]. It parses a
     /// [`GspGmcMsgElement`] instead of a [`GspMsgElement`].
     fn wait_for_gmc_msg(&self, bar: Bar0<'_>, timeout: Delta) -> Result<GmcMessage<'_>> {
+        if self.poisoned.get() {
+            return Err(EIO);
+        }
+
         let (slice_1, slice_2) = read_poll_timeout(
             || Ok(self.gsp_mem.driver_read_area_v2(bar)),
             |driver_area| !driver_area.0.is_empty(),
@@ -1281,11 +1308,25 @@ impl CmdqInner {
         )
         .map(|(slice_1, slice_2)| (slice_1.as_flattened(), slice_2.as_flattened()))?;
 
-        let (header, slice_1) = GspGmcMsgElement::from_bytes_prefix(slice_1).ok_or(EIO)?;
+        let Some((header, slice_1)) = GspGmcMsgElement::from_bytes_prefix(slice_1) else {
+            self.poisoned.set(true);
+            return Err(EIO);
+        };
+
+        if !header.has_valid_framing() {
+            dev_err!(
+                &self.dev,
+                "GSP GMC: receive: seq {} - invalid MCTP/NVDM framing\n",
+                header.gmc.sequence
+            );
+            self.poisoned.set(true);
+            return Err(EIO);
+        }
 
         let payload_length = header.payload_length();
 
         if slice_1.len() + slice_2.len() < payload_length {
+            self.poisoned.set(true);
             return Err(EIO);
         }
 
@@ -1294,15 +1335,6 @@ impl CmdqInner {
         } else {
             (slice_1, slice_2.split_at(payload_length - slice_1.len()).0)
         };
-
-        if !header.has_valid_magic() {
-            dev_err!(
-                &self.dev,
-                "GSP GMC: receive: seq {} - bad MCTP magic\n",
-                header.gmc.sequence
-            );
-            return Err(EIO);
-        }
 
         Ok(GmcMessage {
             header,
