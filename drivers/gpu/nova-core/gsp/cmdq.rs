@@ -731,10 +731,10 @@ impl Cmdq {
         Error: From<<M::Reply as MessageFromGsp>::InitError>,
     {
         let mut inner = self.inner.lock();
-        inner.send_command(bar, command)?;
+        let expected_seq = inner.send_command(bar, command)?;
 
         loop {
-            match inner.receive_msg::<M::Reply>(bar, Self::RECEIVE_TIMEOUT) {
+            match inner.receive_msg::<M::Reply>(bar, Self::RECEIVE_TIMEOUT, Some(expected_seq)) {
                 Ok(reply) => break Ok(reply),
                 Err(ERANGE) => continue,
                 Err(e) => break Err(e),
@@ -757,19 +757,21 @@ impl Cmdq {
         M: CommandToGsp<Reply = NoReply>,
         Error: From<M::InitError>,
     {
-        self.inner.lock().send_command(bar, command)
+        self.inner.lock().send_command(bar, command).map(|_| ())
     }
 
     /// Receive a message from the GSP.
     ///
-    /// See [`CmdqInner::receive_msg`] for details.
+    /// This is for callers awaiting an unsolicited GSP event (identified by its
+    /// function alone), not a reply to a command. See [`CmdqInner::receive_msg`]
+    /// for details.
     #[expect(dead_code)]
     pub(crate) fn receive_msg<M: MessageFromGsp>(&self, bar: Bar0<'_>, timeout: Delta) -> Result<M>
     where
         // This allows all error types, including `Infallible`, to be used for `M::InitError`.
         Error: From<M::InitError>,
     {
-        self.inner.lock().receive_msg(bar, timeout)
+        self.inner.lock().receive_msg(bar, timeout, None)
     }
 
     /// Receive the next message from GSP and dispatch it through a handler.
@@ -846,8 +848,9 @@ impl Cmdq {
 struct CmdqInner {
     /// Device this command queue belongs to.
     dev: ARef<device::Device>,
-    /// RPC sequence counter, incremented for every send. Used as `rpc.sequence` for sync
-    /// commands (set to 0 for async commands).
+    /// Next logical command sequence number. Used as `rpc.sequence` for synchronous RPC commands
+    /// and as the GMC sequence; asynchronous RPC commands encode zero. Advances once per logical
+    /// command.
     seq: u32,
     /// Async (fire-and-forget) send sequence number, for debug logging.
     tx_async_seq: u32,
@@ -872,7 +875,7 @@ impl CmdqInner {
     ///   written to by its [`CommandToGsp::init_variable_payload`] method.
     ///
     /// Error codes returned by the command initializers are propagated as-is.
-    fn send_single_command<M>(&mut self, bar: Bar0<'_>, command: M) -> Result
+    fn send_single_command<M>(&mut self, bar: Bar0<'_>, command: M, rpc_sequence: u32) -> Result
     where
         M: CommandToGsp,
         // This allows all error types, including `Infallible`, to be used for `M::InitError`.
@@ -888,12 +891,8 @@ impl CmdqInner {
         // at `dst.contents.0` here.
         let (cmd, payload_1) = M::Command::from_bytes_mut_prefix(dst.contents.0).ok_or(EIO)?;
 
-        // rpc.sequence is 0 for async (fire-and-forget) commands, or the
-        // sequence counter for command/response pairs, matching Open RM behavior.
-        let rpc_seq = if M::IS_ASYNC { 0 } else { self.seq };
-
         // Fill the header and command in-place.
-        let msg_element = GspMsgElement::init(rpc_seq, size_in_bytes, M::FUNCTION);
+        let msg_element = GspMsgElement::init(rpc_sequence, size_in_bytes, M::FUNCTION);
         // SAFETY: `msg_header` and `cmd` are valid references, and not touched if the initializer
         // fails.
         unsafe {
@@ -923,7 +922,7 @@ impl CmdqInner {
             dev_dbg!(
                 &self.dev,
                 "GSP RPC: send: seq# {}, function={:?}, length=0x{:x}\n",
-                self.seq,
+                rpc_sequence,
                 M::FUNCTION,
                 dst.header.length(),
             );
@@ -931,7 +930,6 @@ impl CmdqInner {
 
         // All set - update the write pointer. The pointer write doubles as the GSP doorbell.
         let elem_count = dst.header.element_count();
-        self.seq += 1;
         DmaGspMem::advance_cpu_write_ptr_v2(bar, elem_count);
 
         Ok(())
@@ -948,24 +946,40 @@ impl CmdqInner {
     ///   written to by its [`CommandToGsp::init_variable_payload`] method.
     ///
     /// Error codes returned by the command initializers are propagated as-is.
-    fn send_command<M>(&mut self, bar: Bar0<'_>, command: M) -> Result
+    ///
+    /// Returns the RPC sequence number assigned to the command. The GSP echoes
+    /// it in the reply, so a caller can pass it to [`Self::receive_msg`] to
+    /// match the reply to this command.
+    fn send_command<M>(&mut self, bar: Bar0<'_>, command: M) -> Result<u32>
     where
         M: CommandToGsp,
         Error: From<M::InitError>,
     {
+        // One RPC sequence number identifies the whole logical command, including
+        // any continuation records. Asynchronous commands encode zero, matching
+        // Open RM behavior.
+        let rpc_sequence = if M::IS_ASYNC { 0 } else { self.seq };
+        self.seq = self.seq.wrapping_add(1);
+
         match SplitState::new(command)? {
-            SplitState::Single(command) => self.send_single_command(bar, command),
+            SplitState::Single(command) => self.send_single_command(bar, command, rpc_sequence)?,
             SplitState::Split(command, mut continuations) => {
-                self.send_single_command(bar, command)?;
+                self.send_single_command(bar, command, rpc_sequence)?;
 
                 while let Some(continuation) = continuations.next() {
-                    // Turbofish needed because the compiler cannot infer M here.
-                    self.send_single_command::<ContinuationRecord<'_>>(bar, continuation)?;
+                    // Continuation records are transport fragments of the same
+                    // logical command, so they carry its RPC sequence. Turbofish
+                    // needed because the compiler cannot infer M here.
+                    self.send_single_command::<ContinuationRecord<'_>>(
+                        bar,
+                        continuation,
+                        rpc_sequence,
+                    )?;
                 }
-
-                Ok(())
             }
         }
+
+        Ok(rpc_sequence)
     }
 
     /// Sends a GMC API command to the GSP.
@@ -1093,11 +1107,17 @@ impl CmdqInner {
 
     /// Receive a message from the GSP.
     ///
-    /// The expected message type is specified using the `M` generic parameter. A message whose
-    /// function code matches is decoded and returned. Any other message, whether it carries a
-    /// different or an unrecognized function code, is routed to [`Self::dispatch_event`] and
-    /// `ERANGE` is returned, so a caller waiting for a specific reply keeps waiting while
-    /// unsolicited events are still handled rather than dropped.
+    /// The expected message type is given by the `M` generic parameter. When `expected_seq` is
+    /// `Some`, the message must also carry that RPC sequence number to count as the awaited reply;
+    /// this is how a reply is matched to the command that produced it. When it is `None`, the
+    /// function code alone decides the match, which is what a caller awaiting an unsolicited event
+    /// wants.
+    ///
+    /// A matching message is decoded and returned. A message with the expected function but a
+    /// different sequence is a stale reply (for example from a command that already timed out); it
+    /// is logged and dropped. Any other message is routed to [`Self::dispatch_event`]. Both
+    /// non-matching cases return `ERANGE`, so a caller keeps waiting while unsolicited events are
+    /// still handled rather than dropped.
     ///
     /// The read pointer is always advanced past the message, regardless of whether it matched.
     ///
@@ -1106,10 +1126,16 @@ impl CmdqInner {
     /// - `ETIMEDOUT` if `timeout` has elapsed before any message becomes available.
     /// - `EIO` if there was some inconsistency (e.g. message shorter than advertised) on the
     ///   message queue.
-    /// - `ERANGE` if the message was not the awaited reply (it was dispatched as an event).
+    /// - `ERANGE` if the message was not the awaited reply (it was dispatched as an event or
+    ///   dropped as a stale reply).
     ///
     /// Error codes returned by [`MessageFromGsp::read`] are propagated as-is.
-    fn receive_msg<M: MessageFromGsp>(&mut self, bar: Bar0<'_>, timeout: Delta) -> Result<M>
+    fn receive_msg<M: MessageFromGsp>(
+        &mut self,
+        bar: Bar0<'_>,
+        timeout: Delta,
+        expected_seq: Option<u32>,
+    ) -> Result<M>
     where
         // This allows all error types, including `Infallible`, to be used for `M::InitError`.
         Error: From<M::InitError>,
@@ -1117,7 +1143,8 @@ impl CmdqInner {
         let message = self.wait_for_msg(bar, timeout)?;
         let function = message.header.function();
         let seq = message.header.sequence();
-        let matched = matches!(function, Ok(f) if f == M::FUNCTION);
+        let func_matches = matches!(function, Ok(f) if f == M::FUNCTION);
+        let matched = func_matches && expected_seq.is_none_or(|expected| seq == expected);
         let is_event = matches!(function, Ok(f) if f.is_event());
         let display_seq = if is_event { self.rx_event_seq } else { seq };
 
@@ -1174,9 +1201,21 @@ impl CmdqInner {
             self.rx_event_seq += 1;
         }
 
-        // Route anything that was not the awaited reply to its event handler.
         if !matched {
-            self.dispatch_event(function, display_seq);
+            if func_matches {
+                // Expected function but wrong sequence: a stale reply, e.g. from a command that
+                // already timed out. Drop it explicitly instead of treating it as an event.
+                dev_warn!(
+                    &self.dev,
+                    "GSP RPC: dropping stale {:?} reply (seq {}, awaiting {:?})\n",
+                    M::FUNCTION,
+                    seq,
+                    expected_seq,
+                );
+            } else {
+                // Not a reply at all: route it to its event handler.
+                self.dispatch_event(function, display_seq);
+            }
         }
 
         result
