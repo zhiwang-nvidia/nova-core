@@ -12,7 +12,11 @@ use core::{
 use kernel::{
     device,
     pci,
-    prelude::*, //
+    prelude::*,
+    time::{
+        Instant,
+        Monotonic, //
+    }, //
 };
 
 use crate::{
@@ -173,10 +177,16 @@ pub(crate) fn gsp_init(
 ) -> Result<GetGspStaticInfoReply> {
     cmdq.send_gmc_no_wait(bar, CMD_GSP_INIT, payload, GSP_INIT_MAX_RESPONSE_SIZE)?;
 
+    // Bound the complete initialization reply wait, including any interleaved LOAD_EXEC events.
+    let deadline = Instant::<Monotonic>::now() + Cmdq::RECEIVE_TIMEOUT;
     loop {
+        let remaining = deadline - Instant::<Monotonic>::now();
+        if remaining.is_negative() {
+            return Err(ETIMEDOUT);
+        }
         let reply = cmdq.receive_gmc_and_dispatch(
             bar,
-            Cmdq::RECEIVE_TIMEOUT,
+            remaining,
             |id, status, p0, p1| -> Result<Option<GetGspStaticInfoReply>> {
                 if id == CMD_GSP_INIT {
                     if status != 0 {

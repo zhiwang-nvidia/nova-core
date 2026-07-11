@@ -30,7 +30,11 @@ use kernel::{
         aref::ARef,
         Mutex, //
     },
-    time::Delta,
+    time::{
+        Delta,
+        Instant,
+        Monotonic, //
+    },
     transmute::{
         AsBytes,
         FromBytes, //
@@ -735,8 +739,15 @@ impl Cmdq {
         let mut inner = self.inner.lock();
         let expected_seq = inner.send_command(bar, command)?;
 
+        // One deadline bounds the whole reply wait. A burst of unsolicited events dispatched while
+        // waiting is handled inline but cannot extend the wait past `RECEIVE_TIMEOUT`.
+        let deadline = Instant::<Monotonic>::now() + Self::RECEIVE_TIMEOUT;
         loop {
-            match inner.receive_msg::<M::Reply>(bar, Self::RECEIVE_TIMEOUT, Some(expected_seq)) {
+            let remaining = deadline - Instant::<Monotonic>::now();
+            if remaining.is_negative() {
+                break Err(ETIMEDOUT);
+            }
+            match inner.receive_msg::<M::Reply>(bar, remaining, Some(expected_seq)) {
                 Ok(reply) => break Ok(reply),
                 Err(ERANGE) => continue,
                 Err(e) => break Err(e),
