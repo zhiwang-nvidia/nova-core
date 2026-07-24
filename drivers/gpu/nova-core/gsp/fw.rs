@@ -133,8 +133,12 @@ impl LibosParams {
     }
 
     /// Returns the WPR heap size to reserve when vGPU is enabled.
-    pub(crate) fn vgpu_wpr_heap_size() -> u64 {
-        u64::from(r000::GSP_FW_HEAP_SIZE_VGPU_DEFAULT)
+    pub(crate) fn vgpu_wpr_heap_size(total_vfs: u16) -> u64 {
+        // zhiw: r000 requires the 48-VM heap once the advertised VF count exceeds 32.
+        u64::from(match total_vfs {
+            2..=32 => r000::GSP_FW_HEAP_SIZE_VGPU_DEFAULT,
+            _ => r000::GSP_FW_HEAP_SIZE_VGPU_48VMS,
+        })
     }
 
     /// Returns the amount of memory (in bytes) to allocate for the WPR heap for a framebuffer size
