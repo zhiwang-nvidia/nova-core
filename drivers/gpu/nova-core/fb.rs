@@ -247,7 +247,7 @@ impl FbLayout {
             ),
             VgpuState::Enabled { total_vfs } => (
                 u8::try_from(total_vfs.get()).map_err(|_| EINVAL)?,
-                gsp::LibosParams::vgpu_wpr_heap_size(),
+                gsp::LibosParams::vgpu_wpr_heap_size(total_vfs.get()),
             ),
         };
 
