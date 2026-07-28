@@ -29,7 +29,7 @@ use crate::{
         ChannelIdPool,
         Chipset, //
     },
-    gsp::commands::NVGMC_ENGINE_TYPE_COUNT, //
+    gsp::commands::FifoEngineList, //
 };
 
 mod fw;
@@ -59,7 +59,7 @@ pub(crate) struct VgpuManager<'gpu> {
     state: VgpuState,
     vmmu_segment_size: Option<u64>,
     total_channels: Option<u32>,
-    engine_masks: Option<[u64; NVGMC_ENGINE_TYPE_COUNT]>,
+    fifo_engine_list: FifoEngineList,
 }
 
 impl<'gpu> VgpuManager<'gpu> {
@@ -71,7 +71,7 @@ impl<'gpu> VgpuManager<'gpu> {
             state: VgpuState::Disabled,
             vmmu_segment_size: None,
             total_channels: None,
-            engine_masks: None,
+            fifo_engine_list: FifoEngineList::new(),
         })
     }
 
@@ -135,7 +135,7 @@ impl<'gpu> VgpuManager<'gpu> {
     /// Initializes the runtime parameters returned by GSP_INIT.
     pub(crate) fn init(
         self: Pin<&mut Self>,
-        gmc_engine_masks: &[u64; NVGMC_ENGINE_TYPE_COUNT],
+        fifo_engine_list: FifoEngineList,
         vmmu_segment_size: u64,
         total_channels: u32,
     ) {
@@ -143,7 +143,7 @@ impl<'gpu> VgpuManager<'gpu> {
         if matches!(*this.state, VgpuState::Enabled { .. }) {
             *this.vmmu_segment_size = Some(vmmu_segment_size);
             *this.total_channels = Some(total_channels);
-            *this.engine_masks = Some(*gmc_engine_masks);
+            *this.fifo_engine_list = fifo_engine_list;
         }
     }
 
@@ -162,9 +162,9 @@ impl<'gpu> VgpuManager<'gpu> {
         self.total_channels
     }
 
-    /// Returns the available engine-instance masks.
-    pub(crate) fn engine_masks(&self) -> Result<&[u64; NVGMC_ENGINE_TYPE_COUNT]> {
-        self.engine_masks.as_ref().ok_or(ENODEV)
+    /// Returns the ordered FIFO engine list provided by GSP_INIT.
+    pub(crate) fn fifo_engine_list(&self) -> &FifoEngineList {
+        &self.fifo_engine_list
     }
 }
 

@@ -143,7 +143,7 @@ fn nvidia_vgpu_open_inner<'a>(
     );
 
     let type_info = VgpuTypeInfo::from_vgpu_type(&vgpu_type);
-    let engine_masks = vgpu.engine_masks()?;
+    let fifo_engine_list = *vgpu.fifo_engine_list();
     let mut instances = vgpu.instances().lock();
     let instance = instances.allocate_instance(
         dev,
@@ -163,7 +163,7 @@ fn nvidia_vgpu_open_inner<'a>(
         gpu.bar_user(),
         gpu.mm(),
         instance,
-        engine_masks,
+        &fifo_engine_list,
         gpu.chipset(),
         gpu.build_id(),
     )?;

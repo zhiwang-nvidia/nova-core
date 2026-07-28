@@ -19,7 +19,7 @@ use crate::{
     },
     gsp::{
         cmdq::Cmdq,
-        commands::NVGMC_ENGINE_TYPE_COUNT,
+        commands::FifoEngineList,
         nvkv::{
             Dbdf,
             VgpuProperties, //
@@ -523,11 +523,11 @@ fn activate_unregistered_instance(
     cmdq: &Cmdq,
     bar: Bar0<'_>,
     instance: &mut VgpuInstance<'_>,
-    engine_masks: &[u64; NVGMC_ENGINE_TYPE_COUNT],
+    fifo_engine_list: &FifoEngineList,
     chipset: Chipset,
     build_id: Option<&BuildId>,
 ) -> Result {
-    bootload(dev, cmdq, bar, instance, engine_masks)?;
+    bootload(dev, cmdq, bar, instance, fifo_engine_list)?;
 
     let params = PluginConfigParams::new(
         [0; 16],
@@ -576,7 +576,7 @@ pub(crate) fn activate_instance<'gpu>(
     bar_user: &BarUser<'gpu>,
     mm: &GpuMm<'gpu>,
     mut instance: VgpuInstance<'gpu>,
-    engine_masks: &[u64; NVGMC_ENGINE_TYPE_COUNT],
+    fifo_engine_list: &FifoEngineList,
     chipset: Chipset,
     build_id: Option<&BuildId>,
 ) -> Result {
@@ -586,7 +586,7 @@ pub(crate) fn activate_instance<'gpu>(
         cmdq,
         bar,
         &mut instance,
-        engine_masks,
+        fifo_engine_list,
         chipset,
         build_id,
     );

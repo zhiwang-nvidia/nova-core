@@ -572,8 +572,14 @@ nvkv_decode! {
         fb_regions: Accumulated<FbRegionSchema>,
         bar1_pde_base: Required<u64, { Self::BAR1_PDE_BASE_KEY }>,
         vmmu_segment_size: Key<u64, { Self::VMMU_SEGMENT_SIZE_KEY }>,
-        gmc_engine_masks:
-            Indexed<u64, { GspInitResponse::NVGMC_ENGINE_TYPE_COUNT }, { Self::ENGINE_MASK_KEY }>,
+        fifo_engine_count: Key<u32, { Self::FIFO_ENGINE_COUNT_KEY }>,
+        fifo_engine_gmc_ids: Indexed<
+            u32,
+            { GspInitResponse::MAX_FIFO_ENGINES },
+            { Self::FIFO_ENGINE_GMC_ENGINE_ID_KEY },
+        >,
+        fifo_engine_flags:
+            Indexed<u32, { GspInitResponse::MAX_FIFO_ENGINES }, { Self::FIFO_ENGINE_FLAGS_KEY }>,
     }
 }
 
@@ -583,7 +589,9 @@ impl GspInitResponseSchema {
     const GPU_NAME_STRING_KEY: KeyId = 0x2000;
     const BAR1_PDE_BASE_KEY: KeyId = 0x1020;
     const VMMU_SEGMENT_SIZE_KEY: KeyId = 0x1050;
-    const ENGINE_MASK_KEY: KeyId = 0x1100;
+    const FIFO_ENGINE_COUNT_KEY: KeyId = 0x0500;
+    const FIFO_ENGINE_GMC_ENGINE_ID_KEY: KeyId = 0x0501;
+    const FIFO_ENGINE_FLAGS_KEY: KeyId = 0x0502;
 }
 
 pub(super) struct GspInitResponse {
@@ -591,12 +599,14 @@ pub(super) struct GspInitResponse {
     fb_regions: KVVec<FbRegion>,
     bar1_pde_base: u64,
     vmmu_segment_size: u64,
-    gmc_engine_masks: [u64; Self::NVGMC_ENGINE_TYPE_COUNT],
+    fifo_engine_count: u32,
+    fifo_engine_gmc_ids: [u32; Self::MAX_FIFO_ENGINES],
+    fifo_engine_flags: [u32; Self::MAX_FIFO_ENGINES],
 }
 
 impl GspInitResponse {
     const MAX_GPU_NAME_LEN: usize = 64;
-    const NVGMC_ENGINE_TYPE_COUNT: usize = 20;
+    const MAX_FIFO_ENGINES: usize = 64;
     const FB_REGION_TAG_NONE: u32 = 0;
 
     /// Returns the BAR1 Page Directory Entry base address.
@@ -641,9 +651,19 @@ impl GspInitResponse {
         self.vmmu_segment_size
     }
 
-    /// Returns the available-instance masks indexed by GMC engine type.
-    pub(super) const fn gmc_engine_masks(&self) -> &[u64; Self::NVGMC_ENGINE_TYPE_COUNT] {
-        &self.gmc_engine_masks
+    /// Returns the count of FIFO engines reported by GSP-RM.
+    pub(super) fn fifo_engine_count(&self) -> usize {
+        (self.fifo_engine_count as usize).min(Self::MAX_FIFO_ENGINES)
+    }
+
+    /// Returns the raw array of GMC engine IDs from the FIFO engine table.
+    pub(super) fn fifo_engine_gmc_ids(&self) -> &[u32; Self::MAX_FIFO_ENGINES] {
+        &self.fifo_engine_gmc_ids
+    }
+
+    /// Returns the raw array of per-engine flags from the FIFO engine table.
+    pub(super) fn fifo_engine_flags(&self) -> &[u32; Self::MAX_FIFO_ENGINES] {
+        &self.fifo_engine_flags
     }
 }
 
@@ -1062,7 +1082,12 @@ mod tests {
         const FB_REGION1_LIMIT: u64 = 0x2fff_ffff;
         const FB_REGION1_FLAGS: u32 = 0x3;
         const FB_REGION1_TAG: u32 = 1;
-        const ENGINE_MASK: u64 = 0x1234_5678;
+        // GMC engine IDs: engine_type[15:0] | engine_index[31:16]
+        const FIFO_ENGINE_ID0: u32 = 0x0000_0001; // type=1 (GR), index=0
+        const FIFO_ENGINE_ID1: u32 = 0x0001_0002; // type=2 (COPY), index=1
+        // ENGINE_FLAGS bit 0 = IS_HOST_DRIVEN (NVGMC_SC_ENGINE_FLAGS_IS_HOST_DRIVEN 0:0)
+        const FLAGS_HOST_DRIVEN: u32 = 0x1;
+        const FLAGS_NOT_HOST_DRIVEN: u32 = 0x0;
 
         let index0 = Index::new::<0>();
         let index1 = Index::new::<1>();
@@ -1074,10 +1099,25 @@ mod tests {
             BAR1_PDE_BASE,
         )?;
         encoder.encode_u64(FbRegionSchema::BASE_KEY, index0, FB_REGION0_BASE)?;
-        encoder.encode_u64(GspInitResponseSchema::ENGINE_MASK_KEY, index1, ENGINE_MASK)?;
+        // ENGINE_COUNT: NVKV_SET_SEQ32_1U → IMM32
+        encoder.encode_u32(GspInitResponseSchema::FIFO_ENGINE_COUNT_KEY, index0, 2)?;
+        // Engine 0: NVKV_SET_SEQ32_2U → single SEQ32 count=2, base_key=ENGINE_ID (0x0501)
+        //   value[0] → key 0x0501 (ENGINE_ID)    → fifo_engine_gmc_ids[0]
+        //   value[1] → key 0x0502 (ENGINE_FLAGS)  → fifo_engine_flags[0]
+        encoder.encode_seq32(
+            GspInitResponseSchema::FIFO_ENGINE_GMC_ENGINE_ID_KEY,
+            index0,
+            &[FIFO_ENGINE_ID0, FLAGS_HOST_DRIVEN],
+        )?;
         encoder.encode_u64(FbRegionSchema::LIMIT_KEY, index0, FB_REGION0_LIMIT)?;
         encoder.encode_u32(FbRegionSchema::FLAGS_KEY, index0, FB_REGION0_FLAGS)?;
         encoder.encode_u32(FbRegionSchema::TAG_KEY, index0, FB_REGION0_TAG)?;
+        // Engine 1 interleaved between the two FB regions
+        encoder.encode_seq32(
+            GspInitResponseSchema::FIFO_ENGINE_GMC_ENGINE_ID_KEY,
+            index1,
+            &[FIFO_ENGINE_ID1, FLAGS_NOT_HOST_DRIVEN],
+        )?;
         encoder.encode_u64(FbRegionSchema::BASE_KEY, index1, FB_REGION1_BASE)?;
         encoder.encode_u64(FbRegionSchema::LIMIT_KEY, index1, FB_REGION1_LIMIT)?;
         encoder.encode_u32(FbRegionSchema::FLAGS_KEY, index1, FB_REGION1_FLAGS)?;
@@ -1102,10 +1142,11 @@ mod tests {
         assert_eq!(fb_region1.limit, FB_REGION1_LIMIT);
         assert_eq!(fb_region1.flags.into_raw(), FB_REGION1_FLAGS);
         assert_eq!(fb_region1.tag, FB_REGION1_TAG);
-        assert_eq!(
-            response.gmc_engine_masks().get(1).copied(),
-            Some(ENGINE_MASK)
-        );
+        assert_eq!(response.fifo_engine_count(), 2);
+        assert_eq!(response.fifo_engine_gmc_ids()[0], FIFO_ENGINE_ID0);
+        assert_eq!(response.fifo_engine_gmc_ids()[1], FIFO_ENGINE_ID1);
+        assert_eq!(response.fifo_engine_flags()[0], FLAGS_HOST_DRIVEN);
+        assert_eq!(response.fifo_engine_flags()[1], FLAGS_NOT_HOST_DRIVEN);
 
         Ok(())
     }

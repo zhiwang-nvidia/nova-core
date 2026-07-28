@@ -252,6 +252,22 @@ impl Encoder {
     }
 
     #[inline(always)]
+    pub(crate) fn encode_seq32(&mut self, key: KeyId, index: Index, values: &[u32]) -> Result {
+        let count = u32::try_from(values.len())?;
+        let num_entries = values.len().div_ceil(2);
+        self.backing.reserve(num_entries + 1, GFP_KERNEL)?;
+        self.encode_op(
+            Op::zeroed()
+                .with_key(key)
+                .with_index(index)
+                .with_opcode(Opcode::Seq32)
+                .with_value(count),
+        )?;
+        self.push_bytes_with_padding(<[u32] as IntoBytes>::as_bytes(values))?;
+        Ok(())
+    }
+
+    #[inline(always)]
     pub(crate) fn encode_array32(&mut self, key: KeyId, index: Index, array: &[u32]) -> Result {
         let value_count = u32::try_from(array.len())?;
         let num_entries = array.len().div_ceil(2);

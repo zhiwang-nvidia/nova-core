@@ -207,7 +207,7 @@ impl super::Gsp {
         })?;
 
         vgpu.as_mut().init(
-            &static_info.gmc_engine_masks,
+            static_info.fifo_engine_list,
             static_info.vmmu_segment_size,
             TOTAL_CHANNELS,
         );
