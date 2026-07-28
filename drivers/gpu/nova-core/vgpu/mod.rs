@@ -20,6 +20,7 @@ use crate::{
     gsp::commands::FifoEngineList, //
 };
 
+mod fw;
 mod hal;
 mod vram;
 
