@@ -20,6 +20,7 @@ use crate::{
     gsp::commands::NVGMC_ENGINE_TYPE_COUNT, //
 };
 
+mod fw;
 mod hal;
 mod vram;
 
