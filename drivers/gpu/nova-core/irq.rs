@@ -22,14 +22,18 @@ use kernel::{
     prelude::*,
 };
 
-/// Allocates a single MSI or MSI-X interrupt vector for `pdev`.
-///
-/// The GIN interrupt tree delivers each source as its own message-signaled
-/// vector, so nova-core requires MSI or MSI-X and does not fall back to a
-/// shared INTx line. Allocation fails if neither is available.
-pub(crate) fn alloc_vector(pdev: &pci::Device<Bound>) -> Result<pci::IrqVector<'_>> {
-    let msi_types = IrqTypes::default().with(IrqType::Msi).with(IrqType::MsiX);
-    let irq_vectors = pdev.alloc_irq_vectors(1, 1, msi_types)?;
+/// MSI-X table index that receives the GSP interrupt subtree.
+const GSP_MSIX_INDEX: u32 = 2;
 
-    Ok(*irq_vectors.start())
+/// Allocates the MSI-X vectors needed to reach the GSP interrupt subtree.
+///
+/// GSP vector 155 belongs to GIN subtree 2, which is delivered through MSI-X
+/// table entry 2. Allocate entries 0 through 2 and return entry 2 for the GSP
+/// handler.
+pub(crate) fn alloc_vector(pdev: &pci::Device<Bound>) -> Result<pci::IrqVector<'_>> {
+    let vector_count = GSP_MSIX_INDEX + 1;
+    let msix_only = IrqTypes::default().with(IrqType::MsiX);
+    let irq_vectors = pdev.alloc_irq_vectors(vector_count, vector_count, msix_only)?;
+
+    Ok(*irq_vectors.end())
 }

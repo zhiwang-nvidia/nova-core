@@ -118,8 +118,9 @@ impl pci::Driver for NovaCoreDriver {
             pdev.enable_device_mem()?;
             pdev.set_master();
 
-            // Allocate the single MSI vector once. It is shared by the self-test (if enabled),
-            // whose handler is freed before it returns, and the permanent GSP handler below.
+            // Allocate the MSI-X entries through the GSP subtree and select its vector. The
+            // vector is shared by the self-test (if enabled), whose handler is freed before it
+            // returns, and the permanent GSP handler below.
             let vector = crate::irq::alloc_vector(pdev)?;
 
             Ok(try_pin_init!(&this in NovaCore {
