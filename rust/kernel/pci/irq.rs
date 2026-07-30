@@ -96,6 +96,23 @@ impl<'a> IrqVector<'a> {
     fn index(&self) -> u32 {
         self.index
     }
+
+    /// Returns the interrupt type that was allocated for this vector.
+    ///
+    /// [`Device::alloc_irq_vectors`] is given a set of acceptable types and picks one of them, so
+    /// a driver whose behavior depends on the type asks for it here rather than assuming. All
+    /// vectors of one allocation share the same type.
+    pub fn irq_type(&self) -> IrqType {
+        // SAFETY: `self.dev.as_raw()` returns a valid pointer to a `struct pci_dev`.
+        let raw = unsafe { bindings::pci_irq_type(self.dev.as_raw()) };
+
+        match raw {
+            bindings::PCI_IRQ_MSIX => IrqType::MsiX,
+            bindings::PCI_IRQ_MSI => IrqType::Msi,
+            // The helper returns `PCI_IRQ_INTX` when neither MSI nor MSI-X is enabled.
+            _ => IrqType::Intx,
+        }
+    }
 }
 
 impl<'a> TryInto<IrqRequest<'a>> for IrqVector<'a> {
