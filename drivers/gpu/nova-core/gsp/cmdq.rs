@@ -880,8 +880,8 @@ impl Cmdq {
 
     /// Drains and dispatches every message currently pending in the GSP-to-CPU queue.
     ///
-    /// Routes each message the GSP has already posted through [`CmdqInner::dispatch_event`] and
-    /// returns without waiting for more.
+    /// Dispatches pending RM RPC messages as events, consumes pending GMC messages, and returns
+    /// without waiting for more.
     ///
     /// # Errors
     ///
@@ -1327,32 +1327,24 @@ impl CmdqInner {
 
     /// Drains and dispatches all messages currently pending in the GSP-to-CPU queue.
     ///
-    /// Processes whatever the GSP has already posted, dispatching each message as an event, and
-    /// stops once the queue is empty. There is no awaited reply during a drain, so every message
-    /// is routed to [`Self::dispatch_event`].
+    /// RM RPC messages are dispatched as events. GMC messages are unsolicited while the drain owns
+    /// the command queue lock, so they are consumed without dispatch.
     ///
     /// # Errors
     ///
     /// Returns the receive error that stopped the drain, in particular the `EIO` of a queue
-    /// poisoned by corrupt framing (see [`Self::wait_for_msg`]).
+    /// poisoned by framing that is invalid for both GMC and RM RPC (see
+    /// [`Self::receive_gmc_and_dispatch`]).
     fn drain(&mut self, bar: Bar0<'_>) -> Result {
         while !self.gsp_mem.driver_read_area_v2(bar).0.is_empty() {
-            // A message is available, so this returns without waiting.
-            let msg = self.wait_for_msg(bar, Delta::ZERO)?;
-            let function = msg.header.function();
-            let seq = msg.header.sequence();
-            let length = msg.header.length();
-
-            self.log_received(function, seq, length);
-
-            let pages = u32::try_from(length.div_ceil(GSP_PAGE_SIZE)).map_err(|_| {
-                dev_err!(&self.dev, "GSP drain: message length overflow\n");
-                EIO
-            })?;
-
-            DmaGspMem::advance_cpu_read_ptr_v2(bar, pages);
-            self.advance_rx_event_seq(function);
-            self.dispatch_event(function, seq);
+            match self.receive_gmc_and_dispatch::<()>(
+                bar,
+                Delta::ZERO,
+                |_, _, _, _, _| (None, QueuePointers::Unchanged),
+            ) {
+                Ok(_) | Err(ERANGE) => {}
+                Err(error) => return Err(error),
+            }
         }
 
         Ok(())
