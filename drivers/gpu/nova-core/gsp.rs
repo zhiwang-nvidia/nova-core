@@ -326,7 +326,11 @@ impl Gsp {
                 rmargs: Coherent::init(
                     dev,
                     GFP_KERNEL,
-                    GspArgumentsPadded::new(&cmdq, None, rm_state_monitor),
+                    GspArgumentsPadded::new(
+                        cmdq.as_ref().get_ref(),
+                        None,
+                        rm_state_monitor,
+                    ),
                 )?,
                 libos: {
                     let mut libos = CoherentBox::zeroed_slice(
