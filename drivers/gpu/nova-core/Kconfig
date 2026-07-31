@@ -23,4 +23,7 @@ config NOVA_CORE_SELFTESTS
 	help
 	  Build the driver self-tests and run them when the GPU is probed.
 
+	  A failed interrupt delivery test fails the probe and the driver does
+	  not load. The other tests only report their failures.
+
 	  If unsure, say N.

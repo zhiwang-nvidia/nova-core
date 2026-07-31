@@ -90,6 +90,11 @@ impl pci::Driver for NovaCoreDriver {
                     let spec = Spec::new(pdev.as_ref(), bar)?;
 
                     gpu::wait_gfw_boot_completion(pdev.as_ref(), bar, spec.chipset)?;
+
+                    // Runs before the GSP boots, so the self-test never reads or clears GSP
+                    // interrupt state.
+                    #[cfg(CONFIG_NOVA_CORE_SELFTESTS)]
+                    crate::irq::doorbell_test::run_selftest(pdev, bar, spec.chipset)?;
                 },
                 // TODO: Use `&bar` self-referential pin-init syntax once available.
                 //
