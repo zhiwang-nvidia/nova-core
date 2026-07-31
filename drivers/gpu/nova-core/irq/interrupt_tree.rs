@@ -14,6 +14,8 @@ use kernel::{
 
 use crate::num;
 
+use super::regs::*;
+
 /// Number of vectors one leaf register carries, one per bit.
 const VECTORS_PER_LEAF: u32 = u32::BITS;
 
@@ -28,6 +30,12 @@ const MAX_NUM_LEAVES: u32 = MAX_NUM_SUBTREES * LEAVES_PER_SUBTREE;
 
 /// Number of bits that address any vector the widest supported tree carries.
 const VECTOR_BITS: u32 = (MAX_NUM_LEAVES * VECTORS_PER_LEAF).ilog2();
+
+/// Width of the vector field in the leaf trigger register.
+const TRIGGER_VECTOR_BITS: u32 = {
+    let range = NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_TRIGGER::VECTOR_RANGE;
+    num::u8_as_u32(*range.end() - *range.start() + 1)
+};
 
 /// Index of a leaf register.
 pub(super) type LeafIndex = Bounded<usize, { MAX_NUM_LEAVES.ilog2() }>;
@@ -239,5 +247,11 @@ impl GinVector {
         }
 
         Ok(())
+    }
+}
+
+impl From<GinVector> for Bounded<u32, TRIGGER_VECTOR_BITS> {
+    fn from(vector: GinVector) -> Self {
+        vector.0.extend()
     }
 }
