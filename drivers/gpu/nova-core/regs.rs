@@ -589,6 +589,65 @@ register! {
     }
 }
 
+// GIN (GPU Interrupt and Notification): the Physical Function (PF) CPU interrupt tree.
+//
+// GIN is the GPU's interrupt controller, also known in older material as
+// `NV_CTRL` or `INTR_CTRL` (central register namespace `NV_GIN`). These
+// registers are the PF CPU self-view of the two-level interrupt tree at the
+// `NV_VIRTUAL_FUNCTION_PRIV` aperture (base `0x00b8_0000`). The leaf arrays
+// have 16 entries, the widest tree on any supported part. Pre-Hopper parts
+// implement the first eight, and the interrupt HAL supplies the count for a
+// given architecture. See `Documentation/gpu/nova/core/interrupts.rst`.
+
+register! {
+    /// Latched state of the 32 vectors that belong to one leaf, one bit per vector.
+    ///
+    /// A read yields the vectors currently latched in leaf `i`. Vector `v` occupies bit `v % 32`
+    /// of leaf `v / 32`. A write acknowledges every vector whose bit is `1` and leaves the others
+    /// latched.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF(u32)[16] @ 0x00b81000 {}
+
+    /// Unmasks individual vectors within one leaf.
+    ///
+    /// Each `1` written admits the matching vector to the CPU. Zero bits leave their vector as it
+    /// was, so a caller never needs a read-modify-write.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_EN_SET(u32)[16] @ 0x00b81200 {}
+
+    /// Masks individual vectors within one leaf.
+    ///
+    /// Each `1` written withholds the matching vector from the CPU. Masking governs delivery
+    /// alone: a masked vector still latches in `LEAF`, where a direct read finds it.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_EN_CLEAR(u32)[16] @ 0x00b81400 {}
+
+    /// Unmasks whole subtrees at the top of the tree.
+    ///
+    /// Bit `N` governs subtree `N`, which spans leaves `2N` and `2N + 1`. Each `1` written admits
+    /// that subtree to the CPU, and zero bits leave their subtree as it was.
+    ///
+    /// Hardware defines this as an array whose element 0 holds subtrees 0 through 31. That is every
+    /// subtree of the widest supported tree, so nova-core addresses element 0 directly.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_TOP_EN_SET(u32) @ 0x00b81608 {}
+
+    /// Masks whole subtrees at the top of the tree.
+    ///
+    /// Bit `N` governs subtree `N`. Each `1` written withholds that subtree from the CPU, which is
+    /// how a tree walk keeps interrupts away while it reads and acknowledges the leaves.
+    ///
+    /// Hardware defines this as an array whose element 0 holds subtrees 0 through 31. That is every
+    /// subtree of the widest supported tree, so nova-core addresses element 0 directly.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_TOP_EN_CLEAR(u32) @ 0x00b81610 {}
+
+    /// Latches a vector from software.
+    ///
+    /// The vector named in the `vector` field latches in its `LEAF` register exactly as a hardware
+    /// source would latch it, and then reaches the CPU under the same enable conditions. Every
+    /// supported part implements this register.
+    pub(crate) NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_TRIGGER(u32) @ 0x00b81640 {
+        /// Vector to latch.
+        11:0    vector;
+    }
+}
+
 // The modules below provide registers that are not identical on all supported chips. They should
 // only be used in HAL modules.
 
@@ -601,6 +660,19 @@ pub(crate) mod gm107 {
         pub(crate) NV_FUSE_STATUS_OPT_DISPLAY(u32) @ 0x00021c04 {
             0:0     display_disabled => bool;
         }
+    }
+}
+
+pub(crate) mod tu102 {
+    use kernel::io::register;
+
+    // PCI configuration-space mirror.
+
+    register! {
+        /// MSI end-of-interrupt register.
+        ///
+        /// A `u32` write rearms MSI delivery on pre-Hopper GPUs. The value is ignored.
+        pub(crate) NV_XVE_CYA_2(u32) @ 0x0008_8704 {}
     }
 }
 
