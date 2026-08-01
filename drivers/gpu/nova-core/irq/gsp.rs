@@ -74,6 +74,10 @@ pub(crate) fn enable(bar: Bar0<'_>, chipset: Chipset, irq_type: pci::IrqType) {
     // clear above leaves every leaf masked and the `allow` below is the last step, so no interrupt
     // can be delivered yet and the whole-tree drain cannot run concurrently with the handler.
     tree.drain(bar);
+    // The drain acknowledged the tree while GSP causes may still be latched at the falcon, which
+    // leaves the falcon with no transition to signal. Re-emit so a cause that survived the drain
+    // still reaches the CPU once the vector is unmasked below.
+    GspFalcon::retrigger_intr(bar, chipset);
     // Unmask the GSP vector. The subtree stays armed from here on, so the handler acknowledges
     // only its own leaf bit rather than walking the whole tree.
     //
@@ -94,6 +98,8 @@ pub(crate) struct GspInterrupt<'a> {
     cmdq: Arc<Cmdq>,
     /// The GIN interrupt tree for this chipset.
     tree: Tree,
+    /// Chipset, for the falcon retrigger, which Turing does not implement.
+    chipset: Chipset,
     /// Device, for logging from interrupt context without taking the command-queue lock.
     dev: ARef<device::Device>,
 }
@@ -112,6 +118,7 @@ impl<'a> GspInterrupt<'a> {
             bar,
             cmdq,
             tree: Tree::new(chipset, irq_type, GSP_SUBTREE),
+            chipset,
             dev,
         }? Error)
     }
@@ -145,16 +152,22 @@ impl irq::ThreadedHandler for GspInterrupt<'_> {
         } else {
             // The tree routes every falcon cause to this vector, so something other than a posted
             // message fired it, for example a HALT from a GSP crash. There is no recovery path for
-            // those causes, so report the status rather than discarding it. The falcon is not
-            // retriggered: the threaded half drains the whole queue, so no message is lost, and
-            // retriggering a cause that nothing clears would storm.
+            // those causes, so report the status rather than discarding it, then take the cause
+            // out of the falcon's enabled set. The retrigger below re-emits whatever remains
+            // enabled, and a cause nothing clears would keep re-emitting.
             dev_err!(
                 &self.dev,
                 "GSP interrupt with no SWGEN0, falcon IRQSTAT {:#x}\n",
                 status.into_raw()
             );
+            GspFalcon::mask_and_clear_intr(bar, status);
             irq::ThreadedIrqReturn::Handled
         };
+
+        // The leaf acknowledge above consumed the tree's record of this interrupt, and the falcon
+        // signals the tree only on a transition of its enabled causes, so a cause that arrived
+        // while this handler ran would never reach the CPU. Re-emit to supply that transition.
+        GspFalcon::retrigger_intr(bar, self.chipset);
 
         // Delivery resumes only after this, so it must happen on every path that services the
         // vector, including the fault path above.
