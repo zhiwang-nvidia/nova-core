@@ -9,8 +9,7 @@ use super::{
 };
 
 /// GIN parameters for Hopper and Blackwell, which implement a 16-leaf PF CPU
-/// tree. Only 12 leaves are currently used, but arming the unused subtrees is
-/// harmless because they read back zero.
+/// tree. Only 12 leaves carry sources.
 struct Gh100;
 
 impl PfCpuInterruptHal for Gh100 {

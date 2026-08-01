@@ -19,16 +19,47 @@ use kernel::{
     prelude::*,
 };
 
-pub(crate) fn alloc_vector(pdev: &pci::Device<Bound>) -> Result<pci::IrqVector<'_>> {
-    let msi_types = IrqTypes::default().with(IrqType::Msi).with(IrqType::MsiX);
+/// Allocates the interrupt vectors that the subtrees in `armed_mask` require, and returns the
+/// vector that delivers the highest of them.
+///
+/// Every subtree armed at `TOP` must have an allocated vector with a registered handler, or the
+/// interrupts it raises are lost. How many vectors that takes depends on the type Linux grants.
+/// MSI has a single message that every subtree raises, so one vector serves the whole tree. MSI-X
+/// raises a separate table entry per subtree, and Linux masks every entry a driver did not
+/// allocate, so the allocation has to reach the highest armed subtree. Entries below it that
+/// nova-core does not service cost nothing, because Linux unmasks an entry only when its interrupt
+/// is requested.
+///
+/// MSI-X is preferred and requested first, for the exact count the armed mask needs. A part whose
+/// MSI-X table is smaller than that fails the minimum, and the MSI request that follows serves the
+/// whole tree from one vector. nova-core requires one of the two and does not fall back to a
+/// shared INTx line.
+///
+/// The PCI abstraction exposes only the first and last vector of an allocation, so the handler the
+/// caller registers on the returned vector must be the one serving the highest armed subtree.
+///
+/// # Errors
+///
+/// `EINVAL` if `armed_mask` is empty. The error from the MSI request if neither type can be
+/// allocated.
+pub(crate) fn alloc_vectors(
+    pdev: &pci::Device<Bound>,
+    armed_mask: u32,
+) -> Result<pci::IrqVector<'_>> {
+    // One entry per subtree up to and including the highest armed one.
+    let msix_count = u32::BITS - armed_mask.leading_zeros();
+    if msix_count == 0 {
+        return Err(EINVAL);
+    }
 
-    let irq_vectors = match pdev.alloc_irq_vectors(1, 1, msi_types) {
-        Ok(vecs) => vecs,
-        Err(_) => {
-            dev_warn!(pdev.as_ref(), "MSI not available, falling back to INTx\n");
-            pdev.alloc_irq_vectors(1, 1, IrqTypes::default().with(IrqType::Intx))?
-        }
-    };
+    let msix = IrqTypes::default().with(IrqType::MsiX);
+    if let Ok(vectors) = pdev.alloc_irq_vectors(msix_count, msix_count, msix) {
+        // The last entry is the one the highest armed subtree raises.
+        return Ok(*vectors.end());
+    }
 
-    Ok(*irq_vectors.start())
+    let msi = IrqTypes::default().with(IrqType::Msi);
+    let vectors = pdev.alloc_irq_vectors(1, 1, msi)?;
+
+    Ok(*vectors.start())
 }

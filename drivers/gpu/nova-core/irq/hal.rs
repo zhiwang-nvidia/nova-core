@@ -51,7 +51,6 @@ impl PciIrqRearmMethod {
     /// `subtrees` is the set of `TOP` bits to cycle, which the caller matches to this method:
     /// every armed subtree for [`Self::TopEnableCycleArmed`], and the bit of the subtree the
     /// caller serves for [`Self::TopEnableCycleSubtree`]. [`Self::ConfigMirrorEoi`] ignores it.
-    #[expect(dead_code)]
     pub(super) fn rearm(self, bar: Bar0<'_>, subtrees: u32) {
         match self {
             // The written value is ignored, so any write rearms delivery.
@@ -98,7 +97,6 @@ pub(super) trait PfCpuInterruptHal {
     ///
     /// `None` means that `irq_type` needs no rearm write. That is the case for
     /// `INTx`, which is level-triggered, and which nova-core does not allocate.
-    #[expect(dead_code)]
     fn pci_irq_rearm_method(&self, irq_type: IrqType) -> Option<PciIrqRearmMethod>;
 }
 

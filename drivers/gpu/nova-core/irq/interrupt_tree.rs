@@ -18,14 +18,16 @@ use kernel::{
         Io, //
     },
     num::Bounded,
+    pci::IrqType,
     prelude::*,
 };
 
 use crate::{
     driver::Bar0,
-    gpu::{
-        Architecture,
-        Chipset, //
+    gpu::Chipset,
+    irq::hal::{
+        pf_cpu_interrupt_hal,
+        PciIrqRearmMethod, //
     },
     regs::{
         NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF as CPU_INTR_LEAF,
@@ -40,6 +42,28 @@ use crate::{
 /// Index of a leaf register, bounded to the `0..16` range covered by the leaf
 /// register arrays.
 pub(super) type LeafIndex = Bounded<usize, 4>;
+
+/// Maps an interrupt `vector` to its position in the tree: the leaf that carries it
+/// (`vector / 32`) and the bit index within that leaf (`vector % 32`).
+///
+/// This is the single definition of the vector encoding, shared by the interrupt handlers and the
+/// unit tests. The returned leaf is a raw index; a caller validates it against the architecture's
+/// leaf count, for example via [`LeafIndex::try_new`].
+pub(super) const fn vector_leaf_bit(vector: u32) -> (usize, u32) {
+    (crate::num::u32_as_usize(vector / 32), vector % 32)
+}
+
+/// Maps an interrupt `vector` to the `TOP` enable bit of the subtree that carries it.
+///
+/// A subtree covers two adjacent leaves, so the vector's leaf is in subtree `vector / 64`. The
+/// result is a one-bit mask, in the form [`Tree::new`] takes as an armed mask and `TOP_EN_SET`
+/// and `TOP_EN_CLEAR` take as a value.
+///
+/// The bit is not validated against the architecture's subtree count, which the caller checks
+/// against [`super::hal::PfCpuInterruptHal::subtree_mask`].
+pub(super) const fn subtree_bit(vector: u32) -> u32 {
+    1 << (vector / 64)
+}
 
 /// Type state of a [`Leaf`] handle.
 ///
@@ -68,31 +92,52 @@ mod private {
 pub(super) struct Tree {
     /// Number of implemented leaves in this tree, either 8 or 16.
     num_leaves: usize,
-    /// Mask of subtree bits the architecture implements.
-    subtree_mask: u32,
+    /// Mask of the subtrees this tree arms and services.
+    armed_mask: u32,
+    /// Method that rearms PCI interrupt delivery, or `None` if the allocated
+    /// interrupt type needs no rearm write.
+    rearm_method: Option<PciIrqRearmMethod>,
 }
 
 impl Tree {
-    /// Creates a `Tree` sized for `chipset`.
-    pub(super) fn new(chipset: Chipset) -> Self {
-        let num_leaves = match chipset.arch() {
-            Architecture::Turing | Architecture::Ampere | Architecture::Ada => 8,
-            Architecture::Hopper | Architecture::BlackwellGB10x | Architecture::BlackwellGB20x => {
-                16
-            }
-        };
-
+    /// Creates a `Tree` for `chipset`, sized by the interrupt HAL, arming the
+    /// subtrees in `armed_mask` and carrying the rearm method for `irq_type`.
+    ///
+    /// `armed_mask` is the set of subtrees this tree's handler arms and
+    /// services. A subtree armed here must have an allocated PCI vector and a
+    /// registered handler, which [`super::alloc_vectors`] establishes for the
+    /// same mask. Bits outside the subtrees the architecture implements are
+    /// dropped, since such a subtree cannot deliver anything.
+    ///
+    /// The HAL is consulted once here so that an interrupt handler branches on
+    /// neither the chipset nor the interrupt type.
+    pub(super) fn new(chipset: Chipset, irq_type: IrqType, armed_mask: u32) -> Self {
+        let hal = pf_cpu_interrupt_hal(chipset);
         Self {
-            num_leaves,
-            // Each subtree covers two leaves, so one bit per pair of leaves.
-            subtree_mask: (1u32 << (num_leaves / 2)) - 1,
+            num_leaves: hal.num_leaves(),
+            armed_mask: armed_mask & hal.subtree_mask(),
+            rearm_method: hal.pci_irq_rearm_method(irq_type),
+        }
+    }
+
+    /// Rearms PCI interrupt delivery to the CPU.
+    ///
+    /// A handler must call this before it returns, or it receives no further
+    /// interrupts.
+    ///
+    /// Both `TOP` enable cycles take the armed mask: this tree's handler serves
+    /// exactly the subtrees it arms, so the mask that MSI cycles for the whole
+    /// tree and the mask that MSI-X cycles for one subtree are the same here.
+    pub(super) fn rearm_pci_irq(&self, bar: Bar0<'_>) {
+        if let Some(method) = self.rearm_method {
+            method.rearm(bar, self.armed_mask);
         }
     }
 
     /// Returns a [`Top`] handle for this tree.
     pub(super) fn top(&self) -> Top {
         Top {
-            subtree_mask: self.subtree_mask,
+            armed_mask: self.armed_mask,
         }
     }
 
@@ -105,9 +150,13 @@ impl Tree {
     ///
     /// # Errors
     ///
-    /// `EOVERFLOW` if `vector` does not fit in the trigger register's vector
-    /// field.
+    /// `EINVAL` if `vector` lies outside this tree (`vector >= num_leaves *
+    /// 32`). `EOVERFLOW` if `vector` does not fit in the trigger register's
+    /// vector field.
     pub(super) fn trigger(&self, bar: Bar0<'_>, vector: u32) -> Result {
+        if crate::num::u32_as_usize(vector) >= self.num_leaves * 32 {
+            return Err(EINVAL);
+        }
         bar.write_reg(CPU_INTR_LEAF_TRIGGER::zeroed().try_with_vector(vector)?);
         Ok(())
     }
@@ -121,7 +170,9 @@ impl Tree {
     /// Every implemented subtree is walked rather than only those `TOP` reports
     /// as pending. `TOP` summarizes enabled leaf bits, so a bit that latched
     /// while its vector was masked does not appear there, and that is precisely
-    /// the state boot leaves behind.
+    /// the state boot leaves behind. The walk therefore covers subtrees this
+    /// tree does not arm, while the arm and unarm around it touch the armed
+    /// mask alone.
     pub(super) fn drain(&self, bar: Bar0<'_>) {
         self.top().unarm(bar);
 
@@ -136,25 +187,28 @@ impl Tree {
 }
 
 /// Top-level view of the interrupt tree, gating delivery for whole subtrees.
+///
+/// Both writes cover the armed mask, so nova-core gates only the subtrees it services and leaves
+/// the rest of the tree as it found it.
 pub(super) struct Top {
-    subtree_mask: u32,
+    armed_mask: u32,
 }
 
 impl Top {
-    /// Arms the tree: writes `TOP_EN_SET` to enable interrupt delivery for
-    /// whole subtrees.
+    /// Arms this tree's subtrees: writes `TOP_EN_SET` to enable interrupt
+    /// delivery for each of them.
     ///
     /// `TOP_EN_SET` and the per-vector `LEAF_EN_SET` (see [`Leaf::allow`]) are
     /// the same enable-set write at two levels of the tree: arming gates a whole
     /// subtree at the TOP, while allowing gates an individual vector at a leaf.
     pub(super) fn arm(self, bar: Bar0<'_>) {
-        bar.write(CPU_INTR_TOP_EN_SET, self.subtree_mask.into());
+        bar.write(CPU_INTR_TOP_EN_SET, self.armed_mask.into());
     }
 
-    /// Unarms the tree (writes `TOP_EN_CLEAR`), masking interrupt delivery for
-    /// all subtrees while the leaves are read and acknowledged.
+    /// Unarms this tree's subtrees (writes `TOP_EN_CLEAR`), masking interrupt
+    /// delivery for each of them while the leaves are read and acknowledged.
     pub(super) fn unarm(self, bar: Bar0<'_>) {
-        bar.write(CPU_INTR_TOP_EN_CLEAR, self.subtree_mask.into());
+        bar.write(CPU_INTR_TOP_EN_CLEAR, self.armed_mask.into());
     }
 }
 
