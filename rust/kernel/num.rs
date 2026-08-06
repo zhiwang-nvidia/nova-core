@@ -6,6 +6,8 @@ use crate::const_assert;
 use core::ops;
 
 pub mod bounded;
+pub mod casts;
+
 pub use bounded::*;
 
 /// Creates a value from an integer constant expression, with validity checked at build time.
