@@ -5,18 +5,17 @@
 use core::ops::Range;
 
 use kernel::{
-    gpu::buddy::{
-        AllocatedBlocks,
-        GpuBuddyAllocFlags,
-        GpuBuddyAllocMode, //
-    },
+    gpu::buddy::GpuBuddyAllocFlags,
     prelude::*,
     ptr::Alignment,
     sync::Arc, //
 };
 
 use super::{
-    GpuMm,
+    placement::PlacementRef,
+    Buddy,
+    BuddyAllocation,
+    GpuMmAllocator,
     PAGE_SIZE, //
 };
 
@@ -26,7 +25,7 @@ use super::{
 /// the buddy allocation from being returned while any mapping can still
 /// access it.
 pub(crate) struct VramBlock {
-    _blocks: Pin<KBox<AllocatedBlocks>>,
+    _allocation: BuddyAllocation,
     address: u64,
     size: u64,
 }
@@ -42,6 +41,11 @@ impl VramBlock {
         self.size
     }
 
+    pub(super) fn range(&self) -> Result<Range<u64>> {
+        let end = self.address.checked_add(self.size).ok_or(EOVERFLOW)?;
+        Ok(self.address..end)
+    }
+
     /// Create a checked allocation-relative region.
     pub(crate) fn region(self: &Arc<Self>, range: Range<u64>) -> Result<VramRegion> {
         VramRegion::new(self.clone(), range)
@@ -50,13 +54,18 @@ impl VramBlock {
     /// Create a region spanning the complete allocation.
     pub(crate) fn full_region(self: &Arc<Self>) -> VramRegion {
         VramRegion {
-            backing: self.clone(),
+            owner: VramRegionOwner::Buddy(self.clone()),
             address: self.address,
             size: self.size,
         }
     }
 
-    pub(super) fn alloc(mm: &GpuMm<'_>, size: u64, align: u64) -> Result<Arc<Self>> {
+    /// Allocate an aligned, physically contiguous block.
+    pub(super) fn alloc_aligned(
+        allocator: &GpuMmAllocator<Buddy>,
+        size: u64,
+        align: u64,
+    ) -> Result<Arc<Self>> {
         let page_size = u64::try_from(PAGE_SIZE).map_err(|_| EOVERFLOW)?;
         if size == 0 || !size.is_multiple_of(page_size) {
             return Err(EINVAL);
@@ -65,62 +74,41 @@ impl VramBlock {
         let align = align.max(page_size);
         let align_usize = usize::try_from(align).map_err(|_| EOVERFLOW)?;
         Alignment::new_checked(align_usize).ok_or(EINVAL)?;
-        let align_mask = align - 1;
+        let allocation = allocator.reserve_aligned(
+            size,
+            align,
+            Alignment::new::<PAGE_SIZE>(),
+            GpuBuddyAllocFlags::default(),
+        )?;
+        Self::from_allocation(allocation, size, align, None)
+    }
 
-        for buddy in &mm.buddies {
-            let region_start = buddy.base_offset();
-            let region_end = region_start.checked_add(buddy.size()).ok_or(EOVERFLOW)?;
-            let Some(mut address) = region_start
-                .checked_add(align_mask)
-                .map(|value| value & !align_mask)
-            else {
-                continue;
-            };
-
-            loop {
-                let Some(end) = address.checked_add(size) else {
-                    break;
-                };
-                if end > region_end {
-                    break;
-                }
-
-                let relative = address - region_start..end - region_start;
-                let blocks = match KBox::pin_init(
-                    buddy.alloc_blocks(
-                        GpuBuddyAllocMode::Range(relative),
-                        size,
-                        Alignment::new::<PAGE_SIZE>(),
-                        GpuBuddyAllocFlags::default(),
-                    ),
-                    GFP_KERNEL,
-                ) {
-                    Ok(blocks) => blocks,
-                    Err(error) if error == ENOSPC => {
-                        let Some(next) = address.checked_add(align) else {
-                            break;
-                        };
-                        address = next;
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                };
-
-                return Self::from_allocation(blocks, size, align);
-            }
+    /// Allocate one exact physical range.
+    pub(super) fn alloc_range(
+        allocator: &GpuMmAllocator<Buddy>,
+        range: Range<u64>,
+        align: u64,
+    ) -> Result<Arc<Self>> {
+        let expected_address = range.start;
+        let (size, min_block_size, align) = validate_allocation(&range, align)?;
+        if !expected_address.is_multiple_of(align) {
+            return Err(EINVAL);
         }
-        Err(ENOSPC)
+        let allocation =
+            allocator.reserve_range(range, min_block_size, GpuBuddyAllocFlags::default())?;
+        Self::from_allocation(allocation, size, align, Some(expected_address))
     }
 
     fn from_allocation(
-        blocks: Pin<KBox<AllocatedBlocks>>,
+        allocation: BuddyAllocation,
         size: u64,
         align: u64,
+        expected_address: Option<u64>,
     ) -> Result<Arc<Self>> {
         let mut address = None;
         let mut allocation_end = None;
         let mut covered = 0u64;
-        for block in blocks.as_ref().iter() {
+        for block in allocation.blocks().iter() {
             let block_address = block.offset();
             let block_size = block.size();
             let block_end = block_address.checked_add(block_size).ok_or(EOVERFLOW)?;
@@ -131,7 +119,8 @@ impl VramBlock {
 
         let address = address.ok_or(ENOMEM)?;
         let allocation_end = allocation_end.ok_or(ENOMEM)?;
-        if covered != size
+        if expected_address.is_some_and(|expected| address != expected)
+            || covered != size
             || allocation_end.checked_sub(address).ok_or(EIO)? != size
             || !address.is_multiple_of(align)
         {
@@ -140,7 +129,7 @@ impl VramBlock {
 
         Ok(Arc::new(
             Self {
-                _blocks: blocks,
+                _allocation: allocation,
                 address,
                 size,
             },
@@ -149,10 +138,17 @@ impl VramBlock {
     }
 }
 
-/// A byte range within a shared [`VramBlock`].
+/// Reference that keeps a VRAM region in use.
+#[derive(Clone)]
+enum VramRegionOwner {
+    Buddy(Arc<VramBlock>),
+    Placement(Arc<PlacementRef>),
+}
+
+/// A byte range kept in use by a buddy allocation or placement reference.
 #[derive(Clone)]
 pub(crate) struct VramRegion {
-    backing: Arc<VramBlock>,
+    owner: VramRegionOwner,
     address: u64,
     size: u64,
 }
@@ -171,8 +167,28 @@ impl VramRegion {
         backing.address.checked_add(range.end).ok_or(EOVERFLOW)?;
 
         Ok(Self {
-            backing,
+            owner: VramRegionOwner::Buddy(backing),
             address,
+            size,
+        })
+    }
+
+    /// Create a physical region whose lifetime is tied to a placement.
+    pub(crate) fn from_placement(
+        placement_ref: Arc<PlacementRef>,
+        range: Range<u64>,
+    ) -> Result<Self> {
+        if !placement_ref.contains_range(&range) {
+            return Err(EINVAL);
+        }
+        let size = range
+            .end
+            .checked_sub(range.start)
+            .filter(|size| *size != 0)
+            .ok_or(EINVAL)?;
+        Ok(Self {
+            owner: VramRegionOwner::Placement(placement_ref),
+            address: range.start,
             size,
         })
     }
@@ -201,9 +217,28 @@ impl VramRegion {
         address.checked_add(size).ok_or(EOVERFLOW)?;
 
         Ok(Self {
-            backing: self.backing.clone(),
+            owner: self.owner.clone(),
             address,
             size,
         })
     }
+}
+
+fn validate_allocation(range: &Range<u64>, align: u64) -> Result<(u64, Alignment, u64)> {
+    let page_size = u64::try_from(PAGE_SIZE).map_err(|_| EOVERFLOW)?;
+    let size = range
+        .end
+        .checked_sub(range.start)
+        .filter(|size| *size != 0)
+        .ok_or(EINVAL)?;
+    if !range.start.is_multiple_of(page_size) || !size.is_multiple_of(page_size) {
+        return Err(EINVAL);
+    }
+
+    let align = align.max(page_size);
+    let align_usize = usize::try_from(align).map_err(|_| EOVERFLOW)?;
+    Alignment::new_checked(align_usize).ok_or(EINVAL)?;
+    let min_block_size = Alignment::new::<PAGE_SIZE>();
+
+    Ok((size, min_block_size, align))
 }

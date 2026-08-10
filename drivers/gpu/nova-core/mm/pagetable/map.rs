@@ -5,14 +5,13 @@
 use core::marker::PhantomData;
 
 use kernel::{
-    gpu::buddy::{
-        AllocatedBlocks,
-        GpuBuddyAllocFlags,
-        GpuBuddyAllocMode, //
-    },
+    gpu::buddy::GpuBuddyAllocFlags,
     prelude::*,
     ptr::Alignment,
-    rbtree::{RBTree, RBTreeNode},
+    rbtree::{
+        RBTree,
+        RBTreeNode, //
+    },
     sizes::SZ_4K, //
 };
 
@@ -35,6 +34,7 @@ use super::{
 };
 use crate::{
     mm::{
+        BuddyAllocation,
         GpuMm,
         Pfn,
         Vfn,
@@ -52,7 +52,7 @@ use crate::{
 /// Stored in an [`RBTree`] keyed by the PDE slot address (`install_addr`).
 pub(in crate::mm) struct PreparedPtPage {
     /// The allocated and zeroed page table page.
-    pub(in crate::mm) alloc: Pin<KBox<AllocatedBlocks>>,
+    pub(in crate::mm) alloc: BuddyAllocation,
     /// Page table level -- needed to determine if this PT page is for a dual PDE.
     pub(in crate::mm) level: PageTableLevel,
 }
@@ -76,26 +76,13 @@ impl<M: MmuConfig> PtMapInner<M> {
 
     /// Allocate and zero a physical page table page.
     fn alloc_and_zero_page(mm: &GpuMm<'_>, level: PageTableLevel) -> Result<PreparedPtPage> {
-        let blocks = 'alloc: {
-            for buddy in mm.buddies() {
-                match KBox::pin_init(
-                    buddy.alloc_blocks(
-                        GpuBuddyAllocMode::Simple,
-                        SZ_4K.into_safe_cast(),
-                        Alignment::new::<SZ_4K>(),
-                        GpuBuddyAllocFlags::default(),
-                    ),
-                    GFP_KERNEL,
-                ) {
-                    Ok(blocks) => break 'alloc blocks,
-                    Err(error) if error == ENOSPC => continue,
-                    Err(error) => return Err(error),
-                }
-            }
-            return Err(ENOSPC);
-        };
+        let blocks = mm.alloc_internal_vram(
+            SZ_4K.into_safe_cast(),
+            Alignment::new::<SZ_4K>(),
+            GpuBuddyAllocFlags::default(),
+        )?;
 
-        let page_vram = VramAddress::new(blocks.iter().next().ok_or(ENOMEM)?.offset());
+        let page_vram = VramAddress::new(blocks.blocks().iter().next().ok_or(ENOMEM)?.offset());
 
         // Zero via PRAMIN.
         let mut window = mm.pramin().get_window()?;
@@ -129,9 +116,13 @@ impl<M: MmuConfig> PtMapInner<M> {
             let result = self
                 .walker
                 .walk_pde_levels(&mut window, vfn, |install_addr| {
-                    pt_pages
-                        .get(&install_addr)
-                        .and_then(|p| p.alloc.iter().next().map(|b| VramAddress::new(b.offset())))
+                    pt_pages.get(&install_addr).and_then(|p| {
+                        p.alloc
+                            .blocks()
+                            .iter()
+                            .next()
+                            .map(|b| VramAddress::new(b.offset()))
+                    })
                 })?;
 
             match result {
@@ -174,7 +165,7 @@ impl<M: MmuConfig> PtMapInner<M> {
         mm: &GpuMm<'_>,
         vfn_start: Vfn,
         num_pages: usize,
-        page_table_allocs: &mut KVec<Pin<KBox<AllocatedBlocks>>>,
+        page_table_allocs: &mut KVec<BuddyAllocation>,
         pt_pages: &mut RBTree<VramAddress, PreparedPtPage>,
     ) -> Result {
         // Pre-reserve so install_mappings() can use push_within_capacity (no alloc
@@ -198,7 +189,7 @@ impl<M: MmuConfig> PtMapInner<M> {
         &self,
         mm: &GpuMm<'_>,
         pt_pages: &mut RBTree<VramAddress, PreparedPtPage>,
-        page_table_allocs: &mut KVec<Pin<KBox<AllocatedBlocks>>>,
+        page_table_allocs: &mut KVec<BuddyAllocation>,
         vfn_start: Vfn,
         pfns: &[Pfn],
         writable: bool,
@@ -210,7 +201,8 @@ impl<M: MmuConfig> PtMapInner<M> {
         while let Some(c) = cursor {
             let (next, node) = c.remove_current();
             let (install_addr, page) = node.to_key_value();
-            let page_vram = VramAddress::new(page.alloc.iter().next().ok_or(ENOMEM)?.offset());
+            let page_vram =
+                VramAddress::new(page.alloc.blocks().iter().next().ok_or(ENOMEM)?.offset());
 
             if page.level == M::DUAL_PDE_LEVEL {
                 let new_dpde = M::DualPde::new_small(Pfn::from(page_vram));
@@ -317,7 +309,7 @@ impl PtMap {
         mm: &GpuMm<'_>,
         vfn_start: Vfn,
         num_pages: usize,
-        page_table_allocs: &mut KVec<Pin<KBox<AllocatedBlocks>>>,
+        page_table_allocs: &mut KVec<BuddyAllocation>,
         pt_pages: &mut RBTree<VramAddress, PreparedPtPage>,
     ) -> Result {
         pt_map_dispatch!(
@@ -331,7 +323,7 @@ impl PtMap {
         &self,
         mm: &GpuMm<'_>,
         pt_pages: &mut RBTree<VramAddress, PreparedPtPage>,
-        page_table_allocs: &mut KVec<Pin<KBox<AllocatedBlocks>>>,
+        page_table_allocs: &mut KVec<BuddyAllocation>,
         vfn_start: Vfn,
         pfns: &[Pfn],
         writable: bool,

@@ -33,6 +33,7 @@ macro_rules! impl_pfn_bounded {
 
 pub(crate) mod bar_user;
 pub(super) mod pagetable;
+pub(crate) mod placement;
 pub(crate) mod pramin;
 pub(super) mod tlb;
 pub(super) mod vmm;
@@ -42,12 +43,18 @@ use core::ops::Range;
 
 use kernel::{
     bitfield,
+    device,
     gpu::buddy::{
+        AllocatedBlocks,
         GpuBuddy,
+        GpuBuddyAllocFlags,
+        GpuBuddyAllocMode,
         GpuBuddyParams, //
     },
     num::Bounded,
+    pci,
     prelude::*,
+    ptr::Alignment,
     sizes::SZ_4K,
     sync::Arc, //
 };
@@ -61,15 +68,255 @@ pub(crate) use tlb::Tlb;
 
 use self::vram::VramBlock;
 
-/// GPU Memory Manager - owns all core MM components.
+/// Memory owned by a [`GpuMmAllocator`].
+pub(super) enum AllocatorBacking {
+    /// Physical device ranges owned directly by the core allocator.
+    Device,
+    /// Allocations retained from another allocator.
+    Parent(KVec<Arc<VramBlock>>),
+}
+
+impl AllocatorBacking {
+    pub(super) fn from_blocks(blocks: KVec<Arc<VramBlock>>) -> Result<Arc<Self>> {
+        if blocks.is_empty() {
+            return Err(EINVAL);
+        }
+
+        for (index, block) in blocks.iter().enumerate() {
+            let range = block.range()?;
+            for other in &blocks[index + 1..] {
+                if ranges_overlap(&range, &other.range()?) {
+                    return Err(EINVAL);
+                }
+            }
+        }
+
+        Ok(Arc::new(Self::Parent(blocks), GFP_KERNEL)?)
+    }
+
+    pub(super) fn contains_range(&self, range: &Range<u64>) -> bool {
+        match self {
+            Self::Device => false,
+            Self::Parent(blocks) => blocks.iter().any(|block| {
+                block
+                    .range()
+                    .is_ok_and(|backing| range_contains(&backing, range))
+            }),
+        }
+    }
+}
+
+/// Buddy allocator state for [`GpuMmAllocator<Buddy>`].
 ///
-/// Provides centralized ownership of memory management resources:
-/// - [`GpuBuddy`] allocators for VRAM page table allocation.
-/// - [`pramin::Pramin`] for direct VRAM access.
-/// - [`Tlb`] manager for translation buffer flush operations.
+/// Each disjoint physical range has its own [`GpuBuddy`].
+pub(crate) struct Buddy {
+    regions: KVec<GpuBuddy>,
+}
+
+/// Applies one allocation policy to owned VRAM backing.
+///
+/// The core [`GpuMmAllocator<Buddy>`] owns all usable VRAM. Child buddy
+/// allocators divide a reservation from the core into smaller allocations.
+/// A [`GpuMmAllocator<placement::Placement>`] selects predefined ranges from
+/// core-backed memory by placement ID.
+///
+/// `A` is the allocator implementation selected at compile time. `backend`
+/// stores that implementation's state; it is not a mode selected at runtime.
+pub(crate) struct GpuMmAllocator<A> {
+    pub(super) backend: A,
+    pub(super) backing: Arc<AllocatorBacking>,
+}
+
+/// Blocks allocated from a [`GpuMmAllocator<Buddy>`].
+///
+/// This object retains the allocator backing until the blocks are freed.
+pub(crate) struct BuddyAllocation {
+    blocks: Pin<KBox<AllocatedBlocks>>,
+    _backing: Arc<AllocatorBacking>,
+}
+
+impl BuddyAllocation {
+    pub(crate) fn blocks(&self) -> &AllocatedBlocks {
+        self.blocks.as_ref().get_ref()
+    }
+}
+
+impl GpuMmAllocator<Buddy> {
+    /// Create the core allocator over the physical usable VRAM ranges.
+    pub(crate) fn new(ranges: &[Range<u64>]) -> Result<Self> {
+        let backing = Arc::new(AllocatorBacking::Device, GFP_KERNEL)?;
+        Self::new_with_backing(ranges, backing)
+    }
+
+    /// Create a buddy allocator over reservations from another allocator.
+    pub(crate) fn from_backing(blocks: KVec<Arc<VramBlock>>) -> Result<Self> {
+        let backing = AllocatorBacking::from_blocks(blocks)?;
+        let AllocatorBacking::Parent(blocks) = &*backing else {
+            return Err(EINVAL);
+        };
+
+        let mut ranges = KVec::new();
+        ranges.reserve(blocks.len(), GFP_KERNEL)?;
+        for block in blocks {
+            ranges.push_within_capacity(block.range()?)?;
+        }
+
+        Self::new_with_backing(&ranges, backing)
+    }
+
+    /// Create the buddy regions and attach their ownership backing.
+    fn new_with_backing(ranges: &[Range<u64>], backing: Arc<AllocatorBacking>) -> Result<Self> {
+        if ranges.is_empty() {
+            return Err(ENOSPC);
+        }
+
+        let mut regions = KVec::new();
+        regions.reserve(ranges.len(), GFP_KERNEL)?;
+        for (index, range) in ranges.iter().enumerate() {
+            validate_fb_range(range)?;
+            if ranges[index + 1..]
+                .iter()
+                .any(|other| ranges_overlap(range, other))
+            {
+                return Err(EINVAL);
+            }
+            regions.push_within_capacity(GpuBuddy::new(buddy_params(range.clone())?)?)?;
+        }
+
+        Ok(Self {
+            backend: Buddy { regions },
+            backing,
+        })
+    }
+
+    /// Allocate from any managed buddy region.
+    pub(crate) fn alloc(
+        &self,
+        size: u64,
+        min_block_size: Alignment,
+        flags: GpuBuddyAllocFlags,
+    ) -> Result<BuddyAllocation> {
+        for region in &self.backend.regions {
+            let blocks =
+                region.alloc_blocks(GpuBuddyAllocMode::Simple, size, min_block_size, flags);
+            match self.finish_allocation(blocks) {
+                Ok(allocation) => return Ok(allocation),
+                Err(error) if error == ENOSPC => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(ENOSPC)
+    }
+
+    /// Reserve exactly one absolute physical range.
+    ///
+    /// The caller has already chosen the address. If that range is unavailable,
+    /// this returns `ENOSPC` instead of choosing a different address.
+    pub(crate) fn reserve_range(
+        &self,
+        range: Range<u64>,
+        min_block_size: Alignment,
+        flags: GpuBuddyAllocFlags,
+    ) -> Result<BuddyAllocation> {
+        validate_fb_range(&range)?;
+        let size = range.end.checked_sub(range.start).ok_or(EOVERFLOW)?;
+
+        for region in &self.backend.regions {
+            let region_start = region.base_offset();
+            let region_end = region_start.checked_add(region.size()).ok_or(EOVERFLOW)?;
+            if range.start < region_start || range.end > region_end {
+                continue;
+            }
+
+            let relative = range.start - region_start..range.end - region_start;
+            let blocks = region.alloc_blocks(
+                GpuBuddyAllocMode::Range(relative),
+                size,
+                min_block_size,
+                flags,
+            );
+            return self.finish_allocation(blocks);
+        }
+        Err(ENOSPC)
+    }
+
+    /// Find and reserve an aligned, physically contiguous range.
+    ///
+    /// Unlike [`Self::reserve_range`], the caller supplies no address. This
+    /// searches the managed regions until it finds a suitable free range.
+    pub(crate) fn reserve_aligned(
+        &self,
+        size: u64,
+        address_align: u64,
+        min_block_size: Alignment,
+        flags: GpuBuddyAllocFlags,
+    ) -> Result<BuddyAllocation> {
+        if size == 0 || !address_align.is_power_of_two() {
+            return Err(EINVAL);
+        }
+        let align_mask = address_align - 1;
+
+        for region in &self.backend.regions {
+            let region_start = region.base_offset();
+            let region_end = region_start.checked_add(region.size()).ok_or(EOVERFLOW)?;
+            let Some(mut address) = region_start
+                .checked_add(align_mask)
+                .map(|value| value & !align_mask)
+            else {
+                continue;
+            };
+
+            loop {
+                let Some(end) = address.checked_add(size) else {
+                    break;
+                };
+                if end > region_end {
+                    break;
+                }
+
+                let relative = address - region_start..end - region_start;
+                let blocks = region.alloc_blocks(
+                    GpuBuddyAllocMode::Range(relative),
+                    size,
+                    min_block_size,
+                    flags,
+                );
+                match self.finish_allocation(blocks) {
+                    Ok(allocation) => return Ok(allocation),
+                    Err(error) if error == ENOSPC => {}
+                    Err(error) => return Err(error),
+                }
+
+                let Some(next) = address.checked_add(address_align) else {
+                    break;
+                };
+                address = next;
+            }
+        }
+        Err(ENOSPC)
+    }
+
+    /// Retain the parent backing for the lifetime of an allocation.
+    fn finish_allocation(
+        &self,
+        blocks: impl PinInit<AllocatedBlocks, Error>,
+    ) -> Result<BuddyAllocation> {
+        let blocks = KBox::pin_init(blocks, GFP_KERNEL)?;
+        Ok(BuddyAllocation {
+            blocks,
+            _backing: self.backing.clone(),
+        })
+    }
+}
+
+/// GPU memory manager with core and internal buddy allocators.
+///
+/// The core allocator owns all usable VRAM. The internal allocator subdivides
+/// a core reservation for driver-owned page tables and similar objects.
 #[pin_data]
 pub(crate) struct GpuMm<'gpu> {
-    buddies: KVec<GpuBuddy>,
+    internal: GpuMmAllocator<Buddy>,
+    core: GpuMmAllocator<Buddy>,
     #[pin]
     pramin: pramin::Pramin<'gpu>,
     #[pin]
@@ -77,6 +324,50 @@ pub(crate) struct GpuMm<'gpu> {
 }
 
 impl<'gpu> GpuMm<'gpu> {
+    /// Return the FB space needed for nova-core-owned BAR1 page tables.
+    pub(crate) fn internal_fb_size(
+        pdev: &pci::Device<device::Bound>,
+        chipset: Chipset,
+    ) -> Result<u64> {
+        let bar1_idx = crate::driver::bar1_resource_index(pdev)?;
+        let bar1_size = pdev.resource_len(bar1_idx)?;
+        chipset.mmu_version().page_table_memory_size(bar1_size)
+    }
+
+    /// Choose the internal range from the smallest usable range that fits.
+    ///
+    /// Memory is taken from the end to leave the start available for larger
+    /// workload reservations.
+    pub(crate) fn select_internal_fb_range(
+        usable_fb_regions: &[Range<u64>],
+        size: u64,
+    ) -> Result<Range<u64>> {
+        let page_size = u64::try_from(SZ_4K).map_err(|_| EOVERFLOW)?;
+        if size == 0 || !size.is_multiple_of(page_size) {
+            return Err(EINVAL);
+        }
+
+        let mut selected: Option<(u64, Range<u64>)> = None;
+        for usable in usable_fb_regions {
+            validate_fb_range(usable)?;
+            let usable_size = usable.end.checked_sub(usable.start).ok_or(EINVAL)?;
+            if usable_size < size {
+                continue;
+            }
+            if let Some((best_size, best_range)) = selected.as_ref() {
+                if *best_size < usable_size
+                    || (*best_size == usable_size && best_range.end >= usable.end)
+                {
+                    continue;
+                }
+            }
+
+            let start = usable.end.checked_sub(size).ok_or(EOVERFLOW)?;
+            selected = Some((usable_size, start..usable.end));
+        }
+        selected.map(|(_, range)| range).ok_or(ENOSPC)
+    }
+
     /// Create a pin-initializer for `GpuMm`.
     ///
     /// `pramin_vram_region` is the full physical VRAM range (including GSP-reserved
@@ -84,38 +375,45 @@ impl<'gpu> GpuMm<'gpu> {
     pub(crate) fn new(
         bar: Bar0<'gpu>,
         chipset: Chipset,
-        buddy_params: KVec<GpuBuddyParams>,
+        usable_fb_regions: &[Range<u64>],
+        internal_fb_range: Range<u64>,
         pramin_vram_region: Range<VramAddress>,
     ) -> Result<impl PinInit<Self> + 'gpu> {
-        if buddy_params.is_empty() {
-            return Err(EINVAL);
-        }
-
-        let mut buddies = KVec::new();
-        for params in buddy_params {
-            buddies.push(GpuBuddy::new(params)?, GFP_KERNEL)?;
-        }
+        let core = GpuMmAllocator::<Buddy>::new(usable_fb_regions)?;
+        let page_size = u64::try_from(SZ_4K).map_err(|_| EOVERFLOW)?;
+        let internal_backing = VramBlock::alloc_range(&core, internal_fb_range, page_size)?;
+        let mut internal_blocks = KVec::new();
+        internal_blocks.push(internal_backing, GFP_KERNEL)?;
+        let internal = GpuMmAllocator::<Buddy>::from_backing(internal_blocks)?;
 
         let pramin_init = pramin::Pramin::new(bar, chipset, pramin_vram_region)?;
         let tlb_init = Tlb::new(bar);
 
         Ok(pin_init!(Self {
-            buddies,
+            internal,
+            core,
             pramin <- pramin_init,
             tlb <- tlb_init,
         }))
+    }
+
+    /// Allocate VRAM from the internal allocator.
+    ///
+    /// Dropping the returned allocation releases the memory.
+    pub(crate) fn alloc_internal_vram(
+        &self,
+        size: u64,
+        min_block_size: Alignment,
+        flags: GpuBuddyAllocFlags,
+    ) -> Result<BuddyAllocation> {
+        self.internal.alloc(size, min_block_size, flags)
     }
 
     /// Allocate aligned, contiguous VRAM from the core allocator.
     ///
     /// Dropping all references to the returned block releases the memory.
     pub(crate) fn alloc_core_vram(&self, size: u64, align: u64) -> Result<Arc<VramBlock>> {
-        VramBlock::alloc(self, size, align)
-    }
-
-    /// Access the [`GpuBuddy`] allocators.
-    pub(crate) fn buddies(&self) -> &[GpuBuddy] {
-        &self.buddies
+        VramBlock::alloc_aligned(&self.core, size, align)
     }
 
     /// Access the [`pramin::Pramin`].
@@ -127,6 +425,34 @@ impl<'gpu> GpuMm<'gpu> {
     pub(crate) fn tlb(&self) -> &Tlb<'gpu> {
         &self.tlb
     }
+}
+
+fn validate_fb_range(range: &Range<u64>) -> Result {
+    let page_size = u64::try_from(SZ_4K).map_err(|_| EOVERFLOW)?;
+    if range.start >= range.end
+        || !range.start.is_multiple_of(page_size)
+        || !range.end.is_multiple_of(page_size)
+    {
+        return Err(EINVAL);
+    }
+    Ok(())
+}
+
+fn range_contains(outer: &Range<u64>, inner: &Range<u64>) -> bool {
+    outer.start <= inner.start && inner.end <= outer.end
+}
+
+fn ranges_overlap(left: &Range<u64>, right: &Range<u64>) -> bool {
+    left.start < right.end && right.start < left.end
+}
+
+fn buddy_params(range: Range<u64>) -> Result<GpuBuddyParams> {
+    validate_fb_range(&range)?;
+    Ok(GpuBuddyParams {
+        base_offset: range.start,
+        size: range.end - range.start,
+        chunk_size: Alignment::new::<SZ_4K>(),
+    })
 }
 
 /// Page size in bytes (4 KiB).

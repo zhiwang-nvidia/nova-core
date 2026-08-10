@@ -6,16 +6,11 @@ use kernel::{
     device,
     dma::Device,
     fmt,
-    gpu::buddy::GpuBuddyParams,
     io::Io,
     num::Bounded,
     pci,
     prelude::*,
-    ptr::Alignment,
-    sizes::{
-        SizeConstants,
-        SZ_4K, //
-    },
+    sizes::SizeConstants,
     sync::Arc, //
 };
 
@@ -466,7 +461,6 @@ impl<'gpu> Gpu<'gpu> {
             // Create GPU memory manager owning memory management resources.
             mm <- {
                 let info = &gsp_resources.boot_result.static_info;
-                let mut buddy_params = KVec::new();
                 for region in &info.usable_fb_regions {
                     dev_info!(
                         dev,
@@ -474,15 +468,20 @@ impl<'gpu> Gpu<'gpu> {
                         region.start,
                         region.end
                     );
-                    buddy_params.push(
-                        GpuBuddyParams {
-                            base_offset: region.start,
-                            size: region.end - region.start,
-                            chunk_size: Alignment::new::<SZ_4K>(),
-                        },
-                        GFP_KERNEL,
-                    )?;
                 }
+
+                let internal_fb_size =
+                    GpuMm::internal_fb_size(pdev, gsp_resources.spec.chipset)?;
+                let internal_fb_range = GpuMm::select_internal_fb_range(
+                    &info.usable_fb_regions,
+                    internal_fb_size,
+                )?;
+                dev_info!(
+                    dev,
+                    "Using internal FB region: {:#x}..{:#x}\n",
+                    internal_fb_range.start,
+                    internal_fb_range.end,
+                );
 
                 // PRAMIN covers all physical VRAM (including GSP-reserved areas
                 // above the usable region, e.g. the BAR1 page directory).
@@ -490,7 +489,8 @@ impl<'gpu> Gpu<'gpu> {
                 GpuMm::new(
                     bar,
                     gsp_resources.spec.chipset,
-                    buddy_params,
+                    &info.usable_fb_regions,
+                    internal_fb_range,
                     pramin_vram_region,
                 )?
             },

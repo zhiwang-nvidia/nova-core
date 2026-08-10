@@ -6,7 +6,6 @@
 //! virtual address spaces (Channels, BAR1, BAR2).
 
 use kernel::{
-    gpu::buddy::AllocatedBlocks,
     maple_tree::MapleTreeAlloc,
     prelude::*,
     rbtree::RBTree, //
@@ -29,6 +28,7 @@ use crate::{
             },
             MmuVersion, //
         },
+        BuddyAllocation,
         GpuMm,
         Pfn,
         Vfn,
@@ -132,7 +132,7 @@ pub(crate) struct Vmm {
     /// Page table mapper for prepare/execute operations.
     pt_map: PtMap,
     /// Page table allocations required for mappings.
-    page_table_allocs: KVec<Pin<KBox<AllocatedBlocks>>>,
+    page_table_allocs: KVec<BuddyAllocation>,
     /// Maple tree allocator for virtual address range tracking.
     virt_alloc: Pin<KBox<MapleTreeAlloc<()>>>,
     /// Total number of pages in the virtual address space.

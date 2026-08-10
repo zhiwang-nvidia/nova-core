@@ -13,9 +13,11 @@ pub(super) mod ver2;
 pub(super) mod ver3;
 pub(super) mod walk;
 
-use kernel::prelude::*;
-
-use kernel::num::Bounded;
+use kernel::{
+    num::Bounded,
+    prelude::*,
+    sizes::SZ_4K, //
+};
 
 use crate::gpu::Architecture;
 use crate::mm::{
@@ -49,6 +51,42 @@ impl From<Architecture> for MmuVersion {
             }
         }
     }
+}
+
+impl MmuVersion {
+    /// Return the framebuffer memory needed for all page tables below the root PDB.
+    ///
+    /// The root PDB itself is owned by GSP-RM and is therefore excluded.
+    pub(crate) fn page_table_memory_size(self, va_size: u64) -> Result<u64> {
+        let max_va_size = match self {
+            Self::V2 => 1u64 << 49,
+            Self::V3 => 1u64 << 57,
+        };
+        let page_size = u64::try_from(SZ_4K).map_err(|_| EOVERFLOW)?;
+        if va_size == 0 || va_size > max_va_size || !va_size.is_multiple_of(page_size) {
+            return Err(EINVAL);
+        }
+
+        match self {
+            Self::V2 => page_table_memory_size::<MmuV2>(va_size, page_size),
+            Self::V3 => page_table_memory_size::<MmuV3>(va_size, page_size),
+        }
+    }
+}
+
+fn page_table_memory_size<M: MmuConfig>(va_size: u64, page_size: u64) -> Result<u64> {
+    let pte_entries = u64::try_from(M::entries_per_page(M::PTE_LEVEL)).map_err(|_| EOVERFLOW)?;
+    let mut pages_at_level = (va_size / page_size).div_ceil(pte_entries);
+    let mut total_pages = pages_at_level;
+
+    // Skip PDB: GSP-RM supplies the root page and nova-core allocates only its children.
+    for &level in M::PDE_LEVELS[1..].iter().rev() {
+        let entries = u64::try_from(M::entries_per_page(level)).map_err(|_| EOVERFLOW)?;
+        pages_at_level = pages_at_level.div_ceil(entries);
+        total_pages = total_pages.checked_add(pages_at_level).ok_or(EOVERFLOW)?;
+    }
+
+    total_pages.checked_mul(page_size).ok_or(EOVERFLOW)
 }
 
 /// Page Table Level hierarchy for MMU v2/v3.
