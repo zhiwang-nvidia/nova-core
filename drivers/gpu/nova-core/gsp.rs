@@ -266,8 +266,11 @@ impl<const NUM_PAGES: usize> debugfs::BinaryWriter for LogBuffer<'_, NUM_PAGES> 
         }
         if written < count {
             let buffer_offset = offset_val + written - header.len();
-            writer.write_dma(&self.buffer, buffer_offset, count - written)?;
-            written = count;
+            match writer.write_dma(&self.buffer, buffer_offset, count - written) {
+                Ok(()) => written = count,
+                Err(error) if written == 0 => return Err(error),
+                Err(_) => {}
+            }
         }
 
         *offset += i64::try_from(written)?;
