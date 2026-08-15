@@ -212,7 +212,10 @@ impl<'gsp> Gsp<'gsp> {
                     libos.init_at(0, LibosMemoryRegionInitArgument::new("LOGINIT", &loginit.0))?;
                     libos.init_at(1, LibosMemoryRegionInitArgument::new("LOGINTR", &logintr.0))?;
                     libos.init_at(2, LibosMemoryRegionInitArgument::new("LOGRM", &logrm.0))?;
-                    libos.init_at(3, LibosMemoryRegionInitArgument::new("RMARGS", rmargs))?;
+                    libos.init_at(3, LibosMemoryRegionInitArgument::new("LOGMNOC", &logmnoc.0))?;
+                    libos.init_at(4, LibosMemoryRegionInitArgument::new("LOGROOT", &logroot.0))?;
+                    libos.init_at(5, LibosMemoryRegionInitArgument::new("LOGRMON", &logrmon.0))?;
+                    libos.init_at(6, LibosMemoryRegionInitArgument::new("RMARGS", rmargs))?;
 
                     libos.into()
                 },
