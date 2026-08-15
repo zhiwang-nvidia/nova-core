@@ -77,7 +77,7 @@ impl<'gsp> super::Gsp<'gsp> {
         let dev = pdev.as_ref();
         let hal = super::hal::gsp_hal(chipset);
 
-        let gsp_fw = KBox::pin_init(GspFirmware::new(dev, chipset), GFP_KERNEL)?;
+        let gsp_fw = KBox::pin_init(GspFirmware::new(dev, chipset, &self.gsp_tlv), GFP_KERNEL)?;
 
         // GSP-RM reads the ucodes image through a radix3 page table, so the mapping has to
         // outlive initialization.

@@ -6,6 +6,7 @@ use kernel::{
         Coherent,
         DmaAddress, //
     },
+    firmware,
     prelude::*, //
 };
 
@@ -14,8 +15,8 @@ use crate::{
         radix3::Radix3,
         riscv::RiscvFirmware, //
         tlv::{
-            request_tlv, //
-            Tlv,
+            request_tlv,
+            Tlv, //
         },
     },
     gpu::Chipset, //
@@ -36,13 +37,16 @@ pub(crate) struct GspFirmware<'a> {
 impl<'a> GspFirmware<'a> {
     /// Loads the GSP firmware binaries, map them into `dev`'s address-space, and creates the page
     /// tables expected by the GSP bootloader to load it.
-    pub(crate) fn new(
+    pub(crate) fn new<'fw>(
         dev: &'a device::Device<device::Bound>,
         chipset: Chipset,
-    ) -> impl PinInit<Self, Error> + 'a {
+        gsp_tlv: &'fw firmware::Firmware,
+    ) -> impl PinInit<Self, Error> + 'fw
+    where
+        'a: 'fw,
+    {
         pin_init::pin_init_scope(move || {
-            let firmware = request_tlv(dev, chipset, "gsp")?;
-            let tlv = Tlv::new(firmware.data())?;
+            let tlv = Tlv::new(gsp_tlv.data())?;
             dev_dbg!(dev, "loaded gsp firmware v{}\n", tlv.get_string(b"VERS")?);
 
             let (_, fw_vvec) = tlv.load_file(dev, chipset)?;

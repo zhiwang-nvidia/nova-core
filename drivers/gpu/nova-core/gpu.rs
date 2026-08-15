@@ -426,7 +426,7 @@ impl<'gpu> Gpu<'gpu> {
 
                 vgpu_state: VgpuState::detect(pdev, spec.chipset, fsp.as_mut()),
 
-                gsp <- Gsp::new(pdev, bar),
+                gsp <- Gsp::new(pdev, bar, spec.chipset),
 
                 // This member must be initialized last, so the unload bundle can never be dropped
                 // from outside of the constructed `GspResources`, ensuring that the unload sequence
