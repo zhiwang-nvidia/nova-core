@@ -23,10 +23,13 @@ use crate::bitmap::BitmapVec;
 /// Basic usage
 ///
 /// ```
-/// use kernel::alloc::AllocError;
-/// use kernel::id_pool::{IdPool, UnusedId};
+/// use kernel::{
+///     alloc::AllocError,
+///     id_pool::{IdPool, UnusedId},
+///     nz, //
+/// };
 ///
-/// let mut pool = IdPool::with_capacity(64, GFP_KERNEL)?;
+/// let mut pool = IdPool::with_capacity(nz!(64), GFP_KERNEL)?;
 /// for i in 0..64 {
 ///     assert_eq!(i, pool.find_unused_id(i).ok_or(ENOSPC)?.acquire());
 /// }
@@ -111,8 +114,8 @@ impl IdPool {
     ///
     /// [`MAX_INLINE_LEN`]: BitmapVec::MAX_INLINE_LEN
     #[inline]
-    pub fn with_capacity(num_ids: usize, flags: Flags) -> Result<Self, AllocError> {
-        let num_ids = usize::max(num_ids, BitmapVec::MAX_INLINE_LEN);
+    pub fn with_capacity(num_ids: NonZero<usize>, flags: Flags) -> Result<Self, AllocError> {
+        let num_ids = usize::max(num_ids.get(), BitmapVec::MAX_INLINE_LEN);
         let map = BitmapVec::new(num_ids, flags)?;
         Ok(Self { map })
     }
@@ -139,9 +142,10 @@ impl IdPool {
     ///         IdPool,
     ///         ReallocRequest,
     ///     },
+    ///     nz, //
     /// };
     ///
-    /// let mut pool = IdPool::with_capacity(1024, GFP_KERNEL)?;
+    /// let mut pool = IdPool::with_capacity(nz!(1024), GFP_KERNEL)?;
     /// let alloc_request = pool.shrink_request().ok_or(AllocError)?;
     /// let resizer = alloc_request.realloc(GFP_KERNEL)?;
     /// pool.shrink(resizer);
