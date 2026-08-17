@@ -512,6 +512,8 @@ register! {
 // `Documentation/gpu/nova/core/interrupts.rst`.
 
 register! {
+    base: NovaRegisters;
+
     /// Latched state of the 32 vectors that belong to one leaf, one bit per vector.
     ///
     /// A read yields the vectors currently latched in leaf `i`. Vector `v` occupies bit `v % 32`
@@ -582,9 +584,13 @@ pub(crate) mod gm107 {
 pub(crate) mod tu102 {
     use kernel::io::register;
 
+    use crate::driver::NovaRegisters;
+
     // PCI configuration-space mirror.
 
     register! {
+        base: NovaRegisters;
+
         /// MSI end-of-interrupt register.
         ///
         /// A `u32` write rearms MSI delivery on pre-Hopper GPUs. The value is ignored.

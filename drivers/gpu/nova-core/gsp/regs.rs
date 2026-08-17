@@ -30,18 +30,24 @@ register! {
 }
 
 register! {
+    base: NovaRegisters;
+
     pub(super) NV_PGSP_QUEUE_TAIL(u32) @ 0x00110c04 {
         31:0    address;
     }
 }
 
 register! {
+    base: NovaRegisters;
+
     pub(super) NV_PGSP_MSGQ_HEAD(u32) @ 0x00110c80 {
         31:0    address;
     }
 }
 
 register! {
+    base: NovaRegisters;
+
     pub(super) NV_PGSP_MSGQ_TAIL(u32) @ 0x00110c84 {
         31:0    address;
     }
