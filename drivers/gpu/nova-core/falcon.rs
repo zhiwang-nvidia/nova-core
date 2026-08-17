@@ -374,7 +374,7 @@ pub(crate) struct Falcon<'a, E: FalconEngine> {
     dev: &'a device::Device<device::Bound>,
     bar: Bar0<'a>,
     pub(crate) pfalcon: Mmio<'a, PFalconRegisters>,
-    pfalcon2: Mmio<'a, PFalcon2Registers>,
+    pub(crate) pfalcon2: Mmio<'a, PFalcon2Registers>,
 }
 
 impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
@@ -400,8 +400,8 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
     pub(crate) fn imem_size(&self) -> usize {
         let blocks = usize::from_safe_cast(
             *self
-                .bar
-                .read(regs::NV_PFALCON_FALCON_HWCFG::of::<E>())
+                .pfalcon
+                .read(regs::NV_PFALCON_FALCON_HWCFG)
                 .imem_size(),
         );
 
@@ -674,16 +674,14 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
 
         let num_transfers = len.div_ceil(DMA_LEN);
 
-        self.bar.write(
-            WithBase::of::<E>(),
+        self.pfalcon.write_reg(
             regs::NV_PFALCON_FALCON_DMATRFBASE::zeroed().with_base(
                 // CAST: `as u32` is used on purpose since we do want to strip the upper bits,
                 // which will be written to `NV_PFALCON_FALCON_DMATRFBASE1`.
                 (src_addr >> 8) as u32,
             ),
         );
-        self.bar.write(
-            WithBase::of::<E>(),
+        self.pfalcon.write_reg(
             regs::NV_PFALCON_FALCON_DMATRFBASE1::zeroed().try_with_base(src_addr >> 40)?,
         );
 
@@ -694,19 +692,17 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
             .with_set_dmtag(set_dmtag);
 
         for pos in (0..num_transfers).map(|i| i * DMA_LEN) {
-            self.bar.write(
-                WithBase::of::<E>(),
+            self.pfalcon.write_reg(
                 regs::NV_PFALCON_FALCON_DMATRFMOFFS::zeroed().try_with_offs(dst_offset + pos)?,
             );
-            self.bar.write(
-                WithBase::of::<E>(),
+            self.pfalcon.write_reg(
                 regs::NV_PFALCON_FALCON_DMATRFFBOFFS::zeroed().with_offs(src_offset + pos),
             );
 
-            self.bar.write(WithBase::of::<E>(), cmd);
+            self.pfalcon.write_reg(cmd);
 
             read_poll_timeout(
-                || Ok(self.bar.read(regs::NV_PFALCON_FALCON_DMATRFCMD::of::<E>())),
+                || Ok(self.pfalcon.read(regs::NV_PFALCON_FALCON_DMATRFCMD)),
                 |r| r.idle(),
                 Delta::ZERO,
                 Delta::from_secs(2),

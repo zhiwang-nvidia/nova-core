@@ -6,7 +6,7 @@ use kernel::{
     device,
     io::{
         poll::read_poll_timeout,
-        register::WithBase,
+        register::Array,
         Io, //
     },
     prelude::*,
@@ -307,7 +307,7 @@ impl super::Gsp {
         bootloader: &GenericBootloader,
         gsp_falcon: &Falcon<'_, Gsp>,
         sec2_falcon: &Falcon<'_, Sec2>,
-        bar: Bar0<'_>,
+        _bar: Bar0<'_>,
         dev: &device::Device,
         bootloader_app_version: u32,
         libos_dma_handle: u64,
@@ -331,8 +331,7 @@ impl super::Gsp {
         let ctx_dma = params.ctx_dma()?;
         let fbif_target = params.fbif_target()?;
         let transcfg = || {
-            regs::NV_PFALCON_FBIF_TRANSCFG::of::<Gsp>()
-                .try_at(usize::from(ctx_dma))
+            regs::NV_PFALCON_FBIF_TRANSCFG::try_at(usize::from(ctx_dma))
                 .ok_or(EINVAL)
         };
 
@@ -347,8 +346,8 @@ impl super::Gsp {
         gsp_falcon.reset()?;
         gsp_falcon.dma_reset();
 
-        let saved_transcfg = bar.read(transcfg()?);
-        bar.update(transcfg()?, |v| {
+        let saved_transcfg = gsp_falcon.pfalcon.read(transcfg()?);
+        gsp_falcon.pfalcon.update(transcfg()?, |v| {
             v.with_target(fbif_target)
                 .with_mem_type(FalconFbifMemType::Physical)
         });
@@ -370,7 +369,9 @@ impl super::Gsp {
             })
         })();
 
-        bar.update(transcfg()?, |_| saved_transcfg);
+        gsp_falcon
+            .pfalcon
+            .update(transcfg()?, |_| saved_transcfg);
         run?;
 
         Self::core_resume(
@@ -403,7 +404,7 @@ impl super::Gsp {
         payload: &[u8],
         gsp_falcon: &Falcon<'_, Gsp>,
         sec2_falcon: &Falcon<'_, Sec2>,
-        bar: Bar0<'_>,
+        _bar: Bar0<'_>,
         dev: &device::Device,
         bootloader_app_version: u32,
         libos_dma_handle: u64,
@@ -421,8 +422,8 @@ impl super::Gsp {
         gsp_falcon.reset()?;
 
         gsp_falcon.dma_reset();
-        bar.update(
-            regs::NV_PFALCON_FBIF_TRANSCFG::of::<Gsp>().at(usize::from(HS_BINARY_CTX_DMA)),
+        gsp_falcon.pfalcon.update(
+            regs::NV_PFALCON_FBIF_TRANSCFG::at(usize::from(HS_BINARY_CTX_DMA)),
             |v| {
                 v.with_target(FalconFbifTarget::LocalFb)
                     .with_mem_type(FalconFbifMemType::Physical)
@@ -460,21 +461,18 @@ impl super::Gsp {
             )?;
         }
 
-        bar.write(
-            WithBase::of::<Gsp>().at(0),
+        gsp_falcon.pfalcon2.write(
+            regs::NV_PFALCON2_FALCON_BROM_PARAADDR::at(0),
             regs::NV_PFALCON2_FALCON_BROM_PARAADDR::zeroed().with_value(params.hs_sig_dmem_addr),
         );
-        bar.write(
-            WithBase::of::<Gsp>(),
+        gsp_falcon.pfalcon2.write_reg(
             regs::NV_PFALCON2_FALCON_BROM_ENGIDMASK::zeroed().with_value(params.engine_id_mask),
         );
-        bar.write(
-            WithBase::of::<Gsp>(),
+        gsp_falcon.pfalcon2.write_reg(
             regs::NV_PFALCON2_FALCON_BROM_CURR_UCODE_ID::zeroed()
                 .with_ucode_id(u8::try_from(params.ucode_id).map_err(|_| EINVAL)?),
         );
-        bar.write(
-            WithBase::of::<Gsp>(),
+        gsp_falcon.pfalcon2.write_reg(
             regs::NV_PFALCON2_FALCON_MOD_SEL::zeroed().with_algo(FalconModSelAlgo::Rsa3k),
         );
 
@@ -482,8 +480,7 @@ impl super::Gsp {
         // load-and-execute event does not read this one's suspension.
         gsp_falcon.write_mailboxes(Some(FLCN_ERR_BINARY_NOT_STARTED), None);
 
-        bar.write(
-            WithBase::of::<Gsp>(),
+        gsp_falcon.pfalcon.write_reg(
             regs::NV_PFALCON_FALCON_BOOTVEC::zeroed().with_value(params.ucode_imem_va),
         );
 
