@@ -7,6 +7,29 @@ use core::ops;
 pub mod bounded;
 pub use bounded::*;
 
+/// Infallibly creates a [`NonZero`] value from a constant expression.
+///
+/// [`NonZero`]: core::num::NonZero
+///
+/// # Examples
+///
+/// ```
+/// use core::num::NonZero;
+/// use kernel::nz;
+///
+/// let v: NonZero<usize> = nz!(8);
+/// assert_eq!(v.get(), 8);
+///
+/// const N: NonZero<u32> = nz!(0x10);
+/// assert_eq!(N.get(), 0x10);
+/// ```
+#[macro_export]
+macro_rules! nz {
+    ($v:expr) => {
+        const { ::core::num::NonZero::new($v).unwrap() }
+    };
+}
+
 /// Designates unsigned primitive types.
 pub enum Unsigned {}
 
