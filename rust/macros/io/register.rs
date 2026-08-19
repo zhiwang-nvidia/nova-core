@@ -27,6 +27,7 @@ use syn::{
 };
 
 mod kw {
+    syn::custom_keyword!(base);
     syn::custom_keyword!(stride);
 }
 
@@ -139,16 +140,27 @@ impl Parse for Reg {
 }
 
 pub(crate) struct RegDef {
+    #[expect(dead_code)]
+    base: Option<Type>,
     regs: Vec<Reg>,
 }
 
 impl Parse for RegDef {
     fn parse(input: syn::parse::ParseStream<'_>) -> Result<Self> {
+        let base = if input.peek(kw::base) {
+            let _: kw::base = input.parse()?;
+            let _: Token![:] = input.parse()?;
+            let base = input.parse()?;
+            let _: Token![;] = input.parse()?;
+            Some(base)
+        } else {
+            None
+        };
         let mut regs = Vec::new();
         while !input.is_empty() {
             regs.push(input.parse()?);
         }
-        Ok(RegDef { regs })
+        Ok(RegDef { base, regs })
     }
 }
 
