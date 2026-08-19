@@ -213,11 +213,6 @@ pub(crate) fn register(def: RegDef) -> Result<TokenStream> {
                     #[allow(non_camel_case_types)]
                     #(#attrs)* #vis struct #name(#storage) #args
                 );
-
-                impl ::kernel::io::register::Register for #name {
-                    type Base = #base;
-                    const OFFSET: usize = #offset;
-                }
             ));
         }
 
@@ -233,7 +228,10 @@ pub(crate) fn register(def: RegDef) -> Result<TokenStream> {
             ))?,
 
             None => outputs.extend(quote_spanned!(span =>
-                impl ::kernel::io::register::FixedRegister for #name {}
+                impl ::kernel::io::register::FixedRegister for #name {
+                    type Base = #base;
+                    const OFFSET: usize = #offset;
+                }
 
                 #(#attrs)* #vis const #name: ::kernel::io::register::FixedRegisterLoc<#name> =
                     ::kernel::io::register::FixedRegisterLoc::<#name>::new();
@@ -256,6 +254,8 @@ pub(crate) fn register(def: RegDef) -> Result<TokenStream> {
                     impl ::kernel::io::register::Array for #name {}
 
                     impl ::kernel::io::register::RegisterArray for #name {
+                        type Base = #base;
+                        const OFFSET: usize = #offset;
                         const SIZE: usize = #size;
                         const STRIDE: usize = #stride;
                     }
