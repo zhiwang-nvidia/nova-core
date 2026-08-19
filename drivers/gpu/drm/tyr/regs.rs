@@ -57,7 +57,12 @@ pub(crate) mod gpu_control {
         uapi, //
     };
 
+    #[expect(unused_imports)]
+    use crate::driver::TyrRegisters;
+
     register! {
+        base: TyrRegisters;
+
         /// GPU identification register.
         pub(crate) GPU_ID(u32) @ 0x0 {
             /// Status of the GPU release.
@@ -315,6 +320,8 @@ pub(crate) mod gpu_control {
     }
 
     register! {
+        base: TyrRegisters;
+
         /// GPU command register.
         ///
         /// Use the constructor methods to create commands:
@@ -380,6 +387,8 @@ pub(crate) mod gpu_control {
     }
 
     register! {
+        base: TyrRegisters;
+
         /// GPU status register. Read only.
         pub(crate) GPU_STATUS(u32) @ 0x34 {
             /// GPU active, a 1-bit boolean flag.
@@ -463,6 +472,8 @@ pub(crate) mod gpu_control {
     }
 
     register! {
+        base: TyrRegisters;
+
         /// GPU fault status register. Read only.
         pub(crate) GPU_FAULTSTATUS(u32) @ 0x3c {
             /// Exception type.
@@ -768,6 +779,8 @@ pub(crate) mod gpu_control {
     }
 
     register! {
+        base: TyrRegisters;
+
         /// Coherency enable. An index of which coherency protocols should be used.
         /// This register only selects the protocol for coherency messages on the
         /// interconnect. This is not to enable or disable coherency controlled by MMU.
@@ -808,6 +821,8 @@ pub(crate) mod gpu_control {
     }
 
     register! {
+        base: TyrRegisters;
+
         /// MCU control.
         pub(crate) MCU_CONTROL(u32) @ 0x700 {
             /// Request MCU state change.
@@ -849,6 +864,8 @@ pub(crate) mod gpu_control {
     }
 
     register! {
+        base: TyrRegisters;
+
         /// MCU status. Read only.
         pub(crate) MCU_STATUS(u32) @ 0x704 {
             /// Read current state of MCU.
@@ -862,7 +879,12 @@ pub(crate) mod gpu_control {
 pub(crate) mod job_control {
     use kernel::register;
 
+    #[expect(unused_imports)]
+    use crate::driver::TyrRegisters;
+
     register! {
+        base: TyrRegisters;
+
         /// Raw status of job interrupts.
         ///
         /// Write to this register to trigger these interrupts.
@@ -912,7 +934,12 @@ pub(crate) mod job_control {
 pub(crate) mod mmu_control {
     use kernel::register;
 
+    #[expect(unused_imports)]
+    use crate::driver::TyrRegisters;
+
     register! {
+        base: TyrRegisters;
+
         /// IRQ sources raw status.
         ///
         /// This register contains the raw unmasked interrupt sources for MMU status and exception
@@ -966,8 +993,10 @@ pub(crate) mod mmu_control {
             prelude::*,
             register, //
         };
-
         use pin_init::Zeroable;
+
+        #[expect(unused_imports)]
+        use crate::driver::TyrRegisters;
 
         /// Maximum number of hardware address space slots.
         /// The actual number of slots available is usually lower.
@@ -977,6 +1006,8 @@ pub(crate) mod mmu_control {
         const STRIDE: usize = 0x40;
 
         register! {
+            base: TyrRegisters;
+
             /// Translation table base address. A 64-bit pointer.
             ///
             /// This field contains the address of the top level of a translation table structure.
@@ -1104,6 +1135,8 @@ pub(crate) mod mmu_control {
         }
 
         register! {
+            base: TyrRegisters;
+
             /// Stage 1 memory attributes (8-bit bitfield).
             ///
             /// This is not an actual register, but a bitfield definition used by the MEMATTR
@@ -1137,6 +1170,8 @@ pub(crate) mod mmu_control {
         }
 
         register! {
+            base: TyrRegisters;
+
             /// Memory attributes.
             ///
             /// Each address space can configure up to 8 different memory attribute profiles.
@@ -1292,6 +1327,8 @@ pub(crate) mod mmu_control {
         }
 
         register! {
+            base: TyrRegisters;
+
             /// Lock region address for each address space.
             pub(crate) LOCKADDR(u64)[MAX_AS, stride = STRIDE] @ 0x2410 {
                 /// Lock region size.
@@ -1353,6 +1390,8 @@ pub(crate) mod mmu_control {
         }
 
         register! {
+            base: TyrRegisters;
+
             /// MMU command register for each address space. Write only.
             pub(crate) COMMAND(u32)[MAX_AS, stride = STRIDE] @ 0x2418 {
                 7:0     command ?=> MmuCommand;
@@ -1480,6 +1519,8 @@ pub(crate) mod mmu_control {
         }
 
         register! {
+            base: TyrRegisters;
+
             /// Fault status register for each address space. Read only.
             pub(crate) FAULTSTATUS(u32)[MAX_AS, stride = STRIDE] @ 0x241c {
                 /// Exception type.
@@ -1705,6 +1746,8 @@ pub(crate) mod mmu_control {
         }
 
         register! {
+            base: TyrRegisters;
+
             /// Translation configuration and control.
             pub(crate) TRANSCFG(u64)[MAX_AS, stride = STRIDE] @ 0x2430 {
                 /// Address space mode.
@@ -1760,6 +1803,9 @@ pub(crate) mod mmu_control {
 pub(crate) mod doorbell_block {
     use kernel::register;
 
+    #[expect(unused_imports)]
+    use crate::driver::TyrRegisters;
+
     /// Number of doorbells available.
     pub(crate) const NUM_DOORBELLS: usize = 64;
 
@@ -1770,6 +1816,8 @@ pub(crate) mod doorbell_block {
     const STRIDE: usize = 0x10000;
 
     register! {
+        base: TyrRegisters;
+
         /// Doorbell request register. Write-only.
         pub(crate) DOORBELL(u32)[NUM_DOORBELLS, stride = STRIDE] @ 0x80000 {
             /// Doorbell set. Writing 1 triggers the doorbell.
