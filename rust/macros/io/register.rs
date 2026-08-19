@@ -51,6 +51,7 @@ struct Reg {
     attrs: Vec<Attribute>,
     vis: Visibility,
     name: Ident,
+    unique: bool,
     ty: Type,
     array: Option<RegArrayDef>,
     offset: RegOffset,
@@ -65,16 +66,26 @@ impl Parse for Reg {
 
         let lh = input.lookahead1();
         let mut bitfield_storage = None;
-        let ty = if lh.peek(Token![:]) {
+        let (unique, ty) = if lh.peek(Token![:]) {
             let _: Token![:] = input.parse()?;
-            input.parse()?
+
+            let mut attrs = input.call(Attribute::parse_outer)?;
+            let unique = attrs
+                .extract_if(.., |attr| attr.path().is_ident("unique"))
+                .count()
+                != 0;
+            if !attrs.is_empty() {
+                Err(Error::new_spanned(&attrs[0], "unexpected attributes"))?
+            }
+
+            (unique, input.parse()?)
         } else if lh.peek(token::Paren) {
             let content;
             parenthesized!(content in input);
             bitfield_storage = Some(content.parse()?);
 
             // For bitfields, bitfield macro will generate a type with the same name as `name`.
-            parse_quote!(#name)
+            (true, parse_quote!(#name))
         } else {
             Err(lh.error())?
         };
@@ -138,6 +149,7 @@ impl Parse for Reg {
             attrs,
             vis,
             name,
+            unique,
             ty,
             array,
             offset,
@@ -181,6 +193,7 @@ pub(crate) fn register(def: RegDef) -> Result<TokenStream> {
             attrs,
             vis,
             name,
+            unique,
             ty,
             array,
             offset,
@@ -195,7 +208,7 @@ pub(crate) fn register(def: RegDef) -> Result<TokenStream> {
             RegOffset::Fixed { offset } => quote!(#offset),
             RegOffset::Alias { alias } => {
                 quote_spanned!(alias.span().resolved_at(span) =>
-                    ::kernel::io::register::alias_offset::<#base, #alias>()
+                    ::kernel::io::register::OffsetLoc::<#base, _>::const_offset(#alias)
                 )
             }
             RegOffset::ElementAlias { alias, idx } => {
@@ -217,27 +230,30 @@ pub(crate) fn register(def: RegDef) -> Result<TokenStream> {
         }
 
         match array {
-            None if bitfield.is_none() => outputs.extend(quote!(
-                #(#attrs)* #vis const #name: ::kernel::io::register::OffsetLoc<#base, #ty> =
-                    ::kernel::io::register::OffsetLoc::new(#offset);
-            )),
-
-            _ if bitfield.is_none() => Err(Error::new_spanned(
-                ty,
-                "defining without bitfield is not yet supported for this type of register",
-            ))?,
-
-            None => outputs.extend(quote_spanned!(span =>
-                impl ::kernel::io::register::FixedRegister for #name {
-                    type Base = #base;
-                    const OFFSET: usize = #offset;
+            None => {
+                if unique {
+                    outputs.extend(quote!(
+                        impl ::kernel::io::register::FixedIoLoc<#base> for #ty {
+                            type Location = ::kernel::io::register::OffsetLoc<#base, #ty>;
+                            const LOCATION: Self::Location = #name;
+                        }
+                    ))
                 }
 
-                #(#attrs)* #vis const #name: ::kernel::io::register::FixedRegisterLoc<#name> =
-                    ::kernel::io::register::FixedRegisterLoc::<#name>::new();
-            )),
+                outputs.extend(quote_spanned!(span =>
+                    #(#attrs)* #vis const #name: ::kernel::io::register::OffsetLoc<#base, #ty> =
+                        ::kernel::io::register::OffsetLoc::new(#offset);
+                ));
+            }
 
             Some(def) => {
+                if !unique {
+                    Err(Error::new_spanned(
+                        &ty,
+                        "defining without bitfield is not yet supported for this type of register",
+                    ))?
+                }
+
                 let size = &def.size;
                 let stride = if let Some(stride) = &def.stride {
                     outputs.extend(quote_spanned!(stride.span().resolved_at(span) =>
