@@ -308,6 +308,7 @@ macro_rules! bitfield {
         $(#[$attr])*
         #[repr(transparent)]
         #[derive(Clone, Copy, PartialEq, Eq)]
+        #[derive($crate::prelude::FromBytes, $crate::prelude::IntoBytes)]
         $vis struct $name {
             inner: $storage,
         }
@@ -346,6 +347,15 @@ macro_rules! bitfield {
                 Self::from_raw(val)
             }
         }
+
+        // SAFETY: `$name` is transparent over `$storage`.
+        unsafe impl $crate::mem::AsRepr for $name {
+            // Normalize `$storage` to the canonical repr type in case it is signed.
+            type Repr = <$storage as $crate::mem::AsRepr>::Repr;
+        }
+
+        // SAFETY: `$name` is transparent over `$storage`.
+        unsafe impl $crate::mem::AsReprMut for $name {}
     };
 
     // Definitions requiring knowledge of individual fields: private and public field accessors,
