@@ -93,7 +93,9 @@ impl<T: RawDeviceId, U, const N: usize> IdArray<T, U, N> {
         while i < N {
             // SAFETY: by the safety requirement of `RawDeviceId`, we're guaranteed that `T` is
             // layout-wise compatible with `RawType`.
-            raw_ids[i] = unsafe { core::mem::transmute_copy(&ids[i].0) };
+            raw_ids[i] = MaybeUninit::new(unsafe {
+                crate::mem::transmute_unchecked(core::ptr::read(&ids[i].0))
+            });
             if let Some(data_offset) = data_offset {
                 // SAFETY: by the safety requirement of this function, this would be effectively
                 // `raw_ids[i].driver_data = i;`.
@@ -116,15 +118,14 @@ impl<T: RawDeviceId, U, const N: usize> IdArray<T, U, N> {
 
         Self {
             raw_ids: RawIdArray {
-                // SAFETY: this is effectively `array_assume_init`, which is unstable, so we use
-                // `transmute_copy` instead. We have initialized all elements of `raw_ids` so this
-                // `array_assume_init` is safe.
-                ids: unsafe { core::mem::transmute_copy(&raw_ids) },
+                // SAFETY: this is effectively `array_assume_init`, which is unstable. We have
+                // initialized all elements of `raw_ids` so this `array_assume_init` is safe.
+                ids: unsafe { crate::mem::transmute_unchecked(raw_ids) },
                 sentinel: MaybeUninit::zeroed(),
             },
             // SAFETY: We have initialized all elements of `infos` so this `array_assume_init` is
             // safe.
-            id_infos: unsafe { core::mem::transmute_copy(&infos) },
+            id_infos: unsafe { crate::mem::transmute_unchecked(infos) },
         }
     }
 
