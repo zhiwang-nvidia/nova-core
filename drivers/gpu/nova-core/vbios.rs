@@ -15,7 +15,6 @@ use kernel::{
     sync::aref::ARef,
 };
 
-#[expect(unused_imports)]
 use crate::{
     driver::{
         Bar0,

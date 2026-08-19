@@ -57,7 +57,6 @@ pub(crate) mod gpu_control {
         uapi, //
     };
 
-    #[expect(unused_imports)]
     use crate::driver::TyrRegisters;
 
     register! {
@@ -879,7 +878,6 @@ pub(crate) mod gpu_control {
 pub(crate) mod job_control {
     use kernel::register;
 
-    #[expect(unused_imports)]
     use crate::driver::TyrRegisters;
 
     register! {
@@ -934,7 +932,6 @@ pub(crate) mod job_control {
 pub(crate) mod mmu_control {
     use kernel::register;
 
-    #[expect(unused_imports)]
     use crate::driver::TyrRegisters;
 
     register! {
@@ -995,7 +992,6 @@ pub(crate) mod mmu_control {
         };
         use pin_init::Zeroable;
 
-        #[expect(unused_imports)]
         use crate::driver::TyrRegisters;
 
         /// Maximum number of hardware address space slots.
@@ -1803,7 +1799,6 @@ pub(crate) mod mmu_control {
 pub(crate) mod doorbell_block {
     use kernel::register;
 
-    #[expect(unused_imports)]
     use crate::driver::TyrRegisters;
 
     /// Number of doorbells available.

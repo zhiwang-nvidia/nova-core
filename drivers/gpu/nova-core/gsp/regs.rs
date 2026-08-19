@@ -2,7 +2,6 @@
 
 use kernel::io::register;
 
-#[expect(unused_imports)]
 use crate::{
     driver::NovaRegisters,
     regs::NV_PBUS_SW_SCRATCH, //

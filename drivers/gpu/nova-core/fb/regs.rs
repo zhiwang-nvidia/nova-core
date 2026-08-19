@@ -5,7 +5,6 @@ use kernel::{
     sizes::SizeConstants, //
 };
 
-#[expect(unused_imports)]
 use crate::driver::NovaRegisters;
 
 // PDISP

@@ -12,7 +12,6 @@ use kernel::{
     time, //
 };
 
-#[expect(unused_imports)]
 use crate::{
     driver::{
         Bar0,
@@ -573,7 +572,6 @@ register! {
 pub(crate) mod gm107 {
     use kernel::io::register;
 
-    #[expect(unused_imports)]
     use crate::driver::NovaRegisters;
 
     // FUSE
@@ -590,7 +588,6 @@ pub(crate) mod gm107 {
 pub(crate) mod tu102 {
     use kernel::io::register;
 
-    #[expect(unused_imports)]
     use crate::driver::NovaRegisters;
 
     // PCI configuration-space mirror.
@@ -608,7 +605,6 @@ pub(crate) mod tu102 {
 pub(crate) mod ga100 {
     use kernel::io::register;
 
-    #[expect(unused_imports)]
     use crate::driver::NovaRegisters;
 
     // FUSE
@@ -627,7 +623,6 @@ pub(crate) const NV_THERM_I2CS_SCRATCH_FSP_BOOT_COMPLETE_STATUS_SUCCESS: u32 = 0
 pub(crate) mod gh100 {
     use kernel::io::register;
 
-    #[expect(unused_imports)]
     use crate::driver::NovaRegisters;
 
     // PTHERM
@@ -649,7 +644,6 @@ pub(crate) mod gh100 {
 pub(crate) mod gb202 {
     use kernel::io::register;
 
-    #[expect(unused_imports)]
     use crate::driver::NovaRegisters;
 
     // PTHERM

@@ -36,7 +36,6 @@ use kernel::{
     time, //
 };
 
-#[expect(unused_imports)]
 use crate::{
     driver::{
         IoMem,
