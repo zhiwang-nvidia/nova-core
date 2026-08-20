@@ -36,7 +36,11 @@ use crate::{
     },
     gsp::{
         cmdq::Cmdq,
-        commands, //
+        commands,
+        fw::{
+            GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER,
+            GMCAPI_CMD_EXEC_HS_BINARY, //
+        }, //
     },
     regs, //
 };
@@ -161,6 +165,57 @@ impl<'gsp> super::Gsp<'gsp> {
         Ok(())
     }
 
+    /// Dispatch one GMC boot event to its load-and-execute handler.
+    ///
+    /// A given GPU raises only one of the two commands, so only one of the handlers ever runs
+    /// on it.
+    ///
+    /// # Errors
+    ///
+    /// - `EINVAL` if `command_id` is not a load-and-execute command.
+    ///
+    /// Errors from the handlers are propagated as-is.
+    #[expect(dead_code)]
+    #[expect(clippy::too_many_arguments)]
+    fn dispatch_gmc_boot_event(
+        command_id: u32,
+        payload: &[u8],
+        bootloader: &GenericBootloader,
+        gsp_falcon: &Falcon<'_, Gsp>,
+        sec2_falcon: &Falcon<'_, Sec2>,
+        dev: &device::Device,
+        bootloader_app_version: u32,
+        libos_dma_handle: u64,
+    ) -> Result {
+        match command_id {
+            GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER => Self::handle_load_exec_bootloader(
+                payload,
+                bootloader,
+                gsp_falcon,
+                sec2_falcon,
+                dev,
+                bootloader_app_version,
+                libos_dma_handle,
+            ),
+            GMCAPI_CMD_EXEC_HS_BINARY => Self::handle_load_exec_hs_binary(
+                payload,
+                gsp_falcon,
+                sec2_falcon,
+                dev,
+                bootloader_app_version,
+                libos_dma_handle,
+            ),
+            _ => {
+                dev_err!(
+                    dev,
+                    "Unexpected GMC boot event: command_id={:#010x}\n",
+                    command_id
+                );
+                Err(EINVAL)
+            }
+        }
+    }
+
     /// Handle a `GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER` event.
     ///
     /// The driver does not copy the image itself. It writes the descriptor the event carries to
@@ -173,7 +228,6 @@ impl<'gsp> super::Gsp<'gsp> {
     ///   size this driver mirrors, or the event names a context DMA slot or an aperture that does
     ///   not exist.
     /// - `ETIMEDOUT` if the GSP does not suspend, or the image does not halt, in time.
-    #[expect(dead_code)]
     fn handle_load_exec_bootloader(
         payload: &[u8],
         bootloader: &GenericBootloader,
@@ -260,7 +314,6 @@ impl<'gsp> super::Gsp<'gsp> {
     /// - `EINVAL` if the payload is shorter than the parameter block, or the ucode id does not
     ///   fit the BROM register field.
     /// - `ETIMEDOUT` if the GSP does not suspend, or the binary does not halt, in time.
-    #[expect(dead_code)]
     fn handle_load_exec_hs_binary(
         payload: &[u8],
         gsp_falcon: &Falcon<'_, Gsp>,
