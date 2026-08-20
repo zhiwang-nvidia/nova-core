@@ -25,7 +25,6 @@ use crate::{
     fsp::Fsp,
     gsp::{
         self,
-        commands::GetGspStaticInfoReply,
         Gsp,
         GspBootContext, //
     },
@@ -282,8 +281,8 @@ struct GspResources<'gpu> {
     /// GSP runtime data.
     #[pin]
     gsp: Gsp<'gpu>,
-    /// GSP unload firmware bundle, if any.
-    unload_bundle: Option<gsp::UnloadBundle<'gpu>>,
+    /// The static GPU configuration and the unload bundle the boot sequence returned.
+    boot_result: gsp::BootResult<'gpu>,
 }
 
 /// Structure holding the resources required to operate the GPU.
@@ -296,8 +295,6 @@ pub(crate) struct Gpu<'gpu> {
     /// in-flight handler, before the queue it drains goes away and before the GSP is unloaded.
     #[pin]
     _gsp_irq: GspIrq<'gpu>,
-    /// Static GPU information as provided by the GSP.
-    gsp_static_info: GetGspStaticInfoReply,
     /// GPU memory manager owning memory management resources.
     ///
     /// Must be kept declared *before* `gsp_resources`, so that its components are dropped while
@@ -328,7 +325,7 @@ impl PinnedDrop for GspResources<'_> {
         let this = self.project();
         let device = *this.device;
         let bar = *this.bar;
-        let bundle = this.unload_bundle.take();
+        let bundle = this.boot_result.take_unload_bundle();
 
         let _ = this
             .gsp
@@ -396,10 +393,10 @@ impl<'gpu> Gpu<'gpu> {
 
                 gsp <- Gsp::new(pdev, bar),
 
-                // This member must be initialized last, so the `UnloadBundle` can never be dropped
+                // This member must be initialized last, so the unload bundle can never be dropped
                 // from outside of the constructed `GspResources`, ensuring that the unload sequence
                 // is properly run in case of failure.
-                unload_bundle: gsp.boot(GspBootContext {
+                boot_result: gsp.boot(GspBootContext {
                     pdev,
                     bar,
                     chipset: spec.chipset,
@@ -433,9 +430,9 @@ impl<'gpu> Gpu<'gpu> {
                 gsp_resources.gsp.cmdq.drain()?;
             },
 
-            gsp_static_info: {
-                // Obtain and display basic GPU information.
-                let info = gsp_resources.gsp.get_static_info()?;
+            _: {
+                // Already reported in the `GSP_INIT` reply, so no command is needed.
+                let info = &gsp_resources.boot_result.static_info;
                 match info.gpu_name() {
                     Ok(name) => dev_info!(dev, "GPU name: {}\n", name),
                     Err(e) => dev_warn!(dev, "GPU name unavailable: {:?}\n", e),
@@ -455,15 +452,13 @@ impl<'gpu> Gpu<'gpu> {
                             / u64::SZ_1M
                     );
                 }
-
-                info
             },
 
             // Create GPU memory manager owning memory management resources.
             mm: GpuMm::new(
                 bar,
                 gsp_resources.spec.chipset,
-                VramAddress::from_raw(gsp_static_info.total_fb_end),
+                VramAddress::from_raw(gsp_resources.boot_result.static_info.total_fb_end),
             )?,
         })
     }
@@ -473,7 +468,7 @@ impl<'gpu> Gpu<'gpu> {
     pub(crate) fn run_selftests(self: Pin<&mut Self>, pdev: &pci::Device<device::Bound>) {
         let this = self.project();
         let dev = pdev.as_ref();
-        let regions = &this.gsp_static_info.usable_fb_regions;
+        let regions = &this.gsp_resources.boot_result.static_info.usable_fb_regions;
 
         if let Err(err) = crate::mm::selftest::run(dev, this.mm, regions) {
             dev_err!(dev, "self-tests failed: {:?}\n", err);

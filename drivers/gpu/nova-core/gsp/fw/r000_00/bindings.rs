@@ -849,11 +849,3 @@ impl Default for GSP_FMC_BOOT_PARAMS {
         }
     }
 }
-#[repr(C)]
-#[derive(Debug, Default, Copy, Clone, MaybeZeroable)]
-pub struct rpc_unloading_guest_driver_v1F_07 {
-    pub bInPMTransition: u8_,
-    pub bGc6Entering: u8_,
-    pub __bindgen_padding_0: [u8; 2usize],
-    pub newLevel: u32_,
-}
