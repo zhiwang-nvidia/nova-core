@@ -30,3 +30,12 @@ config NOVA_CORE_IRQ_SELFTEST
 
 	  This is intended for driver bring-up and for debugging PCI, MSI, or
 	  passthrough setups. If unsure, say N.
+
+config NOVA_CORE_SELFTESTS
+	bool "Nova Core driver self-tests"
+	depends on NOVA_CORE
+	default n
+	help
+	  Build the driver self-tests and run them when the GPU is probed.
+
+	  If unsure, say N.
