@@ -139,6 +139,9 @@ impl pci::Driver for NovaCoreDriver {
                     crate::irq::gsp::enable(bar, gpu.chipset(), vectors_ref.irq_type());
                     gpu.cmdq().drain(bar)?;
                 },
+                // Run optional GPU selftests.
+                #[cfg(CONFIG_NOVA_CORE_SELFTESTS)]
+                _: { gpu.run_selftests(pdev) },
                 _reg: auxiliary::Registration::new(
                     pdev.as_ref(),
                     c"nova-drm",
