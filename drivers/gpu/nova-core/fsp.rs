@@ -17,7 +17,7 @@ use kernel::{
         Alignable,
         Alignment, //
     },
-    sizes::SZ_2M,
+    sizes::SizeConstants,
     time::Delta,
     transmute::{
         AsBytes,
@@ -258,7 +258,7 @@ impl FspCotMessage {
             offset = (offset + u64::from(fb_info.pmu_reserved_size))
                 // Open RM aligns this to WPR granularity, which is 128 KiB. 2 MiB is a
                 // multiple of that and reserves at least as much.
-                .align_up(Alignment::new::<SZ_2M>())
+                .align_up(Alignment::SZ_2M)
                 .ok_or(EINVAL)?;
         }
 

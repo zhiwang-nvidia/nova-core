@@ -95,7 +95,7 @@ pub(super) const fn pmu_reserved_size_gb100() -> u32 {
         {
             const_align_up(
                 PMU_BACKING_STORE_SIZE + PMU_SURFACES_SIZE + PMU_MISC_SIZE,
-                Alignment::new::<SZ_128K>(),
+                Alignment::SZ_128K,
             )
             .unwrap()
         },
