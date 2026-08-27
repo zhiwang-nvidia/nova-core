@@ -53,6 +53,8 @@ pub(crate) struct GetGspStaticInfoReply {
     gpu_name: [u8; 64],
     /// Usable FB (VRAM) regions for driver memory allocation.
     pub(crate) usable_fb_regions: KVec<Range<u64>>,
+    /// Exclusive end of the FB physical address space.
+    pub(crate) total_fb_end: u64,
 }
 
 /// Error type for [`GetGspStaticInfoReply::gpu_name`].
@@ -248,10 +250,12 @@ fn decode_gsp_info(words: &[u64]) -> Result<GetGspStaticInfoReply> {
     for region in decoded.usable_fb_regions() {
         usable_fb_regions.push(region, GFP_KERNEL)?;
     }
+    let total_fb_end = decoded.total_fb_end().ok_or(EINVAL)?;
 
     Ok(GetGspStaticInfoReply {
         gpu_name,
         usable_fb_regions,
+        total_fb_end,
     })
 }
 

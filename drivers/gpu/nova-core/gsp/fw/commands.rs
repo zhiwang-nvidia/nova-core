@@ -324,6 +324,15 @@ impl GspInitResponse {
             }
         })
     }
+
+    /// Computes the exclusive end of the FB physical address space.
+    pub(crate) fn total_fb_end(&self) -> Option<u64> {
+        self.fb_regions
+            .iter()
+            .map(|region| region.limit)
+            .max()?
+            .checked_add(1)
+    }
 }
 
 nvkv_decode! {
