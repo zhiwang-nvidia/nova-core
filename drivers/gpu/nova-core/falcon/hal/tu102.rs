@@ -21,7 +21,11 @@ use crate::{
     regs, //
 };
 
-use super::FalconHal;
+use super::{
+    FalconHal,
+    FalconIntrHal,
+    RiscvRouting, //
+};
 
 pub(super) struct Tu102<E: FalconEngine>(PhantomData<E>);
 
@@ -80,3 +84,33 @@ impl<E: FalconEngine> FalconHal<E> for Tu102<E> {
         LoadMethod::Pio
     }
 }
+
+/// Turing falcon interrupts.
+struct Tu102Intr;
+
+impl FalconIntrHal for Tu102Intr {
+    fn has_intr_retrigger(&self) -> bool {
+        false
+    }
+
+    fn riscv_routing(&self) -> RiscvRouting {
+        RiscvRouting::Tu102
+    }
+}
+
+pub(super) const TU102_INTR_HAL: &dyn FalconIntrHal = &Tu102Intr;
+
+/// GA100 falcon interrupts, which keep the Turing routing offsets but implement the retrigger.
+struct Ga100Intr;
+
+impl FalconIntrHal for Ga100Intr {
+    fn has_intr_retrigger(&self) -> bool {
+        true
+    }
+
+    fn riscv_routing(&self) -> RiscvRouting {
+        RiscvRouting::Tu102
+    }
+}
+
+pub(super) const GA100_INTR_HAL: &dyn FalconIntrHal = &Ga100Intr;
