@@ -547,7 +547,7 @@ impl<'cmdq> Cmdq<'cmdq> {
                     dev,
                     bar,
                     gsp_mem,
-                    seq: 0,
+                    rpc_seq: 0,
                     poisoned: Cell::new(false),
                 }),
             }))
@@ -579,9 +579,9 @@ impl<'cmdq> Cmdq<'cmdq> {
         Error: From<<M::Reply as MessageFromGsp>::InitError>,
     {
         let mut inner = self.inner.lock();
-        inner.send_command(command)?;
+        let expected_seq = inner.send_command(command)?;
 
-        inner.await_msg()
+        inner.await_msg(Some(expected_seq))
     }
 
     /// Sends `command` to the GSP without waiting for a reply.
@@ -599,7 +599,7 @@ impl<'cmdq> Cmdq<'cmdq> {
         M: CommandToGsp<Reply = NoReply>,
         Error: From<M::InitError>,
     {
-        self.inner.lock().send_command(command)
+        self.inner.lock().send_command(command).map(|_| ())
     }
 
     /// Receives one GMC element from the GSP and passes its command id, the `max_resp_or_status`
@@ -641,6 +641,8 @@ impl<'cmdq> Cmdq<'cmdq> {
     /// Waits for an unsolicited GSP event of type `M`, consuming any other event that arrives
     /// first.
     ///
+    /// The event answers no command, so it is matched on its function code alone.
+    ///
     /// The queue is locked for the whole wait, for up to [`Self::RECEIVE_TIMEOUT`], so a
     /// concurrent command cannot consume the awaited event.
     ///
@@ -657,7 +659,7 @@ impl<'cmdq> Cmdq<'cmdq> {
         // This allows all error types, including `Infallible`, to be used for `M::InitError`.
         Error: From<M::InitError>,
     {
-        self.inner.lock().await_msg()
+        self.inner.lock().await_msg(None)
     }
 
     /// Drains every message currently pending in the GSP-to-CPU queue.
@@ -679,8 +681,10 @@ struct CmdqInner<'a> {
     dev: &'a device::Device,
     /// MMIO mapping of PCI BAR 0, which carries the GSP doorbell.
     bar: Bar0<'a>,
-    /// Current command sequence number.
-    seq: u32,
+    /// Next RPC sequence number. The GSP echoes it in a command's reply, which lets
+    /// [`CmdqInner::receive_msg`] match that reply to the awaiting command. Advances once per
+    /// logical command, so every continuation record of one command carries the same number.
+    rpc_seq: u32,
     /// Set once a message fails framing or MCTP magic validation. Such a message has no
     /// trustworthy length, so the queue cannot advance past it and every later receive fails.
     ///
@@ -704,7 +708,7 @@ impl CmdqInner<'_> {
     ///   written to by its [`CommandToGsp::init_variable_payload`] method.
     ///
     /// Error codes returned by the command initializers are propagated as-is.
-    fn send_single_command<M>(&mut self, command: M) -> Result
+    fn send_single_command<M>(&mut self, command: M, rpc_seq: u32) -> Result
     where
         M: CommandToGsp,
         // This allows all error types, including `Infallible`, to be used for `M::InitError`.
@@ -721,7 +725,7 @@ impl CmdqInner<'_> {
         let (cmd, payload_1) = M::Command::from_bytes_mut_prefix(dst.contents.0).ok_or(EIO)?;
 
         // Fill the header and command in-place.
-        let msg_element = GspMsgElement::init(size_in_bytes, M::FUNCTION);
+        let msg_element = GspMsgElement::init(rpc_seq, size_in_bytes, M::FUNCTION);
         // SAFETY: `msg_header` and `cmd` are valid references, and not touched if the initializer
         // fails.
         unsafe {
@@ -741,22 +745,23 @@ impl CmdqInner<'_> {
         dev_dbg!(
             &self.dev,
             "GSP RPC: send: seq# {}, function={:?}, length=0x{:x}\n",
-            self.seq,
+            rpc_seq,
             M::FUNCTION,
             dst.header.length(),
         );
 
         // All set - update the write pointer and inform the GSP of the new command.
         let elem_count = dst.header.element_count();
-        self.seq += 1;
         DmaGspMem::advance_cpu_write_ptr_v2(self.bar, elem_count);
 
         Ok(())
     }
 
-    /// Sends `command` to the GSP.
+    /// Sends `command` to the GSP and returns the RPC sequence number assigned to it.
     ///
-    /// The command may be split into multiple messages if it is large.
+    /// The command may be split into multiple messages if it is large. The GSP echoes the
+    /// sequence number in the reply, so a caller passes it to [`Self::receive_msg`] to match the
+    /// reply to this command.
     ///
     /// # Errors
     ///
@@ -765,24 +770,27 @@ impl CmdqInner<'_> {
     ///   written to by its [`CommandToGsp::init_variable_payload`] method.
     ///
     /// Error codes returned by the command initializers are propagated as-is.
-    fn send_command<M>(&mut self, command: M) -> Result
+    fn send_command<M>(&mut self, command: M) -> Result<u32>
     where
         M: CommandToGsp,
         Error: From<M::InitError>,
     {
+        let rpc_seq = self.rpc_seq;
+        self.rpc_seq = self.rpc_seq.wrapping_add(1);
+
         match SplitState::new(command)? {
-            SplitState::Single(command) => self.send_single_command(command),
+            SplitState::Single(command) => self.send_single_command(command, rpc_seq)?,
             SplitState::Split(command, mut continuations) => {
-                self.send_single_command(command)?;
+                self.send_single_command(command, rpc_seq)?;
 
                 while let Some(continuation) = continuations.next() {
                     // Turbofish needed because the compiler cannot infer M here.
-                    self.send_single_command::<ContinuationRecord<'_>>(continuation)?;
+                    self.send_single_command::<ContinuationRecord<'_>>(continuation, rpc_seq)?;
                 }
-
-                Ok(())
             }
         }
+
+        Ok(rpc_seq)
     }
 
     /// Marks the queue unusable and returns the error every later receive fails with.
@@ -800,8 +808,8 @@ impl CmdqInner<'_> {
     /// `payload` is the data that follows the [`super::fw::GmcApiHeader`] on the wire, and
     /// `max_response_size` bounds the response GSP-RM may send.
     ///
-    /// The command carries the next command sequence number, which the GSP echoes in its
-    /// response. The number is consumed whether or not the send succeeds.
+    /// The command carries the next RPC sequence number, which the GSP echoes in its response.
+    /// The number is consumed whether or not the send succeeds.
     ///
     /// # Errors
     ///
@@ -809,8 +817,8 @@ impl CmdqInner<'_> {
     /// - `ETIMEDOUT` if space does not become available within the timeout.
     /// - `EIO` if the command header is not properly aligned.
     fn send_gmc(&mut self, command_id: u32, payload: &[u8], max_response_size: u32) -> Result {
-        let seq = self.seq;
-        self.seq = self.seq.wrapping_add(1);
+        let rpc_seq = self.rpc_seq;
+        self.rpc_seq = self.rpc_seq.wrapping_add(1);
 
         let dst = self.gsp_mem.allocate_command::<GspGmcMsgElement>(
             self.bar,
@@ -818,8 +826,12 @@ impl CmdqInner<'_> {
             Self::ALLOCATE_TIMEOUT,
         )?;
 
-        let msg_element =
-            GspGmcMsgElement::init(command_id, u64::from(seq), payload.len(), max_response_size);
+        let msg_element = GspGmcMsgElement::init(
+            command_id,
+            u64::from(rpc_seq),
+            payload.len(),
+            max_response_size,
+        );
         // SAFETY: `dst.header` points to a valid, writable `GspGmcMsgElement` region.
         unsafe {
             msg_element.__init(core::ptr::from_mut(dst.header))?;
@@ -831,7 +843,7 @@ impl CmdqInner<'_> {
         dev_dbg!(
             &self.dev,
             "GSP GMC: send: seq# {}, command_id=0x{:x}, length=0x{:x}\n",
-            seq,
+            rpc_seq,
             command_id,
             dst.header.length(),
         );
@@ -931,6 +943,10 @@ impl CmdqInner<'_> {
     /// function code matches is decoded and returned. Any other message, recognized or not, goes
     /// to [`Self::log_event`], and `ENOMSG` is returned.
     ///
+    /// With `expected_seq` set, the message must carry that RPC sequence number too. A message
+    /// with the expected function code and a different sequence is a stale reply to a command
+    /// that already timed out, so it is logged and dropped rather than classified as an event.
+    ///
     /// The read pointer is always advanced past the message, regardless of whether it matched.
     ///
     /// # Errors
@@ -941,7 +957,11 @@ impl CmdqInner<'_> {
     /// - `ENOMSG` if the message was not the awaited reply.
     ///
     /// Error codes returned by [`MessageFromGsp::read`] are propagated as-is.
-    fn receive_msg<M: MessageFromGsp>(&mut self, timeout: Delta) -> Result<M>
+    fn receive_msg<M: MessageFromGsp>(
+        &mut self,
+        timeout: Delta,
+        expected_seq: Option<u32>,
+    ) -> Result<M>
     where
         // This allows all error types, including `Infallible`, to be used for `M::InitError`.
         Error: From<M::InitError>,
@@ -949,9 +969,11 @@ impl CmdqInner<'_> {
         let message = self.wait_for_msg(timeout)?;
         let function = message.header.function();
         let seq = message.header.sequence();
+        let func_matches = matches!(function, Ok(f) if f == M::FUNCTION);
+        let matched = func_matches && expected_seq.is_none_or(|expected| seq == expected);
 
         // Every path must advance the read pointer past this message, including a failed decode.
-        let result = if matches!(function, Ok(f) if f == M::FUNCTION) {
+        let result = if matched {
             match M::Message::from_bytes_prefix(message.contents.0) {
                 Some((cmd, contents_1)) => {
                     let mut sbuffer = SBufferIter::new_reader([contents_1, message.contents.1]);
@@ -974,7 +996,17 @@ impl CmdqInner<'_> {
                 }
             }
         } else {
-            self.log_event(function, seq);
+            if func_matches {
+                dev_warn!(
+                    &self.dev,
+                    "GSP RPC: dropping stale {:?} reply (seq {}, awaiting {:?})\n",
+                    M::FUNCTION,
+                    seq,
+                    expected_seq,
+                );
+            } else {
+                self.log_event(function, seq);
+            }
 
             Err(ENOMSG)
         };
@@ -991,7 +1023,7 @@ impl CmdqInner<'_> {
     /// Receives a message of type `M`, waiting up to [`Cmdq::RECEIVE_TIMEOUT`] from the call.
     ///
     /// Any other message that arrives first goes to [`Self::log_event`] and does not extend the
-    /// deadline.
+    /// deadline. `expected_seq` narrows the match as [`Self::receive_msg`] describes.
     ///
     /// # Errors
     ///
@@ -1001,7 +1033,7 @@ impl CmdqInner<'_> {
     ///   [`Self::wait_for_msg`]).
     ///
     /// Error codes returned by [`MessageFromGsp::read`] are propagated as-is.
-    fn await_msg<M: MessageFromGsp>(&mut self) -> Result<M>
+    fn await_msg<M: MessageFromGsp>(&mut self, expected_seq: Option<u32>) -> Result<M>
     where
         // This allows all error types, including `Infallible`, to be used for `M::InitError`.
         Error: From<M::InitError>,
@@ -1012,7 +1044,7 @@ impl CmdqInner<'_> {
             if remaining.is_negative() {
                 break Err(ETIMEDOUT);
             }
-            match self.receive_msg::<M>(remaining) {
+            match self.receive_msg::<M>(remaining, expected_seq) {
                 Ok(msg) => break Ok(msg),
                 Err(ENOMSG) => continue,
                 Err(e) => break Err(e),
