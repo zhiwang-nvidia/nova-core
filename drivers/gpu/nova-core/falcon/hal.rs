@@ -82,7 +82,6 @@ pub(crate) trait FalconHal<E: FalconEngine>: Send + Sync {
 
 /// Offsets at which a falcon carries the RISC-V interrupt routing registers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code)]
 pub(crate) enum RiscvRouting {
     /// The Turing offsets, which GA100 also uses.
     Tu102,
@@ -96,7 +95,6 @@ impl RiscvRouting {
     ///
     /// A cause reaches the host only if the core both enables it and directs it there. Every
     /// other latched cause belongs to the firmware running on the core.
-    #[expect(dead_code)]
     pub(crate) fn host_routed_causes(
         self,
         pfalcon2: Mmio<'_, PFalcon2Registers>,
@@ -122,7 +120,6 @@ impl RiscvRouting {
 /// Separate from [`FalconHal`] because an interrupt handler reaches these in hard interrupt
 /// context, where the boxed dispatch that `FalconHal`'s [`FalconEngine`] parameter requires
 /// cannot be allocated.
-#[expect(dead_code)]
 pub(crate) trait FalconIntrHal {
     /// Returns whether these falcons implement `NV_PFALCON_FALCON_INTR_RETRIGGER`.
     fn has_intr_retrigger(&self) -> bool;
@@ -135,7 +132,6 @@ pub(crate) trait FalconIntrHal {
 ///
 /// GA100 has its own arm: it reaches the RISC-V routing registers at the Turing offsets, which
 /// GA102 moved, but its falcons implement the retrigger register, which Turing's do not.
-#[expect(dead_code)]
 pub(crate) fn falcon_intr_hal(chipset: Chipset) -> &'static dyn FalconIntrHal {
     match chipset.arch() {
         Architecture::Turing => tu102::TU102_INTR_HAL,

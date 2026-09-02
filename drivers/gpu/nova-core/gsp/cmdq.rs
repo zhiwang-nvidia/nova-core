@@ -639,7 +639,6 @@ impl<'cmdq> Cmdq<'cmdq> {
     /// # Errors
     ///
     /// Propagates a receive error, in particular the `EIO` of a queue poisoned by corrupt framing.
-    #[expect(dead_code)]
     pub(crate) fn drain(&self) -> Result {
         self.inner.lock().drain()
     }
