@@ -28,7 +28,6 @@ use crate::{
         hal::FbHal,
         regs, //
     },
-    num::usize_into_u32,
 };
 
 struct Gb100;
@@ -91,15 +90,11 @@ const PMU_MISC_SIZE: usize = SZ_4K;
 /// Open RM reserves the backing store, the surfaces and the misc memory as one region above
 /// FRTS, aligned to `KPMU_RESERVED_MEMORY_ALIGNMENT` in `kpmuReservedMemorySizeGet`.
 pub(super) const fn pmu_reserved_size_gb100() -> u32 {
-    usize_into_u32::<
-        {
-            const_align_up(
-                PMU_BACKING_STORE_SIZE + PMU_SURFACES_SIZE + PMU_MISC_SIZE,
-                Alignment::new::<SZ_128K>(),
-            )
-            .unwrap()
-        },
-    >()
+    cv!(const_align_up(
+        PMU_BACKING_STORE_SIZE + PMU_SURFACES_SIZE + PMU_MISC_SIZE,
+        Alignment::new::<SZ_128K>(),
+    )
+    .unwrap())
 }
 
 impl FbHal for Gb100 {

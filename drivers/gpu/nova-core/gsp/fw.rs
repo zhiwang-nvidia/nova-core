@@ -108,20 +108,18 @@ pub(crate) struct LibosParams {
 impl LibosParams {
     /// Version 2 of the GSP LIBOS (Turing and GA100)
     const LIBOS2: LibosParams = LibosParams {
-        carveout_size: num::u32_as_u64(bindings::GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS2),
-        allowed_heap_size: num::u32_as_u64(bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS2_MIN_MB)
+        carveout_size: cv!(bindings::GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS2),
+        allowed_heap_size: cv!(bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS2_MIN_MB => u64)
             * u64::SZ_1M
-            ..num::u32_as_u64(bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS2_MAX_MB) * u64::SZ_1M,
+            ..cv!(bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS2_MAX_MB => u64) * u64::SZ_1M,
     };
 
     /// Version 3 of the GSP LIBOS (GA102+)
     const LIBOS3: LibosParams = LibosParams {
-        carveout_size: num::u32_as_u64(bindings::GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS3_BAREMETAL),
-        allowed_heap_size: num::u32_as_u64(
-            bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MIN_MB,
-        ) * u64::SZ_1M
-            ..num::u32_as_u64(bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MAX_MB)
-                * u64::SZ_1M,
+        carveout_size: cv!(bindings::GSP_FW_HEAP_PARAM_OS_SIZE_LIBOS3_BAREMETAL),
+        allowed_heap_size: cv!(bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MIN_MB => u64)
+            * u64::SZ_1M
+            ..cv!(bindings::GSP_FW_HEAP_SIZE_OVERRIDE_LIBOS3_BAREMETAL_MAX_MB => u64) * u64::SZ_1M,
     };
 
     /// Returns the libos parameters corresponding to `chipset`.
@@ -405,12 +403,8 @@ impl LibosMemoryRegionInitArgument {
             id8: id8(name),
             pa: obj.dma_address(),
             size: num::usize_as_u64(obj.size()),
-            kind: num::u32_into_u8::<
-                { bindings::LibosMemoryRegionKind_LIBOS_MEMORY_REGION_CONTIGUOUS },
-            >(),
-            loc: num::u32_into_u8::<
-                { bindings::LibosMemoryRegionLoc_LIBOS_MEMORY_REGION_LOC_SYSMEM },
-            >(),
+            kind: cv!(bindings::LibosMemoryRegionKind_LIBOS_MEMORY_REGION_CONTIGUOUS),
+            loc: cv!(bindings::LibosMemoryRegionLoc_LIBOS_MEMORY_REGION_LOC_SYSMEM),
             ..Zeroable::init_zeroed()
         });
 
@@ -631,8 +625,7 @@ impl QueueElementHeader {
 
     /// Returns the number of queue slots this element occupies.
     fn element_count(&self) -> u32 {
-        self.element_len
-            .div_ceil(num::usize_into_u32::<GSP_PAGE_SIZE>())
+        self.element_len.div_ceil(cv!(GSP_PAGE_SIZE))
     }
 
     /// Returns `true` if the NVDM type is `nvdm_type`, which is what says which message header
@@ -878,7 +871,7 @@ impl GspArgumentsCached {
 
         let init_inner = init!(bindings::GSP_ARGUMENTS_CACHED {
             magic: GSP_ARGUMENTS_MAGIC_VALUE,
-            size: num::usize_into_u16::<{ size_of::<bindings::GSP_ARGUMENTS_CACHED>() }>(),
+            size: cv!(size_of::<bindings::GSP_ARGUMENTS_CACHED>()),
             flags: GSP_ARGUMENTS_FLAG_STACK_IN_DMEM,
             messageQueueInitArguments <- MessageQueueInitArguments::new(cmdq),
             rmStateMonitorBufferArgs: bindings::GSP_ARGUMENTS_CACHED__bindgen_ty_3 {
@@ -949,17 +942,17 @@ impl MessageQueueInitArguments {
     fn new<'a, 'b>(cmdq: &'a Cmdq<'b>) -> impl Init<Self> + use<'a, 'b> {
         init!(MessageQueueInitArguments {
             sharedMemPhysAddr: cmdq.dma_addr,
-            pageTableEntryCount: num::usize_into_u32::<{ Cmdq::NUM_PTES }>(),
-            cmdQueueOffset: num::usize_as_u64(Cmdq::CMDQ_OFFSET),
-            statQueueOffset: num::usize_as_u64(Cmdq::STATQ_OFFSET),
+            pageTableEntryCount: cv!(Cmdq::NUM_PTES),
+            cmdQueueOffset: u64::from_safe_cast(Cmdq::CMDQ_OFFSET),
+            statQueueOffset: u64::from_safe_cast(Cmdq::STATQ_OFFSET),
 
-            queueElementHdrSize: num::usize_into_u32::<{ size_of::<QueueElementHeader>() }>(),
-            queueElementSizeMin: num::usize_into_u32::<GSP_PAGE_SIZE>(),
-            queueElementSizeMax: num::usize_into_u32::<GSP_MSG_QUEUE_ELEMENT_SIZE_MAX>(),
+            queueElementHdrSize: cv!(size_of::<QueueElementHeader>()),
+            queueElementSizeMin: cv!(GSP_PAGE_SIZE),
+            queueElementSizeMax: cv!(GSP_MSG_QUEUE_ELEMENT_SIZE_MAX),
 
             // Both alignments are log2 values, which GSP-RM applies as `1 << n`.
             queueHeaderAlign: 4,
-            queueElementAlign: num::usize_into_u32::<GSP_PAGE_SHIFT>(),
+            queueElementAlign: cv!(GSP_PAGE_SHIFT),
 
             ..Zeroable::init_zeroed()
         })
@@ -980,7 +973,7 @@ impl GspAcrBootGspRmParams {
     fn new(target: GspDmaTarget, wpr_meta_addr: u64) -> impl Init<Self> {
         let params = init!(Self {
             target: target as u32,
-            gspRmDescSize: num::usize_into_u32::<{ size_of::<GspFwWprMeta>() }>(),
+            gspRmDescSize: cv!(size_of::<GspFwWprMeta>()),
             gspRmDescOffset: wpr_meta_addr,
             bIsGspRmBoot: 1,
             wprCarveoutOffset: 0,
@@ -1022,7 +1015,7 @@ impl GspFmcBootParams {
     pub(crate) fn new(wpr_meta_addr: u64, libos_addr: u64) -> impl Init<Self> {
         let init = init!(Self {
             magic: GSP_FMC_BOOT_PARAMS_MAGIC,
-            size: num::usize_into_u16::<{ size_of::<Self>() }>(),
+            size: cv!(size_of::<Self>()),
             // Blackwell FSP obtains WPR info from other sources, so
             // wprCarveoutOffset and wprCarveoutSize are left zero.
             bootGspRmParams <- GspAcrBootGspRmParams::new(GspDmaTarget::CoherentSystem,
