@@ -123,11 +123,13 @@ impl LeafMask {
     }
 
     /// Returns the mask holding the vectors set in `raw`.
+    #[cfg_attr(not(CONFIG_NOVA_CORE_IRQ_SELFTEST), expect(dead_code))]
     pub(super) const fn from_raw(raw: u32) -> Self {
         Self(raw)
     }
 
     /// Returns the mask as the value the leaf registers take.
+    #[cfg_attr(not(CONFIG_NOVA_CORE_IRQ_SELFTEST), expect(dead_code))]
     pub(super) const fn into_raw(self) -> u32 {
         self.0
     }
@@ -208,6 +210,13 @@ impl SubtreeSet {
     pub(super) const fn span(self) -> u32 {
         u32::BITS - self.0.leading_zeros()
     }
+
+    /// Returns the subtrees of this set, lowest index first.
+    pub(super) fn iter(self) -> impl Iterator<Item = Subtree> {
+        (0..u32::BITS)
+            .map(Subtree::new)
+            .filter(move |subtree| self.contains(*subtree))
+    }
 }
 
 impl From<Subtree> for SubtreeSet {
@@ -242,6 +251,7 @@ impl GinVector {
     }
 
     /// Returns the vector number.
+    #[cfg_attr(not(CONFIG_NOVA_CORE_IRQ_SELFTEST), expect(dead_code))]
     pub(super) const fn into_raw(self) -> u32 {
         self.0.get()
     }
