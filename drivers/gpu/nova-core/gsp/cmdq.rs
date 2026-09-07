@@ -4,6 +4,7 @@ mod continuation;
 
 use core::{
     cell::Cell,
+    convert::Infallible,
     mem, //
 };
 
@@ -158,6 +159,42 @@ pub(crate) trait MessageFromGsp: Sized {
         msg: &Self::Message,
         sbuffer: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>,
     ) -> Result<Self, Self::InitError>;
+}
+
+/// Marker returned by a command whose reply contains only transport status.
+#[expect(dead_code)]
+pub(crate) struct StatusOnlyReply;
+
+impl MessageFromGsp for StatusOnlyReply {
+    type InitError = Infallible;
+    type Message = ();
+
+    fn read(
+        _message: &Self::Message,
+        _payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>,
+    ) -> Result<Self, Self::InitError> {
+        Ok(Self)
+    }
+}
+
+/// A command completed by a typed asynchronous event rather than a reply.
+///
+/// Implementations must match the command instance explicitly. The queue checks the event
+/// identifier before calling [`Self::matches_completion`].
+pub(crate) trait CommandWithCompletion: CommandToGsp<Reply = NoReply> {
+    /// Typed completion event.
+    type Completion: MessageFromGsp;
+
+    /// Firmware identifier of the completion event.
+    const COMPLETION: CommandId;
+
+    /// Returns whether `message` completes this command instance.
+    ///
+    /// This runs with the command queue locked and must not call back into the same [`Cmdq`].
+    fn matches_completion(
+        &self,
+        message: &<Self::Completion as MessageFromGsp>::Message,
+    ) -> Result<bool>;
 }
 
 /// Trait implemented by typed unsolicited messages that can be awaited directly.
@@ -635,7 +672,31 @@ impl Cmdq {
         Error: From<M::InitError>,
         Error: From<<M::Reply as MessageFromGsp>::InitError>,
     {
-        self.send_command_with_events(bar, command, ignore_command_event)
+        self.send_command_timeout(bar, command, Self::RECEIVE_TIMEOUT)
+    }
+
+    /// Sends `command` and waits up to `timeout` for its typed reply.
+    ///
+    /// The queue stays locked across the complete transaction. Interleaved events and stale
+    /// responses do not extend the deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors documented by [`Self::send_command`], with `timeout` replacing the
+    /// default receive timeout.
+    pub(crate) fn send_command_timeout<M>(
+        &self,
+        bar: Bar0<'_>,
+        command: M,
+        timeout: Delta,
+    ) -> Result<M::Reply>
+    where
+        M: CommandToGsp,
+        M::Reply: MessageFromGsp,
+        Error: From<M::InitError>,
+        Error: From<<M::Reply as MessageFromGsp>::InitError>,
+    {
+        self.send_command_with_events_timeout(bar, command, timeout, ignore_command_event)
     }
 
     /// Sends a typed command, services intervening command events and returns its typed reply.
@@ -654,6 +715,23 @@ impl Cmdq {
         Error: From<M::InitError>,
         Error: From<<M::Reply as MessageFromGsp>::InitError>,
     {
+        self.send_command_with_events_timeout(bar, command, Self::RECEIVE_TIMEOUT, &mut on_event)
+    }
+
+    /// Implements a typed command transaction with one caller-supplied event handler.
+    fn send_command_with_events_timeout<M>(
+        &self,
+        bar: Bar0<'_>,
+        command: M,
+        timeout: Delta,
+        mut on_event: impl FnMut(CommandId, &[u8], &[u8]) -> Result<QueuePointers>,
+    ) -> Result<M::Reply>
+    where
+        M: CommandToGsp,
+        M::Reply: MessageFromGsp,
+        Error: From<M::InitError>,
+        Error: From<<M::Reply as MessageFromGsp>::InitError>,
+    {
         let mut inner = self.inner.lock();
         match M::INFO.backend() {
             CommandBackend::RmRpc {
@@ -662,8 +740,9 @@ impl Cmdq {
                 is_async,
             } => {
                 let expected_seq = inner.send_rm_rpc(bar, command, request, is_async)?;
+                let deadline = Instant::<Monotonic>::now() + timeout;
 
-                inner.await_rm_rpc(bar, response, Some(expected_seq), &mut on_event)
+                inner.await_rm_rpc(bar, response, Some(expected_seq), deadline, &mut on_event)
             }
             CommandBackend::Gmc {
                 command: command_id,
@@ -671,7 +750,7 @@ impl Cmdq {
             } => {
                 let expected_sequence =
                     inner.send_gmc_command(bar, &command, command_id, max_response_size)?;
-                let deadline = Instant::<Monotonic>::now() + Self::RECEIVE_TIMEOUT;
+                let deadline = Instant::<Monotonic>::now() + timeout;
 
                 inner.await_gmc_reply::<M::Reply>(
                     bar,
@@ -682,6 +761,48 @@ impl Cmdq {
                 )
             }
         }
+    }
+
+    /// Sends `command` and waits atomically for its typed completion event.
+    ///
+    /// The queue is locked from the send through the matching event. Responses are consumed,
+    /// interleaved RM RPC messages are dispatched, and every unmatched command event is passed to
+    /// `on_unmatched_event` with both parts of its possibly wrapped payload. The handler runs with
+    /// the queue locked and must not call back into this [`Cmdq`] or reset the queue.
+    ///
+    /// # Errors
+    ///
+    /// - `EINVAL` if the command transport does not support command completion events.
+    /// - `ETIMEDOUT` if the completion does not arrive before the single transaction deadline.
+    /// - `EIO` if the completion is malformed or reports failure, or queue framing is invalid.
+    ///
+    /// Errors from the command, completion, matcher, and unmatched-event handler are propagated.
+    #[expect(dead_code)]
+    pub(crate) fn send_command_and_wait_completion<M>(
+        &self,
+        bar: Bar0<'_>,
+        command: M,
+        timeout: Delta,
+        mut on_unmatched_event: impl FnMut(CommandId, &[u8], &[u8]) -> Result,
+    ) -> Result<M::Completion>
+    where
+        M: CommandWithCompletion,
+        Error: From<M::InitError>,
+        Error: From<<M::Completion as MessageFromGsp>::InitError>,
+    {
+        let mut inner = self.inner.lock();
+        let CommandBackend::Gmc {
+            command: command_id,
+            max_response_size,
+        } = M::INFO.backend()
+        else {
+            return Err(EINVAL);
+        };
+
+        inner.send_gmc_command(bar, &command, command_id, max_response_size)?;
+        let deadline = Instant::<Monotonic>::now() + timeout;
+
+        inner.await_gmc_completion(bar, &command, deadline, &mut on_unmatched_event)
     }
 
     /// Sends `command` to the GSP without waiting for a reply.
@@ -737,7 +858,8 @@ impl Cmdq {
     {
         let mut inner = self.inner.lock();
         let mut ignore_gmc_event = ignore_command_event;
-        inner.await_rm_rpc(bar, M::FUNCTION, None, &mut ignore_gmc_event)
+        let deadline = Instant::<Monotonic>::now() + Self::RECEIVE_TIMEOUT;
+        inner.await_rm_rpc(bar, M::FUNCTION, None, deadline, &mut ignore_gmc_event)
     }
 
     /// Drains every message currently pending in the GSP-to-CPU queue.
@@ -1185,7 +1307,7 @@ impl CmdqInner {
         result
     }
 
-    /// Receives a message of type `M`, waiting up to [`Cmdq::RECEIVE_TIMEOUT`] from the call.
+    /// Receives messages until `deadline` and returns the first one matching `M`.
     ///
     /// Any other message that arrives first is dispatched as [`Self::receive_rm_rpc`] describes
     /// and does not extend the deadline. `expected_seq` narrows the RM RPC match.
@@ -1203,13 +1325,13 @@ impl CmdqInner {
         bar: Bar0<'_>,
         expected_function: MsgFunction,
         expected_seq: Option<u32>,
+        deadline: Instant<Monotonic>,
         on_gmc_event: &mut impl FnMut(CommandId, &[u8], &[u8]) -> Result<QueuePointers>,
     ) -> Result<M>
     where
         // This allows all error types, including `Infallible`, to be used for `M::InitError`.
         Error: From<M::InitError>,
     {
-        let deadline = Instant::<Monotonic>::now() + Cmdq::RECEIVE_TIMEOUT;
         loop {
             let remaining = deadline - Instant::<Monotonic>::now();
             if remaining.is_negative() {
@@ -1255,7 +1377,7 @@ impl CmdqInner {
                 self.receive_gmc_message(bar, remaining, |header, payload_0, payload_1| {
                     if header.is_response_to(expected_command, expected_sequence) {
                         let reply = header
-                            .response_result()
+                            .status_result()
                             .and_then(|()| decode_message::<M>(&dev, "GMC", payload_0, payload_1));
                         (Some(reply), QueuePointers::Unchanged)
                     } else if header.is_response() {
@@ -1280,6 +1402,76 @@ impl CmdqInner {
 
             if let Some(reply) = reply {
                 return reply;
+            }
+        }
+    }
+
+    /// Waits until an event matches a typed command instance and decodes its completion.
+    ///
+    /// The event identifier and instance matcher are checked before firmware status or the full
+    /// completion payload is decoded. Other events are passed to `on_unmatched_event`, and all
+    /// iterations spend the same absolute deadline.
+    fn await_gmc_completion<M>(
+        &mut self,
+        bar: Bar0<'_>,
+        command: &M,
+        deadline: Instant<Monotonic>,
+        on_unmatched_event: &mut impl FnMut(CommandId, &[u8], &[u8]) -> Result,
+    ) -> Result<M::Completion>
+    where
+        M: CommandWithCompletion,
+        Error: From<<M::Completion as MessageFromGsp>::InitError>,
+    {
+        let dev = self.dev.clone();
+        loop {
+            let remaining = deadline - Instant::<Monotonic>::now();
+            if remaining.is_negative() {
+                return Err(ETIMEDOUT);
+            }
+
+            let completion =
+                self.receive_gmc_message(bar, remaining, |header, payload_0, payload_1| {
+                    let result = if header.is_response() {
+                        None
+                    } else if header.command() != M::COMPLETION {
+                        match on_unmatched_event(header.command(), payload_0, payload_1) {
+                            Ok(()) => None,
+                            Err(error) => Some(Err(error)),
+                        }
+                    } else {
+                        let Some((message, _)) =
+                            <M::Completion as MessageFromGsp>::Message::from_bytes_prefix(
+                                payload_0,
+                            )
+                        else {
+                            dev_warn!(&dev, "GSP completion event is too short\n");
+                            return (Some(Err(EIO)), QueuePointers::Unchanged);
+                        };
+
+                        match command.matches_completion(message) {
+                            Ok(true) => Some(header.status_result().and_then(|()| {
+                                decode_message::<M::Completion>(
+                                    &dev,
+                                    "completion",
+                                    payload_0,
+                                    payload_1,
+                                )
+                            })),
+                            Ok(false) => {
+                                match on_unmatched_event(header.command(), payload_0, payload_1) {
+                                    Ok(()) => None,
+                                    Err(error) => Some(Err(error)),
+                                }
+                            }
+                            Err(error) => Some(Err(error)),
+                        }
+                    };
+
+                    (result, QueuePointers::Unchanged)
+                })?;
+
+            if let Some(completion) = completion {
+                return completion;
             }
         }
     }

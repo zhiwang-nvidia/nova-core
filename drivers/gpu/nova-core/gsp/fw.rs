@@ -811,10 +811,10 @@ impl bindings::GMCAPI_HEADER {
         self.is_response() && self.command() == command && self.sequence == sequence
     }
 
-    /// Converts the status stored in a response header to a kernel result.
-    fn response_result(&self) -> Result {
-        // SAFETY: Callers only use this accessor for a response header, whose active union member
-        // is `response`.
+    /// Converts status from a firmware response or completion event to a kernel result.
+    fn status_result(&self) -> Result {
+        // SAFETY: Callers use this accessor only for messages sent by firmware, for which the
+        // active union member is `response`.
         let status = unsafe { self.__bindgen_anon_1.response.status };
         if status == 0 {
             Ok(())
@@ -976,9 +976,9 @@ impl GspGmcMsgElement {
         self.gmc.is_response_to(command, sequence)
     }
 
-    /// Converts a response element's status to a kernel result.
-    pub(crate) fn response_result(&self) -> Result {
-        self.gmc.response_result()
+    /// Converts a response or completion event's status to a kernel result.
+    pub(crate) fn status_result(&self) -> Result {
+        self.gmc.status_result()
     }
 
     /// Returns the sequence number without the firmware-event marker.
