@@ -378,6 +378,59 @@ impl From<MsgFunction> for u32 {
     }
 }
 
+/// Transport information for a typed command.
+///
+/// The inner transport-specific data stays in the firmware layer. Command implementations use
+/// the constructors below, while the command queue uses [`Self::backend`] to select the wire
+/// encoder and response matcher.
+#[derive(Copy, Clone)]
+pub(crate) struct CommandInfo(CommandBackend);
+
+/// Transport information consumed by the command queue.
+#[derive(Copy, Clone)]
+pub(in crate::gsp) enum CommandBackend {
+    /// An RM RPC request and its expected response.
+    RmRpc {
+        request: MsgFunction,
+        response: MsgFunction,
+        is_async: bool,
+    },
+    /// A GMC command and the largest response payload it may return.
+    Gmc {
+        command: CommandId,
+        max_response_size: u32,
+    },
+}
+
+impl CommandInfo {
+    /// Describes an RM RPC command.
+    pub(crate) const fn rm_rpc(
+        request: MsgFunction,
+        response: MsgFunction,
+        is_async: bool,
+    ) -> Self {
+        Self(CommandBackend::RmRpc {
+            request,
+            response,
+            is_async,
+        })
+    }
+
+    /// Describes a GMC command.
+    #[expect(dead_code)]
+    pub(crate) const fn gmc(command: CommandId, max_response_size: u32) -> Self {
+        Self(CommandBackend::Gmc {
+            command,
+            max_response_size,
+        })
+    }
+
+    /// Returns the transport-specific command information.
+    pub(in crate::gsp) const fn backend(self) -> CommandBackend {
+        self.0
+    }
+}
+
 /// Struct containing the arguments required to pass a memory buffer to the GSP
 /// for use during initialisation.
 ///
@@ -643,6 +696,11 @@ impl QueueElementHeader {
         num::u32_as_usize(self.element_len)
     }
 
+    /// Returns the length of the whole element.
+    pub(crate) fn length(&self) -> usize {
+        self.element_len()
+    }
+
     /// Returns the length of the payload that follows a message header of `header_len` bytes.
     fn payload_len(&self, header_len: usize) -> usize {
         num::u32_as_usize(self.message_len).saturating_sub(header_len)
@@ -658,6 +716,16 @@ impl QueueElementHeader {
     /// follows this one.
     fn is_nvdm_type(&self, nvdm_type: NvdmType) -> bool {
         self.nvdm.validate(nvdm_type)
+    }
+
+    /// Returns `true` if an RM RPC header follows this transport header.
+    pub(crate) fn is_rm_rpc(&self) -> bool {
+        self.is_nvdm_type(NvdmType::RmRpc)
+    }
+
+    /// Returns `true` if a GMC header follows this transport header.
+    pub(crate) fn is_gmc(&self) -> bool {
+        self.is_nvdm_type(NvdmType::GmcApi)
     }
 
     /// Validates the framing before any length field in the element is trusted.
@@ -685,6 +753,11 @@ impl QueueElementHeader {
 
         Ok(())
     }
+
+    /// Validates framing shared by every supported queue element.
+    pub(crate) fn validate_common_framing(&self) -> Result {
+        self.validate(size_of::<Self>())
+    }
 }
 
 // SAFETY: All fields are integer types or transparent wrappers over one, with no padding.
@@ -693,26 +766,11 @@ unsafe impl AsBytes for QueueElementHeader {}
 // SAFETY: All fields are integer types for which all bit patterns are valid.
 unsafe impl FromBytes for QueueElementHeader {}
 
-/// GMC API message header, matching Open RM's `GMCAPI_HEADER`.
-#[repr(C)]
-#[derive(Zeroable)]
-pub(crate) struct GmcApiHeader {
-    /// GMC command identifier, with flags in the high byte.
-    pub(crate) command: u32,
-    /// Payload size in bytes, for a request and a response alike.
-    pub(crate) size: u32,
-    /// Sequence number matching a response to its request.
-    pub(crate) sequence: u64,
-    /// Request: maximum response size. Response: `NV_STATUS` code.
-    pub(crate) max_resp_or_status: u32,
-    reserved: [u32; 5],
-}
-
-/// Command identifier bits of [`GmcApiHeader::command`], matching Open RM's
+/// Command identifier bits of `GMCAPI_HEADER::command`, matching Open RM's
 /// `GMCAPI_HEADER_COMMAND_ID_MASK`. The remaining byte carries flags.
 const GMCAPI_COMMAND_ID_MASK: u32 = 0x00ff_ffff;
 
-/// Response flag in the high byte of [`GmcApiHeader::command`].
+/// Response flag in the high byte of `GMCAPI_HEADER::command`.
 const GMCAPI_COMMAND_FLAGS_RESPONSE: u32 = 0x0100_0000;
 
 /// GSP-RM numbers the events it raises from this value up, so they cannot collide with the
@@ -721,66 +779,112 @@ const GMC_EVENT_SEQUENCE_BASE: u64 = 1 << 63;
 
 /// GMC command that hands GSP-RM its system information and registry keys and returns the static
 /// GPU configuration.
-pub(crate) const GMCAPI_CMD_GSP_INIT: u32 = bindings::GMCAPI_COMMANDS_GMCAPI_CMD_GSP_INIT;
+pub(crate) const GMCAPI_CMD_GSP_INIT: u32 = CommandId::GSP_INIT.raw();
 
 /// GMC command asking the driver to run the generic falcon bootloader against a descriptor the
 /// GSP supplies.
-pub(crate) const GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER: u32 =
-    bindings::GMCAPI_COMMANDS_GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER;
+pub(crate) const GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER: u32 = CommandId::EXEC_GENERIC_BOOTLOADER.raw();
 
 /// GMC command asking the driver to run a high-security binary the GSP has placed in the
 /// framebuffer.
-pub(crate) const GMCAPI_CMD_EXEC_HS_BINARY: u32 =
-    bindings::GMCAPI_COMMANDS_GMCAPI_CMD_EXEC_HS_BINARY;
+pub(crate) const GMCAPI_CMD_EXEC_HS_BINARY: u32 = CommandId::EXEC_HS_BINARY.raw();
 
 /// GMC command telling GSP-RM to suspend. GSP-RM sends no response, and reports the completed
 /// suspend through the GSP falcon's `MAILBOX0` instead.
-pub(crate) const GMCAPI_CMD_GSP_SUSPEND: u32 = bindings::GMCAPI_COMMANDS_GMCAPI_CMD_GSP_SUSPEND;
+pub(crate) const GMCAPI_CMD_GSP_SUSPEND: u32 = CommandId::GSP_SUSPEND.raw();
 
-static_assert!(size_of::<GmcApiHeader>() == size_of::<bindings::GMCAPI_HEADER>());
-static_assert!(
-    core::mem::offset_of!(GmcApiHeader, command)
-        == core::mem::offset_of!(bindings::GMCAPI_HEADER, command)
-);
-static_assert!(
-    core::mem::offset_of!(GmcApiHeader, size)
-        == core::mem::offset_of!(bindings::GMCAPI_HEADER, size)
-);
-static_assert!(
-    core::mem::offset_of!(GmcApiHeader, sequence)
-        == core::mem::offset_of!(bindings::GMCAPI_HEADER, sequence)
-);
-static_assert!(
-    core::mem::offset_of!(GmcApiHeader, max_resp_or_status)
-        == core::mem::offset_of!(bindings::GMCAPI_HEADER, __bindgen_anon_1)
-);
-static_assert!(
-    core::mem::offset_of!(GmcApiHeader, reserved)
-        == core::mem::offset_of!(bindings::GMCAPI_HEADER, reserved)
-);
+impl bindings::GMCAPI_HEADER {
+    /// Creates a request header.
+    fn init(
+        command: CommandId,
+        sequence: u64,
+        payload_size: usize,
+        max_response_size: u32,
+    ) -> impl Init<Self, Error> {
+        try_init!(Self {
+            command: command.raw(),
+            size: payload_size.try_into().map_err(|_| EOVERFLOW)?,
+            sequence,
+            __bindgen_anon_1: bindings::GMCAPI_HEADER__bindgen_ty_1 {
+                request: bindings::GMCAPI_HEADER__bindgen_ty_1__bindgen_ty_1 { max_response_size },
+            },
+            reserved: [0; 5],
+            data: Default::default(),
+        })
+    }
 
-impl GmcApiHeader {
-    /// Returns the command identifier, without the flag byte.
-    pub(crate) fn command_id(&self) -> u32 {
-        self.command & GMCAPI_COMMAND_ID_MASK
+    /// Returns the command identifier without header flags.
+    fn command(&self) -> CommandId {
+        CommandId::new(self.command)
     }
 
     /// Returns `true` if this header is a reply to a driver request.
-    pub(crate) fn is_response(&self) -> bool {
+    fn is_response(&self) -> bool {
         self.command & GMCAPI_COMMAND_FLAGS_RESPONSE != 0
     }
 
-    /// Returns [`Self::sequence`] with the GSP-initiated-event bit cleared.
-    pub(crate) fn sequence_number(&self) -> u64 {
+    /// Returns `true` if this header responds to `command` and `sequence`.
+    fn is_response_to(&self, command: CommandId, sequence: u64) -> bool {
+        self.is_response() && self.command() == command && self.sequence == sequence
+    }
+
+    /// Converts the status stored in a response header to a kernel result.
+    fn response_result(&self) -> Result {
+        // SAFETY: Callers only use this accessor for a response header, whose active union member
+        // is `response`.
+        let status = unsafe { self.__bindgen_anon_1.response.status };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(EIO)
+        }
+    }
+
+    /// Returns the union word for the raw compatibility path.
+    fn raw_union_word(&self) -> u32 {
+        // SAFETY: Both generated union members are an offset-zero `u32`, for which every bit
+        // pattern is valid.
+        unsafe { self.__bindgen_anon_1.response.status }
+    }
+
+    /// Returns the sequence number with the GSP-initiated-event bit cleared.
+    fn sequence_number(&self) -> u64 {
         self.sequence & !GMC_EVENT_SEQUENCE_BASE
     }
 }
 
-// SAFETY: All fields are integer types with no uninitialized padding bytes.
-unsafe impl AsBytes for GmcApiHeader {}
+/// A firmware command identifier.
+///
+/// It formats as its name and numeric value, for example
+/// `GSP_INIT (0x10001)`. An id this driver does not name writes `UNKNOWN` and the number.
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub(crate) struct CommandId(u32);
 
-// SAFETY: All fields are integer types for which all bit patterns are valid.
-unsafe impl FromBytes for GmcApiHeader {}
+impl CommandId {
+    /// The command that passes system information and registry keys to GSP-RM.
+    pub(crate) const GSP_INIT: Self = Self(bindings::GMCAPI_COMMANDS_GMCAPI_CMD_GSP_INIT);
+
+    /// The event that asks the driver to run the generic falcon bootloader.
+    pub(crate) const EXEC_GENERIC_BOOTLOADER: Self =
+        Self(bindings::GMCAPI_COMMANDS_GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER);
+
+    /// The event that asks the driver to run a high-security binary.
+    pub(crate) const EXEC_HS_BINARY: Self =
+        Self(bindings::GMCAPI_COMMANDS_GMCAPI_CMD_EXEC_HS_BINARY);
+
+    /// The command that tells GSP-RM to suspend.
+    pub(crate) const GSP_SUSPEND: Self = Self(bindings::GMCAPI_COMMANDS_GMCAPI_CMD_GSP_SUSPEND);
+
+    /// Creates an identifier from its wire value, discarding header flags.
+    pub(in crate::gsp) const fn new(raw: u32) -> Self {
+        Self(raw & GMCAPI_COMMAND_ID_MASK)
+    }
+
+    /// Returns the identifier's wire value without header flags.
+    pub(crate) const fn raw(self) -> u32 {
+        self.0
+    }
+}
 
 /// A GMC command id that formats as its name and its numeric value, for example
 /// `GSP_INIT (0x10001)`. An id this driver does not name writes `UNKNOWN` and the number.
@@ -848,16 +952,23 @@ impl fmt::Display for GmcCommand {
     }
 }
 
+impl fmt::Display for CommandId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        GmcCommand(self.0).fmt(f)
+    }
+}
+
 /// A queue element carrying a GMC API message.
 #[repr(C)]
 pub(crate) struct GspGmcMsgElement {
     transport: QueueElementHeader,
-    pub(crate) gmc: GmcApiHeader,
+    gmc: bindings::GMCAPI_HEADER,
 }
 
 // Neither header pads against the other, which `AsBytes` below requires.
 static_assert!(
-    size_of::<GspGmcMsgElement>() == size_of::<QueueElementHeader>() + size_of::<GmcApiHeader>()
+    size_of::<GspGmcMsgElement>()
+        == size_of::<QueueElementHeader>() + size_of::<bindings::GMCAPI_HEADER>()
 );
 
 impl GspGmcMsgElement {
@@ -866,7 +977,7 @@ impl GspGmcMsgElement {
     /// `max_response_size` bounds the response GSP-RM may send, and is zero for a command that
     /// expects none.
     pub(crate) fn init(
-        command_id: u32,
+        command: CommandId,
         sequence: u64,
         payload_size: usize,
         max_response_size: u32,
@@ -874,23 +985,58 @@ impl GspGmcMsgElement {
         try_init!(GspGmcMsgElement {
             transport: QueueElementHeader::new(
                 NvdmType::GmcApi,
-                size_of::<GmcApiHeader>()
+                size_of::<bindings::GMCAPI_HEADER>()
                     .checked_add(payload_size)
                     .ok_or(EOVERFLOW)?,
             )?,
-            gmc: GmcApiHeader {
-                command: command_id,
-                size: payload_size.try_into().map_err(|_| EOVERFLOW)?,
+            gmc <- bindings::GMCAPI_HEADER::init(
+                command,
                 sequence,
-                max_resp_or_status: max_response_size,
-                reserved: [0; 5],
-            },
+                payload_size,
+                max_response_size,
+            ),
         })
     }
 
-    /// Returns the length of the payload that follows the [`GmcApiHeader`].
+    /// Returns the firmware command identifier without header flags.
+    pub(crate) fn command(&self) -> CommandId {
+        self.gmc.command()
+    }
+
+    /// Returns `true` if this element is a response.
+    pub(crate) fn is_response(&self) -> bool {
+        self.gmc.is_response()
+    }
+
+    /// Returns `true` if this element responds to `command` and `sequence`.
+    pub(crate) fn is_response_to(&self, command: CommandId, sequence: u64) -> bool {
+        self.gmc.is_response_to(command, sequence)
+    }
+
+    /// Converts a response element's status to a kernel result.
+    pub(crate) fn response_result(&self) -> Result {
+        self.gmc.response_result()
+    }
+
+    /// Returns the union word for the raw compatibility path.
+    pub(in crate::gsp) fn raw_union_word(&self) -> u32 {
+        self.gmc.raw_union_word()
+    }
+
+    /// Returns the sequence number without the firmware-event marker.
+    pub(crate) fn sequence_number(&self) -> u64 {
+        self.gmc.sequence_number()
+    }
+
+    /// Returns the payload size declared by the firmware header.
+    pub(crate) fn payload_size(&self) -> u32 {
+        self.gmc.size
+    }
+
+    /// Returns the length of the payload that follows the firmware header.
     pub(crate) fn payload_length(&self) -> usize {
-        self.transport.payload_len(size_of::<GmcApiHeader>())
+        self.transport
+            .payload_len(size_of::<bindings::GMCAPI_HEADER>())
     }
 
     /// Returns the total length of the element, transport and GMC headers included.
@@ -916,10 +1062,12 @@ impl GspGmcMsgElement {
     }
 }
 
-// SAFETY: All fields are integer types with no uninitialized padding bytes.
+// SAFETY: The transport header has no implicit padding. The generated command header's union
+// variants contain one `u32`, and its flexible-array member has size zero.
 unsafe impl AsBytes for GspGmcMsgElement {}
 
-// SAFETY: All fields are integer types for which all bit patterns are valid.
+// SAFETY: Every bit pattern is valid for the transport header and the integer fields, union and
+// flexible-array member of the generated command header.
 unsafe impl FromBytes for GspGmcMsgElement {}
 
 /// Optional bindata (ucodes) firmware info for GSP startup arguments.

@@ -13,6 +13,7 @@ use super::{
 
 use crate::{
     gsp::fw::{
+        CommandInfo,
         GspMsgElement,
         MsgFunction,
         GSP_MSG_QUEUE_ELEMENT_SIZE_MAX, //
@@ -64,7 +65,11 @@ impl<'a> ContinuationRecord<'a> {
 }
 
 impl<'a> CommandToGsp for ContinuationRecord<'a> {
-    const FUNCTION: MsgFunction = MsgFunction::ContinuationRecord;
+    const INFO: CommandInfo = CommandInfo::rm_rpc(
+        MsgFunction::ContinuationRecord,
+        MsgFunction::ContinuationRecord,
+        false,
+    );
     type Command = ();
     type Reply = NoReply;
     type InitError = Infallible;
@@ -146,8 +151,7 @@ impl<C: CommandToGsp> SplitCommand<C> {
 }
 
 impl<C: CommandToGsp> CommandToGsp for SplitCommand<C> {
-    const FUNCTION: MsgFunction = C::FUNCTION;
-    const IS_ASYNC: bool = C::IS_ASYNC;
+    const INFO: CommandInfo = C::INFO;
     type Command = C::Command;
     type Reply = C::Reply;
     type InitError = C::InitError;
@@ -210,7 +214,7 @@ mod tests {
     }
 
     impl CommandToGsp for TestPayload {
-        const FUNCTION: MsgFunction = MsgFunction::Nop;
+        const INFO: CommandInfo = CommandInfo::rm_rpc(MsgFunction::Nop, MsgFunction::Nop, false);
         type Command = TestHeader;
         type Reply = NoReply;
         type InitError = Infallible;
