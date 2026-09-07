@@ -693,7 +693,6 @@ impl Cmdq {
     ///   written to by its [`CommandToGsp::init_variable_payload`] method.
     ///
     /// Error codes returned by the command initializers are propagated as-is.
-    #[expect(dead_code)]
     pub(crate) fn send_command_no_wait<M>(&self, bar: Bar0<'_>, command: M) -> Result
     where
         M: CommandToGsp<Reply = NoReply>,
@@ -713,46 +712,6 @@ impl Cmdq {
                 .send_gmc_command(bar, &command, command_id, max_response_size)
                 .map(|_| ()),
         }
-    }
-
-    /// Receives one GMC element from the GSP and passes its command id, the `max_resp_or_status`
-    /// field, and the raw payload slices to `handler`.
-    ///
-    /// This method may sleep while waiting. The [`CmdqInner`] mutex stays locked across the wait
-    /// and across the `handler` call, so `handler` must not call back into this [`Cmdq`].
-    ///
-    /// See [`CmdqInner::receive_gmc_and_dispatch`] for return values, queue state, and errors.
-    pub(crate) fn receive_gmc_and_dispatch<R>(
-        &self,
-        bar: Bar0<'_>,
-        timeout: Delta,
-        handler: impl FnOnce(u32, u32, &[u8], &[u8]) -> (Option<R>, QueuePointers),
-    ) -> Result<Option<R>> {
-        self.inner
-            .lock()
-            .receive_gmc_and_dispatch(bar, timeout, handler)
-    }
-
-    /// Sends a GMC API command to the GSP without waiting for its response.
-    ///
-    /// A caller that expects a response reads it with [`Self::receive_gmc_and_dispatch`], which
-    /// lets it handle the events GSP-RM interleaves before the response arrives.
-    ///
-    /// # Errors
-    ///
-    /// - `EMSGSIZE` if the command exceeds the maximum queue element size.
-    /// - `ETIMEDOUT` if space does not become available within the timeout.
-    /// - `EIO` if the command header is not properly aligned.
-    pub(crate) fn send_gmc_no_wait(
-        &self,
-        bar: Bar0<'_>,
-        command_id: u32,
-        payload: &[u8],
-        max_response_size: u32,
-    ) -> Result {
-        self.inner
-            .lock()
-            .send_gmc(bar, command_id, payload, max_response_size)
     }
 
     /// Waits for an unsolicited GSP event of type `M`, consuming any other event that arrives
@@ -1008,63 +967,6 @@ impl CmdqInner {
         self.poisoned.set(true);
 
         EIO
-    }
-
-    /// Sends a GMC API command to the GSP.
-    ///
-    /// `payload` is the data that follows the GMC header on the wire, and
-    /// `max_response_size` bounds the response GSP-RM may send.
-    ///
-    /// The command carries the next RPC sequence number, which the GSP echoes in its response.
-    /// The number is consumed whether or not the send succeeds.
-    ///
-    /// # Errors
-    ///
-    /// - `EMSGSIZE` if the command exceeds the maximum queue element size.
-    /// - `ETIMEDOUT` if space does not become available within the timeout.
-    /// - `EIO` if the command header is not properly aligned.
-    fn send_gmc(
-        &mut self,
-        bar: Bar0<'_>,
-        command_id: u32,
-        payload: &[u8],
-        max_response_size: u32,
-    ) -> Result {
-        let rpc_seq = self.rpc_seq;
-        self.rpc_seq = self.rpc_seq.wrapping_add(1);
-
-        let dst = self.gsp_mem.allocate_command::<GspGmcMsgElement>(
-            bar,
-            payload.len(),
-            Self::ALLOCATE_TIMEOUT,
-        )?;
-
-        let msg_element = GspGmcMsgElement::init(
-            CommandId::new(command_id),
-            u64::from(rpc_seq),
-            payload.len(),
-            max_response_size,
-        );
-        // SAFETY: `dst.header` points to a valid, writable `GspGmcMsgElement` region.
-        unsafe {
-            msg_element.__init(core::ptr::from_mut(dst.header))?;
-        }
-
-        SBufferIter::new_writer([&mut dst.contents.0[..], &mut dst.contents.1[..]])
-            .write_all(payload)?;
-
-        dev_dbg!(
-            &self.dev,
-            "GSP GMC: send: seq# {}, command={}, length=0x{:x}\n",
-            rpc_seq,
-            CommandId::new(command_id),
-            dst.header.length(),
-        );
-
-        let elem_count = dst.header.element_count();
-        DmaGspMem::advance_cpu_write_ptr_v2(bar, elem_count);
-
-        Ok(())
     }
 
     /// Waits for and classifies one message from the shared receive queue.
@@ -1547,23 +1449,5 @@ impl CmdqInner {
             }
             IncomingMessage::Gmc(message) => self.dispatch_gmc_message(bar, message, handler),
         }
-    }
-
-    /// Receives one raw firmware element for the boot path that has not been converted to typed
-    /// commands yet.
-    fn receive_gmc_and_dispatch<R>(
-        &mut self,
-        bar: Bar0<'_>,
-        timeout: Delta,
-        handler: impl FnOnce(u32, u32, &[u8], &[u8]) -> (Option<R>, QueuePointers),
-    ) -> Result<Option<R>> {
-        self.receive_gmc_message(bar, timeout, |header, payload_0, payload_1| {
-            handler(
-                header.command().raw(),
-                header.raw_union_word(),
-                payload_0,
-                payload_1,
-            )
-        })
     }
 }

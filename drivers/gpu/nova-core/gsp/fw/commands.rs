@@ -9,7 +9,10 @@ use kernel::{
     device,
     pci,
     prelude::*,
-    transmute::AsBytes, //
+    transmute::{
+        AsBytes,
+        FromBytes, //
+    }, //
 };
 
 use crate::gpu::Chipset;
@@ -62,20 +65,23 @@ pub(crate) struct GspSuspend {
 }
 
 impl GspSuspend {
-    /// Creates a `GSP_SUSPEND` payload for the given [`PowerStateLevel`].
-    pub(crate) fn new(level: PowerStateLevel) -> Self {
-        Self {
+    /// Initializes a `GSP_SUSPEND` payload for the given [`PowerStateLevel`].
+    pub(crate) fn init(level: PowerStateLevel) -> impl Init<Self> {
+        init!(Self {
             flags: if level.is_power_transition() {
                 GMCAPI_GSP_SUSPEND_FLAGS_PM_TRANSITION
             } else {
                 0
             },
-        }
+        })
     }
 }
 
 // SAFETY: The single field is an integer type, and the struct has no padding.
 unsafe impl AsBytes for GspSuspend {}
+
+// SAFETY: The single integer field accepts every bit pattern.
+unsafe impl FromBytes for GspSuspend {}
 
 /// The host CPU architecture.
 #[derive(Clone, Copy)]

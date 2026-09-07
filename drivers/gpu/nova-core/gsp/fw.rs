@@ -417,7 +417,6 @@ impl CommandInfo {
     }
 
     /// Describes a GMC command.
-    #[expect(dead_code)]
     pub(crate) const fn gmc(command: CommandId, max_response_size: u32) -> Self {
         Self(CommandBackend::Gmc {
             command,
@@ -777,22 +776,6 @@ const GMCAPI_COMMAND_FLAGS_RESPONSE: u32 = 0x0100_0000;
 /// driver's request sequences, which start at zero.
 const GMC_EVENT_SEQUENCE_BASE: u64 = 1 << 63;
 
-/// GMC command that hands GSP-RM its system information and registry keys and returns the static
-/// GPU configuration.
-pub(crate) const GMCAPI_CMD_GSP_INIT: u32 = CommandId::GSP_INIT.raw();
-
-/// GMC command asking the driver to run the generic falcon bootloader against a descriptor the
-/// GSP supplies.
-pub(crate) const GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER: u32 = CommandId::EXEC_GENERIC_BOOTLOADER.raw();
-
-/// GMC command asking the driver to run a high-security binary the GSP has placed in the
-/// framebuffer.
-pub(crate) const GMCAPI_CMD_EXEC_HS_BINARY: u32 = CommandId::EXEC_HS_BINARY.raw();
-
-/// GMC command telling GSP-RM to suspend. GSP-RM sends no response, and reports the completed
-/// suspend through the GSP falcon's `MAILBOX0` instead.
-pub(crate) const GMCAPI_CMD_GSP_SUSPEND: u32 = CommandId::GSP_SUSPEND.raw();
-
 impl bindings::GMCAPI_HEADER {
     /// Creates a request header.
     fn init(
@@ -840,13 +823,6 @@ impl bindings::GMCAPI_HEADER {
         }
     }
 
-    /// Returns the union word for the raw compatibility path.
-    fn raw_union_word(&self) -> u32 {
-        // SAFETY: Both generated union members are an offset-zero `u32`, for which every bit
-        // pattern is valid.
-        unsafe { self.__bindgen_anon_1.response.status }
-    }
-
     /// Returns the sequence number with the GSP-initiated-event bit cleared.
     fn sequence_number(&self) -> u64 {
         self.sequence & !GMC_EVENT_SEQUENCE_BASE
@@ -876,22 +852,15 @@ impl CommandId {
     pub(crate) const GSP_SUSPEND: Self = Self(bindings::GMCAPI_COMMANDS_GMCAPI_CMD_GSP_SUSPEND);
 
     /// Creates an identifier from its wire value, discarding header flags.
-    pub(in crate::gsp) const fn new(raw: u32) -> Self {
+    const fn new(raw: u32) -> Self {
         Self(raw & GMCAPI_COMMAND_ID_MASK)
     }
 
     /// Returns the identifier's wire value without header flags.
-    pub(crate) const fn raw(self) -> u32 {
+    const fn raw(self) -> u32 {
         self.0
     }
-}
 
-/// A GMC command id that formats as its name and its numeric value, for example
-/// `GSP_INIT (0x10001)`. An id this driver does not name writes `UNKNOWN` and the number.
-#[derive(Copy, Clone)]
-pub(crate) struct GmcCommand(pub(crate) u32);
-
-impl GmcCommand {
     fn name(self) -> &'static str {
         match self.0 {
             bindings::GMCAPI_COMMANDS_GMCAPI_CMD_GSP_INIT => "GSP_INIT",
@@ -946,15 +915,9 @@ impl GmcCommand {
     }
 }
 
-impl fmt::Display for GmcCommand {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (0x{:x})", self.name(), self.0)
-    }
-}
-
 impl fmt::Display for CommandId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        GmcCommand(self.0).fmt(f)
+        write!(f, "{} (0x{:x})", self.name(), self.0)
     }
 }
 
@@ -1016,11 +979,6 @@ impl GspGmcMsgElement {
     /// Converts a response element's status to a kernel result.
     pub(crate) fn response_result(&self) -> Result {
         self.gmc.response_result()
-    }
-
-    /// Returns the union word for the raw compatibility path.
-    pub(in crate::gsp) fn raw_union_word(&self) -> u32 {
-        self.gmc.raw_union_word()
     }
 
     /// Returns the sequence number without the firmware-event marker.

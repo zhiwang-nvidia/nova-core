@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 use core::{
+    convert::Infallible,
     ffi::FromBytesUntilNulError,
     ops::Range,
     str::Utf8Error, //
@@ -20,6 +21,9 @@ use crate::{
     gsp::{
         cmdq::{
             Cmdq,
+            CommandToGsp,
+            MessageFromGsp,
+            NoReply,
             QueuePointers, //
         },
         fw::{
@@ -30,8 +34,8 @@ use crate::{
                 GspInitResponseSchema,
                 RegKey, //
             },
-            GMCAPI_CMD_GSP_INIT,
-            GMCAPI_CMD_GSP_SUSPEND, //
+            CommandId,
+            CommandInfo, //
         },
         nvkv::{
             Decoder,
@@ -73,6 +77,18 @@ impl GetGspStaticInfoReply {
             .map_err(GpuNameError::NoNullTerminator)?
             .to_str()
             .map_err(GpuNameError::InvalidUtf8)
+    }
+}
+
+impl MessageFromGsp for GetGspStaticInfoReply {
+    type Message = ();
+    type InitError = Error;
+
+    fn read(
+        _message: &Self::Message,
+        payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>,
+    ) -> Result<Self, Self::InitError> {
+        decode_gsp_info(&nvkv_words(payload)?)
     }
 }
 
@@ -119,12 +135,39 @@ pub(crate) fn build_gsp_init_payload(
 /// makes in `kgspSendInitRpcs`.
 const GSP_INIT_MAX_RESPONSE_SIZE: u32 = 48 * 1024;
 
+/// Typed `GSP_INIT` command.
+struct GspInit<'a> {
+    payload: &'a [u64],
+}
+
+impl<'a> CommandToGsp for GspInit<'a> {
+    const INFO: CommandInfo = CommandInfo::gmc(CommandId::GSP_INIT, GSP_INIT_MAX_RESPONSE_SIZE);
+    type Command = ();
+    type Reply = GetGspStaticInfoReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        <()>::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        size_of_val(self.payload)
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        // Qualified because `zerocopy::IntoBytes` also gives `[T]` an `as_bytes`.
+        dst.write_all(AsBytes::as_bytes(self.payload))
+    }
+}
+
 /// Sends `GSP_INIT` and returns the static configuration its reply carries.
 ///
 /// GSP-RM raises load-and-execute events between the request and the reply, and it cannot finish
-/// starting until the driver has serviced them, so each one goes to `on_boot_event`, which
-/// reports back the [`QueuePointers`] state its handler left. GSP-RM sends the reply once it is
-/// up, so the reply doubles as the signal that boot is complete.
+/// starting until the driver has serviced them, so each one goes to `on_boot_event`. GSP-RM
+/// sends the reply once it is up, so the reply doubles as the signal that boot is complete.
 ///
 /// `payload` is the blob from [`build_gsp_init_payload`].
 ///
@@ -132,69 +175,19 @@ const GSP_INIT_MAX_RESPONSE_SIZE: u32 = 48 * 1024;
 ///
 /// - `EIO` if GSP-RM reports a failure status, or if the reply is not a whole number of NVKV
 ///   words.
-/// - `ETIMEDOUT` if neither the reply nor another element arrives within
-///   [`Cmdq::RECEIVE_TIMEOUT`].
+/// - `ETIMEDOUT` if the reply does not arrive within [`Cmdq::RECEIVE_TIMEOUT`], however many
+///   events arrive while waiting.
 ///
 /// Errors from `on_boot_event` and from decoding the reply are propagated as-is.
 pub(crate) fn gsp_init(
     cmdq: &Cmdq,
     bar: Bar0<'_>,
     payload: &[u64],
-    mut on_boot_event: impl FnMut(u32, &[u8]) -> Result<QueuePointers>,
+    mut on_boot_event: impl FnMut(CommandId, &[u8]) -> Result,
 ) -> Result<GetGspStaticInfoReply> {
-    // Qualified because `zerocopy::IntoBytes` also gives `[T]` an `as_bytes`.
-    let payload = AsBytes::as_bytes(payload);
-
-    cmdq.send_gmc_no_wait(
-        bar,
-        GMCAPI_CMD_GSP_INIT,
-        payload,
-        GSP_INIT_MAX_RESPONSE_SIZE,
-    )?;
-
-    loop {
-        let reply = cmdq.receive_gmc_and_dispatch(
-            bar,
-            Cmdq::RECEIVE_TIMEOUT,
-            |command_id, max_resp_or_status, payload_0, payload_1| {
-                if command_id == GMCAPI_CMD_GSP_INIT {
-                    (
-                        Some(decode_gsp_init_reply(
-                            max_resp_or_status,
-                            payload_0,
-                            payload_1,
-                        )),
-                        QueuePointers::Unchanged,
-                    )
-                } else {
-                    // A boot event. Keep waiting for the reply unless handling it failed.
-                    match on_boot_event(command_id, payload_0) {
-                        Ok(queue_pointers) => (None, queue_pointers),
-                        // A handler can fail after it has already reset the GSP, so the pointer
-                        // registers cannot be assumed intact on this path.
-                        Err(e) => (Some(Err(e)), QueuePointers::Reset),
-                    }
-                }
-            },
-        )?;
-
-        if let Some(reply) = reply {
-            return reply;
-        }
-    }
-}
-
-/// Decodes the `GSP_INIT` reply, whose `max_resp_or_status` field carries an `NV_STATUS`.
-fn decode_gsp_init_reply(
-    status: u32,
-    payload_0: &[u8],
-    payload_1: &[u8],
-) -> Result<GetGspStaticInfoReply> {
-    if status != 0 {
-        return Err(EIO);
-    }
-
-    decode_gsp_info(&nvkv_words(payload_0, payload_1)?)
+    cmdq.send_command_with_events(bar, GspInit { payload }, |command, payload_0, _| {
+        on_boot_event(command, payload_0).map(|()| QueuePointers::Reset)
+    })
 }
 
 /// Joins the two halves of a wrapped payload into the `u64` words an NVKV stream is made of.
@@ -203,8 +196,8 @@ fn decode_gsp_init_reply(
 ///
 /// - `EIO` if the combined length is not a whole number of words.
 /// - `ENOMEM` if the buffer cannot be allocated.
-fn nvkv_words(payload_0: &[u8], payload_1: &[u8]) -> Result<KVVec<u64>> {
-    let bytes = SBufferIter::new_reader([payload_0, payload_1]).flush_into_kvec(GFP_KERNEL)?;
+fn nvkv_words(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<KVVec<u64>> {
+    let bytes = payload.flush_into_kvec(GFP_KERNEL)?;
     let words = bytes.chunks_exact(size_of::<u64>());
     if !words.remainder().is_empty() {
         return Err(EIO);
@@ -250,6 +243,20 @@ fn decode_gsp_info(words: &[u64]) -> Result<GetGspStaticInfoReply> {
 
 pub(crate) use fw::commands::PowerStateLevel;
 
+/// Typed `GSP_SUSPEND` command.
+struct GspSuspend(PowerStateLevel);
+
+impl CommandToGsp for GspSuspend {
+    const INFO: CommandInfo = CommandInfo::gmc(CommandId::GSP_SUSPEND, 0);
+    type Command = fw::commands::GspSuspend;
+    type Reply = NoReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        Self::Command::init(self.0)
+    }
+}
+
 /// Tells GSP-RM to suspend.
 ///
 /// GSP-RM sends no response to this command and reports the completed suspend through the GSP
@@ -262,7 +269,5 @@ pub(crate) use fw::commands::PowerStateLevel;
 /// - `ETIMEDOUT` if space does not become available within the timeout.
 /// - `EIO` if the command header is not properly aligned.
 pub(crate) fn gsp_suspend(cmdq: &Cmdq, bar: Bar0<'_>, level: PowerStateLevel) -> Result {
-    let params = fw::commands::GspSuspend::new(level);
-
-    cmdq.send_gmc_no_wait(bar, GMCAPI_CMD_GSP_SUSPEND, AsBytes::as_bytes(&params), 0)
+    cmdq.send_command_no_wait(bar, GspSuspend(level))
 }

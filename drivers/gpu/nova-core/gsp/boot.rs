@@ -38,18 +38,9 @@ use crate::{
         radix3::Radix3, //
     },
     gsp::{
-        cmdq::{
-            Cmdq,
-            QueuePointers, //
-        },
+        cmdq::Cmdq,
         commands,
-        fw::{
-            BindataArgs,
-            GmcCommand,
-            GspArgumentsPadded,
-            GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER,
-            GMCAPI_CMD_EXEC_HS_BINARY, //
-        }, //
+        fw::{BindataArgs, CommandId, GspArgumentsPadded}, //
     },
     num,
     regs, //
@@ -219,17 +210,17 @@ impl super::Gsp {
     ///
     /// A GPU raises one of the two commands and not the other, per
     /// [`super::hal::uses_generic_bootloader`], so only one of the handlers ever runs on it.
-    /// Both restart GSP-RM, so a successful dispatch returns [`QueuePointers::Reset`].
+    /// Both restart GSP-RM before returning successfully.
     ///
     /// # Errors
     ///
-    /// - `EINVAL` if `command_id` is not a load-and-execute command, or if the GSP asks for the
+    /// - `EINVAL` if `command` is not a load-and-execute command, or if the GSP asks for the
     ///   generic bootloader on a chipset that boots without one.
     ///
     /// Errors from the handlers are propagated as-is.
     #[expect(clippy::too_many_arguments)]
     fn dispatch_gmc_boot_event(
-        command_id: u32,
+        command: CommandId,
         payload: &[u8],
         bootloader: Option<&GenericBootloader>,
         gsp_falcon: &Falcon<'_, Gsp>,
@@ -237,9 +228,9 @@ impl super::Gsp {
         dev: &device::Device,
         bootloader_app_version: u32,
         libos_dma_handle: u64,
-    ) -> Result<QueuePointers> {
-        match command_id {
-            GMCAPI_CMD_EXEC_GENERIC_BOOTLOADER => {
+    ) -> Result {
+        match command {
+            CommandId::EXEC_GENERIC_BOOTLOADER => {
                 let Some(bootloader) = bootloader else {
                     dev_err!(
                         dev,
@@ -258,7 +249,7 @@ impl super::Gsp {
                     libos_dma_handle,
                 )
             }
-            GMCAPI_CMD_EXEC_HS_BINARY => Self::handle_load_exec_hs_binary(
+            CommandId::EXEC_HS_BINARY => Self::handle_load_exec_hs_binary(
                 payload,
                 gsp_falcon,
                 sec2_falcon,
@@ -267,11 +258,7 @@ impl super::Gsp {
                 libos_dma_handle,
             ),
             _ => {
-                dev_err!(
-                    dev,
-                    "Unexpected GMC boot event: command={}\n",
-                    GmcCommand(command_id)
-                );
+                dev_err!(dev, "Unexpected GMC boot event: command={}\n", command);
                 Err(EINVAL)
             }
         }
@@ -283,7 +270,7 @@ impl super::Gsp {
     /// DMEM offset 0, places the generic bootloader in IMEM, points the requested FBIF aperture
     /// at the image, and runs the bootloader, which does the copy and jumps to the image.
     ///
-    /// Ends in [`Self::core_resume`], so a successful return is [`QueuePointers::Reset`].
+    /// Ends in [`Self::core_resume`].
     ///
     /// # Errors
     ///
@@ -299,7 +286,7 @@ impl super::Gsp {
         dev: &device::Device,
         bootloader_app_version: u32,
         libos_dma_handle: u64,
-    ) -> Result<QueuePointers> {
+    ) -> Result {
         let params = LoadExecGenericBootloaderParams::from_bytes_prefix(payload)
             .ok_or(EINVAL)?
             .0;
@@ -363,9 +350,7 @@ impl super::Gsp {
             dev,
             bootloader_app_version,
             libos_dma_handle,
-        )?;
-
-        Ok(QueuePointers::Reset)
+        )
     }
 
     /// Handle a `GMCAPI_CMD_EXEC_HS_BINARY` event.
@@ -374,7 +359,7 @@ impl super::Gsp {
     /// memory, program the BROM registers that make the falcon verify its PKC signature, run it,
     /// and resume GSP-RM.
     ///
-    /// Ends in [`Self::core_resume`], so a successful return is [`QueuePointers::Reset`].
+    /// Ends in [`Self::core_resume`].
     ///
     /// # Errors
     ///
@@ -388,7 +373,7 @@ impl super::Gsp {
         dev: &device::Device,
         bootloader_app_version: u32,
         libos_dma_handle: u64,
-    ) -> Result<QueuePointers> {
+    ) -> Result {
         let params = HsBinaryParams::from_bytes_prefix(payload).ok_or(EINVAL)?.0;
 
         gsp_falcon.wait_for_processor_suspend().inspect_err(|_| {
@@ -477,9 +462,7 @@ impl super::Gsp {
             dev,
             bootloader_app_version,
             libos_dma_handle,
-        )?;
-
-        Ok(QueuePointers::Reset)
+        )
     }
 
     /// Shut down the GSP and wait until it is offline.
