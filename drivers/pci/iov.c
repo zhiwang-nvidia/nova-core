@@ -11,6 +11,7 @@
 #include <linux/bits.h>
 #include <linux/log2.h>
 #include <linux/pci.h>
+#include <linux/rust_ffi.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/export.h>
@@ -79,6 +80,56 @@ void *pci_iov_get_pf_drvdata(struct pci_dev *dev, struct pci_driver *pf_driver)
 	return pci_get_drvdata(pf_dev);
 }
 EXPORT_SYMBOL_GPL(pci_iov_get_pf_drvdata);
+
+#ifdef CONFIG_RUST
+/**
+ * pci_iov_borrow_rust_pf_data - Validate and borrow Rust data from a VF's PF
+ * @dev: VF PCI device
+ * @token: Required FFI ABI token
+ * @abi_major: Required ABI major version
+ * @min_abi_minor: Minimum required ABI minor version
+ * @required_ops_size: Minimum required size of the operations table
+ *
+ * This may be called from a VF driver's probe() callback or from a context in
+ * which the VF driver is known to remain attached. If probe() succeeds, the
+ * returned pointer, its operations table, and its context are borrowed until
+ * the VF driver is fully unbound, including the return of its remove() callback
+ * when present. If probe() fails, the caller must discard the borrow before
+ * returning. The caller must drain all work that can use the FFI before the
+ * borrow ends.
+ *
+ * The PF must publish an immutable descriptor before enabling VFs, use
+ * managed_sriov, and retain the descriptor until its remove() callback.
+ * Managed SR-IOV installs a device link from every VF to its PF before the VF
+ * can probe. The driver core therefore waits for an in-progress VF probe and
+ * unbinds a bound VF before invoking the PF driver's remove() callback.
+ *
+ * Return: A borrowed FFI descriptor, or an ERR_PTR() value on failure.
+ */
+const struct rust_ffi *
+pci_iov_borrow_rust_pf_data(struct pci_dev *dev,
+			    const struct rust_ffi_token *token,
+			    u16 abi_major, u16 min_abi_minor,
+			    size_t required_ops_size)
+{
+	const struct rust_ffi *ffi;
+	struct pci_dev *pf_dev;
+	struct pci_driver *pf_driver;
+
+	if (!dev->is_virtfn)
+		return ERR_PTR(-EINVAL);
+
+	pf_dev = pci_physfn(dev);
+	pf_driver = READ_ONCE(pf_dev->driver);
+	if (!pf_driver || !READ_ONCE(pf_driver->managed_sriov))
+		return ERR_PTR(-ENODEV);
+
+	ffi = READ_ONCE(pf_dev->sriov_registration_data_rust);
+	return rust_ffi_borrow(ffi, token, abi_major, min_abi_minor,
+			       required_ops_size);
+}
+EXPORT_SYMBOL_GPL(pci_iov_borrow_rust_pf_data);
+#endif
 
 /*
  * Per SR-IOV spec sec 3.3.10 and 3.3.11, First VF Offset and VF Stride may

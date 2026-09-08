@@ -100,9 +100,22 @@ pub unsafe trait Abi: 'static {
 /// [`struct rust_ffi`](srctree/include/linux/rust_ffi.h). It neither owns nor borrows the
 /// operations table or Rust context at the type level. The transport that publishes it must ensure
 /// that `ops` remains valid and that `context` remains alive at a stable address until all
-/// consumers have stopped using the descriptor.
+/// consumers have stopped using the descriptor. The default value exposes no operations.
 #[repr(transparent)]
 pub struct Descriptor(bindings::rust_ffi);
+
+impl Default for Descriptor {
+    fn default() -> Self {
+        Self(bindings::rust_ffi {
+            token: bindings::rust_ffi_token { high: 0, low: 0 },
+            abi_major: 0,
+            abi_minor: 0,
+            ops_size: 0,
+            ops: core::ptr::null(),
+            context: core::ptr::null(),
+        })
+    }
+}
 
 impl Descriptor {
     /// Creates a descriptor for a pinned Rust context.

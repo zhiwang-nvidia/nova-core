@@ -339,6 +339,8 @@ struct pcie_link_state;
 struct pci_sriov;
 struct pci_p2pdma;
 struct rcec_ea;
+struct rust_ffi;
+struct rust_ffi_token;
 
 /* struct pci_dev - describes a PCI device
  *
@@ -352,6 +354,10 @@ struct rcec_ea;
  *			Such bridges are allocated additional MMIO and bus
  *			number resources to allow for hierarchy expansion.
  * @is_pciehp:		PCIe Hot-Plug Capable bridge.
+ * @sriov_registration_data_rust: Rust registration data beginning with a
+ *			struct rust_ffi, published by the PF before
+ *			enabling VFs and retained until all VFs are removed.
+ *			The PF driver must use managed_sriov.
  */
 struct pci_dev {
 	struct list_head bus_list;	/* Node in per-bus list */
@@ -550,6 +556,9 @@ struct pci_dev {
 	};
 	u16		ats_cap;	/* ATS Capability offset */
 	u8		ats_stu;	/* ATS Smallest Translation Unit */
+#endif
+#if defined(CONFIG_PCI_IOV) && defined(CONFIG_RUST)
+	void		*sriov_registration_data_rust;
 #endif
 #ifdef CONFIG_PCI_PRI
 	u16		pri_cap;	/* PRI Capability offset */
@@ -2608,6 +2617,22 @@ int pci_iov_virtfn_bus(struct pci_dev *dev, int id);
 int pci_iov_virtfn_devfn(struct pci_dev *dev, int id);
 int pci_iov_vf_id(struct pci_dev *dev);
 void *pci_iov_get_pf_drvdata(struct pci_dev *dev, struct pci_driver *pf_driver);
+#ifdef CONFIG_RUST
+const struct rust_ffi *
+pci_iov_borrow_rust_pf_data(struct pci_dev *dev,
+			    const struct rust_ffi_token *token,
+			    u16 abi_major, u16 min_abi_minor,
+			    size_t required_ops_size);
+#else
+static inline const struct rust_ffi *
+pci_iov_borrow_rust_pf_data(struct pci_dev *dev,
+			    const struct rust_ffi_token *token,
+			    u16 abi_major, u16 min_abi_minor,
+			    size_t required_ops_size)
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
+#endif
 int pci_enable_sriov(struct pci_dev *dev, int nr_virtfn);
 void pci_disable_sriov(struct pci_dev *dev);
 
@@ -2648,6 +2673,15 @@ static inline void *pci_iov_get_pf_drvdata(struct pci_dev *dev,
 					   struct pci_driver *pf_driver)
 {
 	return ERR_PTR(-EINVAL);
+}
+
+static inline const struct rust_ffi *
+pci_iov_borrow_rust_pf_data(struct pci_dev *dev,
+			    const struct rust_ffi_token *token,
+			    u16 abi_major, u16 min_abi_minor,
+			    size_t required_ops_size)
+{
+	return ERR_PTR(-EOPNOTSUPP);
 }
 
 static inline int pci_enable_sriov(struct pci_dev *dev, int nr_virtfn)
