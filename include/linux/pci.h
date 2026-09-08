@@ -352,6 +352,9 @@ struct rcec_ea;
  *			Such bridges are allocated additional MMIO and bus
  *			number resources to allow for hierarchy expansion.
  * @is_pciehp:		PCIe Hot-Plug Capable bridge.
+ * @vf_registration_data_rust: Rust registration data published by the PF
+ *			before enabling VFs and retained until all VFs are
+ *			removed. The PF driver must use managed_sriov.
  */
 struct pci_dev {
 	struct list_head bus_list;	/* Node in per-bus list */
@@ -550,6 +553,9 @@ struct pci_dev {
 	};
 	u16		ats_cap;	/* ATS Capability offset */
 	u8		ats_stu;	/* ATS Smallest Translation Unit */
+#endif
+#if defined(CONFIG_PCI_IOV) && defined(CONFIG_RUST)
+	void		*vf_registration_data_rust;
 #endif
 #ifdef CONFIG_PCI_PRI
 	u16		pri_cap;	/* PRI Capability offset */

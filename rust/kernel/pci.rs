@@ -37,6 +37,8 @@ mod cap;
 mod id;
 mod io;
 mod irq;
+#[cfg(CONFIG_PCI_IOV)]
+pub mod sriov;
 
 pub use self::cap::{
     ExtCapId,
@@ -64,6 +66,8 @@ pub use self::irq::{
     IrqVector,
     IrqVectorRegistration, //
 };
+#[cfg(CONFIG_PCI_IOV)]
+pub use self::sriov::VfRegistration;
 
 /// An adapter for the registration of PCI drivers.
 pub struct Adapter<T: Driver>(T);
@@ -160,13 +164,18 @@ impl<T: Driver> Adapter<T> {
         pdev: *mut bindings::pci_dev,
         nr_virtfn: c_int,
     ) -> c_int {
-        // SAFETY: The PCI bus only ever calls the sriov_configure callback with a valid pointer to
-        // a `struct pci_dev`.
-        //
-        // INVARIANT: `pdev` is valid for the duration of `sriov_configure_callback()`.
+        // SAFETY: The PCI bus invokes this callback with a valid device bound to this driver. The
+        // `CoreInternal` context is valid for the callback's duration.
         let pdev = unsafe { &*pdev.cast::<Device<device::CoreInternal<'_>>>() };
 
-        from_result(|| T::sriov_configure(pdev, nr_virtfn))
+        // SAFETY: `sriov_configure` is called only after a successful probe and before unbind, so
+        // the stored pointer has type `T::Data<'_>` and remains valid throughout this callback.
+        let data = unsafe { pdev.as_ref().drvdata_borrow::<T::Data<'_>>() };
+
+        from_result(|| {
+            let dev = sriov::Device::try_from_pci(pdev)?;
+            T::sriov_configure(dev, data, nr_virtfn)
+        })
     }
 }
 
@@ -355,41 +364,44 @@ pub trait Driver {
         let _ = (dev, this);
     }
 
-    /// Single Root I/O Virtualization (SR-IOV) configure.
+    /// Configures Single Root I/O Virtualization (SR-IOV) for a Physical Function (PF).
     ///
-    /// Called when a user-space application enables or disables the SR-IOV capability for a
-    /// [`Device`] by writing the number of Virtual Functions (VF), `nr_virtfn` or zero to the
-    /// sysfs file `sriov_numvfs` for this device. Implementing this callback is optional.
+    /// The PCI core invokes this callback when userspace writes the number of Virtual Functions
+    /// (VFs), or zero, to the PF's `sriov_numvfs` sysfs file. For managed SR-IOV it is also called
+    /// with zero before [`Self::unbind`] when the PF still has enabled VFs.
     ///
-    /// Further, and unlike for a PCI driver written in C, when a PF device with enabled VFs is
-    /// unbound from its bound [`Driver`], the `sriov_configure()` callback is invoked to disable
-    /// SR-IOV before the `unbind()` callback. This guarantees that when a VF device is bound to a
-    /// driver, the underlying PF device is bound to a driver, too.
+    /// `dev` is a verified SR-IOV PF in the [`device::Core`] callback context. It can be converted
+    /// to the underlying PCI device through [`sriov::Device::as_pci`]. `this` is the private data
+    /// returned by [`Self::probe`]. Both remain valid for the duration of the callback.
     ///
-    /// Upon success, this callback must return the number of VFs that were enabled, or zero if
-    /// SR-IOV was disabled.
-    ///
-    /// See [PCI Express I/O Virtualization].
-    ///
-    /// [PCI Express I/O Virtualization]: https://docs.kernel.org/PCI/pci-iov-howto.html
+    /// Upon success, return the number of VFs that were enabled, or zero if SR-IOV was disabled.
     ///
     /// # Examples
     ///
     /// ```
     /// # use kernel::{device::Core, pci, prelude::*};
-    /// #[cfg(CONFIG_PCI_IOV)]
-    /// fn sriov_configure(dev: &pci::Device<Core<'_>>, nr_virtfn: i32) -> Result<i32> {
+    /// # struct Data;
+    /// fn sriov_configure(
+    ///     dev: &pci::sriov::Device<Core<'_>>,
+    ///     _this: Pin<&Data>,
+    ///     nr_virtfn: i32,
+    /// ) -> Result<i32> {
     ///     if nr_virtfn == 0 {
     ///         dev.disable_sriov();
     ///     } else {
     ///         dev.enable_sriov(nr_virtfn)?;
     ///     }
+    ///
     ///     Ok(nr_virtfn)
     /// }
     /// ```
     #[cfg(CONFIG_PCI_IOV)]
-    fn sriov_configure(dev: &Device<device::Core<'_>>, nr_virtfn: i32) -> Result<i32> {
-        let _ = (dev, nr_virtfn);
+    fn sriov_configure<'bound>(
+        dev: &'bound sriov::Device<device::Core<'_>>,
+        this: Pin<&Self::Data<'bound>>,
+        nr_virtfn: i32,
+    ) -> Result<i32> {
+        let _ = (dev, this, nr_virtfn);
         build_error!(crate::error::VTABLE_DEFAULT_ERROR)
     }
 }
@@ -508,24 +520,23 @@ impl Device {
     }
 
     /// Returns `true` if this device is a Physical Function (PF).
+    #[cfg(CONFIG_PCI_IOV)]
     #[inline]
-    #[expect(dead_code)]
     pub(crate) fn is_physfn(&self) -> bool {
         // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
         unsafe { (*self.as_raw()).is_physfn() != 0 }
     }
 
     /// Returns `true` if this device is a Virtual Function (VF).
+    #[cfg(CONFIG_PCI_IOV)]
     #[inline]
-    #[expect(dead_code)]
-    pub(crate) fn is_virtfn(&self) -> bool {
+    pub fn is_virtfn(&self) -> bool {
         // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
         unsafe { (*self.as_raw()).is_virtfn() != 0 }
     }
 
     /// Returns the number of Virtual Functions (VF) enabled for a Physical Function (PF).
     #[cfg(CONFIG_PCI_IOV)]
-    #[expect(dead_code)]
     pub(crate) fn num_vf(&self) -> i32 {
         // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
         unsafe { bindings::pci_num_vf(self.as_raw()) }
@@ -593,7 +604,7 @@ impl<'a> Device<device::Core<'a>> {
     /// Enable the Single Root I/O Virtualization (SR-IOV) capability for this device,
     /// where `nr_virtfn` is number of Virtual Functions (VF) to enable.
     #[cfg(CONFIG_PCI_IOV)]
-    pub fn enable_sriov(&self, nr_virtfn: i32) -> Result {
+    pub(crate) fn enable_sriov(&self, nr_virtfn: i32) -> Result {
         // SAFETY:
         // `self.as_raw` returns a valid pointer to a `struct pci_dev`.
         //
@@ -609,7 +620,7 @@ impl<'a> Device<device::Core<'a>> {
 
     /// Disable the Single Root I/O Virtualization (SR-IOV) capability for this device.
     #[cfg(CONFIG_PCI_IOV)]
-    pub fn disable_sriov(&self) {
+    pub(crate) fn disable_sriov(&self) {
         // SAFETY:
         // `self.as_raw` returns a valid pointer to a `struct pci_dev`.
         //
