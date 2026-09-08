@@ -18,7 +18,13 @@ use kernel::{
     types::CovariantForLt,
 };
 
-use crate::gpu::Gpu;
+use crate::{
+    gpu,
+    gpu::{
+        Gpu,
+        Spec, //
+    }, //
+};
 
 /// Counter for generating unique auxiliary device IDs.
 static AUXILIARY_ID_COUNTER: Atomic<u32> = Atomic::new(0);
@@ -80,6 +86,11 @@ impl pci::Driver for NovaCoreDriver {
 
             Ok(try_pin_init!(NovaCore {
                 bar: pdev.iomap_region_sized::<BAR0_SIZE>(0, c"nova-core/bar0")?,
+                _: {
+                    let spec = Spec::new(pdev.as_ref(), bar)?;
+
+                    gpu::wait_gfw_boot_completion(pdev.as_ref(), bar, spec.chipset)?;
+                },
                 // TODO: Use `&bar` self-referential pin-init syntax once available.
                 //
                 // SAFETY: `bar` is initialized before this expression is evaluated
