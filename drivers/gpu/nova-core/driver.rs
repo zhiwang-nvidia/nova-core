@@ -35,6 +35,10 @@ static AUXILIARY_ID_COUNTER: Atomic<u32> = Atomic::new(0);
 
 #[pin_data]
 pub(crate) struct NovaCore<'bound> {
+    #[cfg(CONFIG_PCI_IOV)]
+    #[allow(clippy::type_complexity)]
+    #[pin]
+    _vf_registration: pci::VfRegistration<'bound, CovariantForLt!(())>,
     #[pin]
     pub(crate) gpu: Gpu<'bound>,
     bar: pci::Bar<'bound, BAR0_SIZE>,
@@ -107,10 +111,18 @@ impl pci::Driver for NovaCoreDriver {
         pin_init::pin_init_scope(move || {
             dev_dbg!(pdev, "Probe Nova Core GPU driver.\n");
 
-            pdev.enable_device_mem()?;
-            pdev.set_master();
-
             Ok(try_pin_init!(NovaCore {
+                #[cfg(CONFIG_PCI_IOV)]
+                // SAFETY:
+                // - probe has exclusive access before SR-IOV can be enabled;
+                // - the registration is pinned in driver data and is its first field;
+                // - no other registration is created for this device; and
+                // - the PCI adapter uses managed SR-IOV.
+                _vf_registration <- unsafe { pci::VfRegistration::new(pdev, Ok(())) },
+                _: {
+                    pdev.enable_device_mem()?;
+                    pdev.set_master();
+                },
                 bar: pdev.iomap_region_sized::<BAR0_SIZE>(0, c"nova-core/bar0")?,
                 bar1: {
                     let bar1_idx = bar1_resource_index(pdev)?;
@@ -148,5 +160,20 @@ impl pci::Driver for NovaCoreDriver {
                 )?,
             }))
         })
+    }
+
+    #[cfg(CONFIG_PCI_IOV)]
+    fn sriov_configure<'bound>(
+        dev: &'bound pci::sriov::Device<Core<'_>>,
+        _this: Pin<&Self::Data<'bound>>,
+        nr_virtfn: i32,
+    ) -> Result<i32> {
+        if nr_virtfn == 0 {
+            dev.disable_sriov();
+        } else {
+            dev.enable_sriov(nr_virtfn)?;
+        }
+
+        Ok(nr_virtfn)
     }
 }
