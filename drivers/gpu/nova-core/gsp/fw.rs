@@ -693,6 +693,10 @@ pub(crate) struct GmcApiHeader {
 /// `GMCAPI_HEADER_COMMAND_ID_MASK`. The remaining byte carries flags.
 const GMCAPI_COMMAND_ID_MASK: u32 = 0x00ff_ffff;
 
+/// Flag bit of [`GmcApiHeader::command`] that GSP-RM sets on a response, matching Open RM's
+/// `GMCAPI_HEADER_FLAGS_RESPONSE`.
+const GMCAPI_COMMAND_FLAGS_RESPONSE: u32 = 0x0100_0000;
+
 /// GMC command that hands GSP-RM its system information and registry keys and returns the static
 /// GPU configuration.
 pub(crate) const GMCAPI_CMD_GSP_INIT: u32 = bindings::GMCAPI_COMMANDS_GMCAPI_CMD_GSP_INIT;
@@ -738,6 +742,16 @@ impl GmcApiHeader {
     pub(crate) fn command_id(&self) -> u32 {
         self.command & GMCAPI_COMMAND_ID_MASK
     }
+
+    /// Returns `true` if GSP-RM sent this header as a response rather than an event.
+    fn is_response(&self) -> bool {
+        self.command & GMCAPI_COMMAND_FLAGS_RESPONSE != 0
+    }
+
+    /// Returns `true` if this header answers the request that sent `command_id` under `sequence`.
+    fn is_response_to(&self, command_id: u32, sequence: u64) -> bool {
+        self.is_response() && self.command_id() == command_id && self.sequence == sequence
+    }
 }
 
 // SAFETY: All fields are integer types with no uninitialized padding bytes.
@@ -759,6 +773,12 @@ static_assert!(
 );
 
 impl GspGmcMsgElement {
+    /// Returns `true` if this element answers the request that sent `command_id` under
+    /// `sequence`.
+    pub(crate) fn is_response_to(&self, command_id: u32, sequence: u64) -> bool {
+        self.gmc.is_response_to(command_id, sequence)
+    }
+
     /// Creates an element carrying `payload_size` bytes of GMC command payload.
     ///
     /// `max_response_size` bounds the response GSP-RM may send, and is zero for a command that
