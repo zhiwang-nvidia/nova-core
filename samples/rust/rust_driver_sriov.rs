@@ -10,15 +10,24 @@
 //!
 //! and append `intel_iommu=on` to the guest kernel arguments.
 //!
+//! The optional `rust_driver_sriov_c_vf` module demonstrates a C VF calling the same PF data
+//! through an FFI operations table.
+//! Load that module before this one and enable VFs only after both drivers are registered.
+//!
 //! [igb]: https://www.qemu.org/docs/master/system/devices/igb.html
 //! [vIOMMU]: https://wiki.qemu.org/Features/VT-d
 
 use kernel::{
+    bindings,
     device::{
         Bound,
         Core, //
     },
     driver,
+    interop::ffi::{
+        Abi,
+        Token, //
+    },
     new_mutex,
     pci,
     prelude::*,
@@ -45,8 +54,9 @@ struct PfApi<'bound> {
 
 type PfApiForLt = CovariantForLt!(PfApi<'_>);
 
+#[kernel::macros::ffi_vtable(SAMPLE_FFI_OPS: bindings::rust_driver_sriov_ops)]
 impl PfApi<'_> {
-    fn submit(self: Pin<&Self>, vf: &pci::Device<Bound>) -> Result<u64> {
+    fn submit(self: Pin<&Self>, requester_id: u16) -> Result {
         let mut requests = self.requests.lock();
         let request = (*requests).checked_add(1).ok_or(EOVERFLOW)?;
         *requests = request;
@@ -54,13 +64,32 @@ impl PfApi<'_> {
 
         dev_info!(
             self.pdev,
-            "Handle PF request {} from VF devfn {:#x}.\n",
+            "Handle PF request {} from VF requester ID {:#06x}.\n",
             request,
-            vf.dev_id()
+            requester_id
         );
 
-        Ok(request)
+        Ok(())
     }
+}
+
+struct SampleFfiAbi;
+
+// SAFETY:
+// - `RawOps` and the token/version constants come from the C header shared with consumers;
+// - `SAMPLE_FFI_OPS` is initialized as that raw type by `ffi_vtable`; and
+// - every callback recovers the context as the pinned `PfApi` published below.
+unsafe impl Abi for SampleFfiAbi {
+    type Context = PfApiForLt;
+    type RawOps = bindings::rust_driver_sriov_ops;
+
+    const OPS: &'static Self::RawOps = &SAMPLE_FFI_OPS;
+    const TOKEN: Token = Token::new(
+        bindings::RUST_DRIVER_SRIOV_FFI_TOKEN_HIGH,
+        bindings::RUST_DRIVER_SRIOV_FFI_TOKEN_LOW,
+    );
+    const ABI_MAJOR: u16 = bindings::RUST_DRIVER_SRIOV_FFI_ABI_MAJOR as u16;
+    const ABI_MINOR: u16 = bindings::RUST_DRIVER_SRIOV_FFI_ABI_MINOR as u16;
 }
 
 #[pin_data(PinnedDrop)]
@@ -123,7 +152,7 @@ impl pci::SriovPfDriver for SamplePfDriver {
             // - this is the only registration created for the PF; and
             // - VFs are enabled only by `sriov_configure`, after probe has completed.
             let registration = unsafe {
-                pci::SriovPfRegistration::new_with_lt(
+                pci::SriovPfRegistration::new_ffi_with_lt::<SampleFfiAbi, _>(
                     pdev,
                     pin_init!(PfApi {
                         pdev,
@@ -190,8 +219,8 @@ impl pci::SriovVfDriver for SampleVfDriver {
             pdev.enable_device_mem()?;
             pdev.set_master();
 
-            let request = pf_api.submit(pdev)?;
-            dev_info!(pdev, "Submitted request {} through PF data.\n", request);
+            pf_api.submit(pdev.dev_id())?;
+            dev_info!(pdev, "Submitted request through PF data.\n");
 
             Ok(try_pin_init!(VfDriverData { pdev: pdev.into() }))
         })

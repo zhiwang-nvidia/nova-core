@@ -112,6 +112,10 @@
 #include <drm/drm_panic.h>
 #endif
 
+#if IS_ENABLED(CONFIG_SAMPLE_RUST_DRIVER_SRIOV)
+#include "../../samples/rust/rust_driver_sriov.h"
+#endif
+
 /* `bindgen` gets confused at certain things. */
 const size_t RUST_CONST_HELPER_ARCH_SLAB_MINALIGN = ARCH_SLAB_MINALIGN;
 const size_t RUST_CONST_HELPER_ARCH_KMALLOC_MINALIGN = ARCH_KMALLOC_MINALIGN;

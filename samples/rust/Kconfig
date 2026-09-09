@@ -132,10 +132,25 @@ config SAMPLE_RUST_DRIVER_SRIOV
 	tristate "SR-IOV Driver"
 	depends on PCI_IOV
 	help
-	  This option builds the Rust SR-IOV driver sample.
+	  This option builds the Rust SR-IOV PF and VF driver sample.
 
 	  To compile this as a module, choose M here:
 	  the module will be called rust_driver_sriov.
+
+	  If unsure, say N.
+
+config SAMPLE_RUST_DRIVER_SRIOV_C_VF
+	tristate "C VF consumer for the Rust SR-IOV driver"
+	depends on SAMPLE_RUST_DRIVER_SRIOV
+	help
+	  This option builds a C VF driver that accesses PF data through FFI
+	  published by the Rust SR-IOV PF sample.
+
+	  To compile this as a module, choose M here: the module will be called
+	  rust_driver_sriov_c_vf. Load it before rust_driver_sriov and enable
+	  VFs only after both drivers are registered. Ensure that no other VF
+	  driver has claimed the device; driver_override may be used for a
+	  deterministic test.
 
 	  If unsure, say N.
 
