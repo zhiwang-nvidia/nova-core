@@ -24002,6 +24002,7 @@ M:	Alexandre Courbot <acourbot@nvidia.com>
 L:	rust-for-linux@vger.kernel.org
 S:	Maintained
 T:	git https://github.com/Rust-for-Linux/linux.git interop-next
+F:	include/linux/rust_ffi.h
 F:	rust/kernel/interop.rs
 F:	rust/kernel/interop/
 

@@ -16,6 +16,7 @@
 
 mod concat_idents;
 mod export;
+mod ffi_vtable;
 mod fmt;
 mod for_lt;
 mod helpers;
@@ -261,6 +262,90 @@ pub fn vtable(attr: TokenStream, input: TokenStream) -> TokenStream {
 pub fn export(attr: TokenStream, input: TokenStream) -> TokenStream {
     parse_macro_input!(attr as syn::parse::Nothing);
     export::export(parse_macro_input!(input)).into()
+}
+
+/// Generates a C-compatible operations table for a concrete Rust implementation.
+///
+/// The attribute declares the name of the table to generate and its bindgen-generated raw
+/// operations type:
+///
+/// ```
+/// use core::{
+///     ffi::{
+///         c_int,
+///         c_void, //
+///     },
+///     pin::Pin, //
+/// };
+/// use kernel::{
+///     macros::ffi_vtable,
+///     prelude::*, //
+/// };
+///
+/// #[repr(C)]
+/// struct ExampleOps {
+///     submit: Option<unsafe extern "C" fn(*const c_void, u16) -> c_int>,
+///     reset: Option<unsafe extern "C" fn(*const c_void) -> c_int>,
+///     version: Option<unsafe extern "C" fn(*const c_void) -> u16>,
+/// }
+///
+/// struct Provider;
+///
+/// #[ffi_vtable(EXAMPLE_OPS: ExampleOps)]
+/// impl Provider {
+///     fn submit(self: Pin<&Self>, requester_id: u16) -> Result<c_int> {
+///         Ok(c_int::from(requester_id))
+///     }
+///
+///     fn reset(self: Pin<&Self>) -> Result {
+///         Ok(())
+///     }
+///
+///     fn version(self: Pin<&Self>) -> u16 {
+///         1
+///     }
+/// }
+///
+/// # fn main() {
+/// assert!(EXAMPLE_OPS.submit.is_some());
+/// assert!(EXAMPLE_OPS.reset.is_some());
+/// assert!(EXAMPLE_OPS.version.is_some());
+/// # }
+/// ```
+///
+/// Each method becomes a field of the same name in `EXAMPLE_OPS`. The generated C callback has an
+/// additional `*const c_void` context as its first argument. It recovers a `Pin<&Provider>` from
+/// that context and forwards the remaining arguments. Return values are forwarded unchanged,
+/// except that a [`Result<c_int>`] is converted into a `c_int`, preserving a successful value, and
+/// a [`Result<()>`] is converted into zero on success. Both return a negative errno on failure.
+/// Initializing the raw bindgen type with a struct literal checks the field names and callback
+/// signatures at compile time.
+///
+/// The attribute supports concrete inherent impls. Methods must otherwise use ABI-shaped argument
+/// and return types. They must be non-async, non-generic Rust methods with a `self: Pin<&Self>`
+/// receiver. A method may be safe when its arguments require no validity assumptions beyond their
+/// Rust types. It must be `unsafe fn` when calling it relies on additional C-side guarantees, such
+/// as the validity of a raw pointer argument. Every field of the raw operations structure must have
+/// a matching method; optional methods and conditionally compiled impls, methods, or arguments are
+/// not supported yet. Argument and return types must spell out concrete types instead of using
+/// `Self`.
+///
+/// [`Result<c_int>`]: ../kernel/error/type.Result.html
+/// [`Result<()>`]: ../kernel/error/type.Result.html
+///
+/// # Safety contract
+///
+/// The code publishing the generated table must pass a non-null context pointer to a valid pinned
+/// instance of the implementation type and keep that instance alive for every callback. The macro
+/// emits private function-pointer callbacks and does not export symbols for them.
+#[proc_macro_attribute]
+pub fn ffi_vtable(attr: TokenStream, input: TokenStream) -> TokenStream {
+    ffi_vtable::ffi_vtable(
+        parse_macro_input!(attr as ffi_vtable::FfiVtableArgs),
+        parse_macro_input!(input as syn::ItemImpl),
+    )
+    .unwrap_or_else(|error| error.into_compile_error())
+    .into()
 }
 
 /// Like [`core::format_args!`], but automatically wraps arguments in [`kernel::fmt::Adapter`].

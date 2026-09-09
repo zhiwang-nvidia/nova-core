@@ -85,6 +85,7 @@
 #include <linux/random.h>
 #include <linux/refcount.h>
 #include <linux/regulator/consumer.h>
+#include <linux/rust_ffi.h>
 #include <linux/sched.h>
 #include <linux/security.h>
 #include <linux/serdev.h>
