@@ -30,6 +30,11 @@ mod vgpu;
 
 pub(crate) const MODULE_NAME: &core::ffi::CStr = <LocalModule as kernel::ModuleMetadata>::NAME;
 
+#[cfg(CONFIG_PCI_IOV)]
+type NovaCorePciDriver = pci::sriov::PfAdapter<driver::NovaCoreDriver, NovaCoreModule>;
+#[cfg(not(CONFIG_PCI_IOV))]
+type NovaCorePciDriver = driver::NovaCoreDriver;
+
 // TODO: Move this into per-module data once that exists.
 static mut DEBUGFS_ROOT: Option<debugfs::Dir> = None;
 
@@ -49,7 +54,7 @@ struct NovaCoreModule {
     // Fields are dropped in declaration order, so `_driver` is dropped first,
     // then `_debugfs_guard` clears `DEBUGFS_ROOT`.
     #[pin]
-    _driver: Registration<pci::Adapter<driver::NovaCoreDriver>>,
+    _driver: Registration<pci::Adapter<NovaCorePciDriver>>,
     _debugfs_guard: DebugfsRootGuard,
 }
 
