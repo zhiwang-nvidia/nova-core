@@ -519,7 +519,14 @@ impl<'gpu> Gpu<'gpu> {
         let dev = pdev.as_ref();
         let regions = &this.gsp_resources.boot_result.static_info.usable_fb_regions;
 
-        if let Err(err) = crate::mm::selftest::run(dev, this.mm, regions) {
+        if let Err(err) = crate::mm::selftest::run(
+            dev,
+            this.mm,
+            regions,
+            this.bar_user,
+            this.gsp_resources.boot_result.static_info.bar1_pde_base,
+            this.gsp_resources.spec.chipset,
+        ) {
             dev_err!(dev, "self-tests failed: {:?}\n", err);
         }
     }
