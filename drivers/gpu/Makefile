@@ -61,7 +61,7 @@ endif
 RUSTFLAGS_nova-core/nova_core.o += \
 	--emit=metadata=$(objtree)/$(obj)/nova-core/libnova_core.rmeta
 
-# The VFIO bridge also needs this metadata when only modules are requested
+# The VFIO driver also needs this metadata when only modules are requested
 # and nova-core is built-in. drivers/Makefile orders VFIO after this build.
 always-$(CONFIG_NVIDIA_VGPU_VFIO_PCI) += nova-core/nova_core.o
 

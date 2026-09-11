@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 config NVIDIA_VGPU_VFIO_PCI
 	tristate "VFIO support for the NVIDIA vGPU"
-	depends on NOVA_CORE && PCI_IOV
+	depends on NOVA_CORE && PCI_IOV && RUST
 	select VFIO_PCI_CORE
 	help
 	  This option enables VFIO (Virtual Function I/O) support for
