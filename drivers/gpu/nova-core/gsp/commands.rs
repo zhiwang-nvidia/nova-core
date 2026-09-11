@@ -8,14 +8,12 @@ use core::{
 };
 
 use kernel::{
-    device,
     pci,
     prelude::*,
     transmute::AsBytes, //
 };
 
 use crate::{
-    gpu::Chipset,
     gsp::{
         cmdq::{
             Cmdq,
@@ -40,6 +38,7 @@ use crate::{
             Encoder,
             UnknownKeyPolicy, //
         },
+        GspBootContext,
     },
     sbuffer::SBufferIter,
     vgpu::VgpuState, //
@@ -103,37 +102,31 @@ const REGISTRY_ENTRIES: &[(&[u8], u32)] = &[
 /// - `ENODEV` if vGPU mode is enabled but the SR-IOV capability is missing.
 ///
 /// Errors reading the PCI configuration or decoding the VF BAR layout are propagated as-is.
-pub(crate) fn build_gsp_init_payload(
-    pdev: &pci::Device<device::Bound>,
-    chipset: Chipset,
-    vgpu_state: VgpuState,
-) -> Result<EncodedStream> {
+pub(super) fn build_gsp_init_payload(ctx: &GspBootContext<'_, '_>) -> Result<EncodedStream> {
     let mut regkeys = KVVec::new();
     for &(name, value) in REGISTRY_ENTRIES {
         regkeys.push(RegKey::new(name, value), GFP_KERNEL)?;
     }
-    if matches!(vgpu_state, VgpuState::Enabled { .. }) {
+    if matches!(ctx.vgpu.state(), VgpuState::Enabled { .. }) {
         regkeys.push(RegKey::new(b"RMSetSriovMode\0", 1), GFP_KERNEL)?;
     }
 
-    let vf_info = build_vf_info(pdev, vgpu_state)?;
+    let vf_info = build_vf_info(ctx)?;
 
     let mut encoder = Encoder::new();
-    GspInitRequest::new(pdev, chipset, regkeys, vf_info).encode(&mut encoder)?;
+    GspInitRequest::new(ctx.pdev, ctx.chipset, regkeys, vf_info).encode(&mut encoder)?;
 
     Ok(encoder.finish())
 }
 
 /// Builds the optional VF topology portion of the `GSP_INIT` request.
-fn build_vf_info(
-    pdev: &pci::Device<device::Bound>,
-    vgpu_state: VgpuState,
-) -> Result<Option<VfInfo>> {
-    let VgpuState::Enabled { total_vfs } = vgpu_state else {
+fn build_vf_info(ctx: &GspBootContext<'_, '_>) -> Result<Option<VfInfo>> {
+    let VgpuState::Enabled { total_vfs } = ctx.vgpu.state() else {
         return Ok(None);
     };
 
-    let sriov = pdev
+    let sriov = ctx
+        .pdev
         .config_space_extended()?
         .find_ext_capability::<pci::ExtSriovRegs>()?
         .ok_or(ENODEV)?;

@@ -123,7 +123,7 @@ impl<'gsp> super::Gsp<'gsp> {
 
         // GSP-RM discards any RPC that reaches it before GSP_INIT, so the system information
         // and the registry keys go inside that one request.
-        let init_payload = commands::build_gsp_init_payload(pdev, chipset, ctx.vgpu.state())?;
+        let init_payload = commands::build_gsp_init_payload(ctx)?;
         let bootloader = if super::hal::uses_generic_bootloader(chipset) {
             Some(GenericBootloader::new(dev, chipset, gsp_falcon)?)
         } else {
