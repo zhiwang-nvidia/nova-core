@@ -47,14 +47,14 @@ pub(crate) use fw::commands::GspStaticInfo;
 pub(super) fn build_gsp_init_payload(ctx: &GspBootContext<'_, '_>) -> Result<EncodedStream> {
     let mut encoder = Encoder::new();
     let vf_info = build_vf_info(ctx)?;
-    GspInitRequest::new(ctx.pdev, ctx.chipset, ctx.vgpu.state(), vf_info)?.encode(&mut encoder)?;
+    GspInitRequest::new(ctx.pdev, ctx.chipset, *ctx.vgpu_state, vf_info)?.encode(&mut encoder)?;
 
     Ok(encoder.finish())
 }
 
 /// Builds the optional VF topology portion of the `GSP_INIT` request.
 fn build_vf_info(ctx: &GspBootContext<'_, '_>) -> Result<Option<VfInfo>> {
-    let VgpuState::Enabled { total_vfs } = ctx.vgpu.state() else {
+    let VgpuState::Enabled { total_vfs } = *ctx.vgpu_state else {
         return Ok(None);
     };
 
