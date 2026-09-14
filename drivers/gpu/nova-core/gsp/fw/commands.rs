@@ -394,8 +394,7 @@ pub(crate) struct GspStaticInfo {
     gpu_name: ArrayVec<u8, { Self::MAX_GPU_NAME_LEN }>,
     fb_regions: KVVec<FbRegion>,
     bar1_pde_base: u64,
-    #[cfg_attr(not(CONFIG_KUNIT = "y"), expect(dead_code))]
-    vmmu_segment_size: u64,
+    pub(crate) vmmu_segment_size: u64,
     fifo_engine_count: FifoEngineCount,
     fifo_engine_gmc_ids: [u32; MAX_FIFO_ENGINES],
     fifo_engine_flags: [u32; MAX_FIFO_ENGINES],
@@ -464,7 +463,6 @@ impl GspStaticInfo {
     }
 
     /// Returns the host-driven engines in their firmware FIFO order.
-    #[expect(dead_code)]
     pub(crate) fn fifo_engine_list(&self) -> FifoEngineList {
         // INVARIANT: The list starts empty and appends at most one ID per supported input slot.
         let mut fifo_engine_list = FifoEngineList {

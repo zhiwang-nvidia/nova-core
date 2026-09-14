@@ -34,7 +34,10 @@ use crate::{
     vgpu::VgpuState, //
 };
 
-pub(crate) use fw::commands::GspStaticInfo;
+pub(crate) use fw::commands::{
+    FifoEngineList,
+    GspStaticInfo, //
+};
 
 /// Builds the NVKV-encoded payload of a `GSP_INIT` request for `pdev`.
 ///
