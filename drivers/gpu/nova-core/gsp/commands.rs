@@ -22,6 +22,7 @@ use crate::{
             GMCAPI_CMD_GSP_SUSPEND, //
         },
         nvkv::{
+            nvkv_words,
             Decoder,
             Encodable,
             EncodedStream,
@@ -30,7 +31,6 @@ use crate::{
         },
         GspBootContext, //
     },
-    sbuffer::SBufferIter,
     vgpu::VgpuState, //
 };
 
@@ -132,20 +132,7 @@ pub(crate) fn gsp_init(
 ///   or omits a required key, or the FIFO engine count exceeds the supported table capacity.
 /// - `ENOMEM` if the words or the decoded regions cannot be allocated.
 fn decode_gsp_init_reply(payload_0: &[u8], payload_1: &[u8]) -> Result<GspStaticInfo> {
-    const WORD_SIZE: usize = size_of::<u64>();
-
-    let len = payload_0.len() + payload_1.len();
-    if len % WORD_SIZE != 0 {
-        return Err(EINVAL);
-    }
-
-    let mut words = KVVec::with_capacity(len / WORD_SIZE, GFP_KERNEL)?;
-    let mut bytes = SBufferIter::new_reader([payload_0, payload_1]);
-    for _ in 0..len / WORD_SIZE {
-        let mut word = [0u8; WORD_SIZE];
-        bytes.read_exact(&mut word)?;
-        words.push(u64::from_le_bytes(word), GFP_KERNEL)?;
-    }
+    let words = nvkv_words(payload_0, payload_1)?;
 
     let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
     let mut schema = GspInitResponseSchema::default();
