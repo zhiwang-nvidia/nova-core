@@ -8,7 +8,9 @@
 
 use kernel::{
     device,
-    prelude::*, //
+    prelude::*,
+    time::Delta,
+    transmute::AsBytes, //
 };
 
 use crate::gsp::{
@@ -25,6 +27,7 @@ use super::{
         commands::{
             VgpuPropertiesSchema, //
         },
+        GMCAPI_CMD_BOOTLOAD_GSP_VGPU_PLUGIN_TASK,
         GMCAPI_CMD_QUERY_ASSIGNED_VF_VGPU_TYPE,
         GMCAPI_CMD_QUERY_VGPU_PROPERTIES, //
     }, //
@@ -88,4 +91,20 @@ pub(super) fn query_vgpu_properties(
     } else {
         Ok(properties)
     }
+}
+
+/// Send BOOTLOAD and check its firmware status.
+pub(super) fn send_bootload(
+    dev: &device::Device<device::Bound>,
+    cmdq: &Cmdq<'_>,
+    payload: &[u64],
+) -> Result {
+    let command_id = GMCAPI_CMD_BOOTLOAD_GSP_VGPU_PLUGIN_TASK;
+    let response = cmdq.send_gmc_and_receive_timeout(
+        command_id,
+        AsBytes::as_bytes(payload),
+        0,
+        Delta::from_secs(10),
+    )?;
+    check_status(dev, command_id, response.status)
 }
