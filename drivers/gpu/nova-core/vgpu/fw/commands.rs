@@ -21,10 +21,10 @@ use crate::{
         Encodable,
         EncodedStream,
         Encoder,
-        Index, //
+        Index,
         Key,
         KeyId,
-        Required,
+        Required, //
     },
     mm::vram::VramRegion, //
 };
@@ -420,3 +420,51 @@ pub(crate) fn encode_plugin_set_bme(enable: bool) -> Result<EncodedStream> {
     request.encode(&mut encoder)?;
     Ok(encoder.finish())
 }
+
+#[repr(C)]
+#[derive(IntoBytes, zerocopy_derive::Immutable)]
+pub(crate) struct AllocCeutilsRequest {
+    pub(crate) gfid: u32,
+    pub(crate) fixed_chid: u32,
+    pub(crate) force_ceid: u32,
+    pub(crate) swizz_id: u32,
+}
+
+static_assert!(size_of::<AllocCeutilsRequest>() == 16);
+
+#[repr(C)]
+#[derive(FromBytes)]
+pub(crate) struct AllocCeutilsResponse {
+    pub(crate) semaphore_address: u64,
+    pub(crate) semaphore_aperture: u32,
+    _reserved: u32,
+}
+
+static_assert!(size_of::<AllocCeutilsResponse>() == 16);
+
+#[repr(C)]
+#[derive(IntoBytes, zerocopy_derive::Immutable)]
+pub(crate) struct FreeCeutilsRequest {
+    pub(crate) gfid: u32,
+}
+
+static_assert!(size_of::<FreeCeutilsRequest>() == 4);
+
+#[repr(C)]
+#[derive(IntoBytes, zerocopy_derive::Immutable)]
+pub(crate) struct ScrubGuestFbRequest {
+    pub(crate) gfid: u32,
+    pub(crate) reserved: u32,
+    pub(crate) fb_offset: u64,
+    pub(crate) fb_size: u64,
+}
+
+static_assert!(size_of::<ScrubGuestFbRequest>() == 24);
+
+#[repr(C)]
+#[derive(FromBytes)]
+pub(crate) struct ScrubGuestFbResponse {
+    pub(crate) work_id: u64,
+}
+
+static_assert!(size_of::<ScrubGuestFbResponse>() == 8);
