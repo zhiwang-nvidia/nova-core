@@ -802,6 +802,13 @@ impl GmcApiHeader {
         self.sequence & !GMC_EVENT_SEQUENCE_BASE
     }
 
+    /// Returns the raw `max_resp_or_status` word carried by a GMC header.
+    ///
+    /// Its meaning for an event is defined by that event's command.
+    pub(crate) fn raw_status_word(&self) -> u32 {
+        self.max_resp_or_status
+    }
+
     /// Returns the `NV_STATUS` that a response carries.
     ///
     /// The value is meaningful only when [`Self::is_response`] is `true`. In a request, the same
