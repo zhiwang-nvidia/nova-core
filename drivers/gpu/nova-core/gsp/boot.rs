@@ -401,7 +401,7 @@ impl<'gsp> super::Gsp<'gsp> {
 
         dev_dbg!(pdev, "RISC-V active? {}\n", gsp_falcon.is_riscv_active(),);
 
-        let init_payload = commands::build_gsp_init_payload(pdev, chipset, ctx.vgpu.state())?;
+        let init_payload = commands::build_gsp_init_payload(ctx)?;
         let load_exec = LoadExecContext {
             bootloader: generic_bootloader.as_ref(),
             gsp_falcon,

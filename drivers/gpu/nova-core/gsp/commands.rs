@@ -2,14 +2,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 use kernel::{
-    device,
     pci,
     prelude::*,
     transmute::AsBytes, //
 };
 
 use crate::{
-    gpu::Chipset,
     gsp::{
         cmdq::Cmdq,
         fw::{
@@ -30,6 +28,7 @@ use crate::{
             Encoder,
             UnknownKeyPolicy, //
         },
+        GspBootContext, //
     },
     sbuffer::SBufferIter,
     vgpu::VgpuState, //
@@ -42,28 +41,25 @@ pub(crate) use fw::commands::GspStaticInfo;
 /// # Errors
 ///
 /// - `ENOMEM` if the request or the encoder buffer cannot be allocated.
-pub(crate) fn build_gsp_init_payload(
-    pdev: &pci::Device<device::Bound>,
-    chipset: Chipset,
-    vgpu_state: VgpuState,
-) -> Result<EncodedStream> {
+/// - `ENODEV` if vGPU mode is enabled but the SR-IOV capability is missing.
+///
+/// Errors reading the PCI configuration or decoding the VF BAR layout are propagated as-is.
+pub(super) fn build_gsp_init_payload(ctx: &GspBootContext<'_, '_>) -> Result<EncodedStream> {
     let mut encoder = Encoder::new();
-    let vf_info = build_vf_info(pdev, vgpu_state)?;
-    GspInitRequest::new(pdev, chipset, vgpu_state, vf_info)?.encode(&mut encoder)?;
+    let vf_info = build_vf_info(ctx)?;
+    GspInitRequest::new(ctx.pdev, ctx.chipset, ctx.vgpu.state(), vf_info)?.encode(&mut encoder)?;
 
     Ok(encoder.finish())
 }
 
 /// Builds the optional VF topology portion of the `GSP_INIT` request.
-fn build_vf_info(
-    pdev: &pci::Device<device::Bound>,
-    vgpu_state: VgpuState,
-) -> Result<Option<VfInfo>> {
-    let VgpuState::Enabled { total_vfs } = vgpu_state else {
+fn build_vf_info(ctx: &GspBootContext<'_, '_>) -> Result<Option<VfInfo>> {
+    let VgpuState::Enabled { total_vfs } = ctx.vgpu.state() else {
         return Ok(None);
     };
 
-    let sriov = pdev
+    let sriov = ctx
+        .pdev
         .config_space_extended()?
         .find_ext_capability::<pci::ExtSriovRegs>()?
         .ok_or(ENODEV)?;
