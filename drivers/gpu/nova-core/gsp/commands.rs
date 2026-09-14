@@ -126,7 +126,7 @@ pub(crate) fn gsp_init(
 /// # Errors
 ///
 /// - `EINVAL` if the payload is not a whole number of NVKV words, or if the stream is malformed
-///   or omits a required key.
+///   or omits a required key, or the FIFO engine count exceeds the supported table capacity.
 /// - `ENOMEM` if the words or the decoded regions cannot be allocated.
 fn decode_gsp_init_reply(payload_0: &[u8], payload_1: &[u8]) -> Result<GspStaticInfo> {
     const WORD_SIZE: usize = size_of::<u64>();
