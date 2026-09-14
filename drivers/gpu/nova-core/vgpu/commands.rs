@@ -207,7 +207,6 @@ pub(super) fn set_plugin_bme(
 }
 
 /// Whether a failed allocation may still have transferred CHID ownership to firmware.
-#[expect(dead_code)]
 pub(super) enum CeUtilsAllocError {
     /// A matching firmware response explicitly rejected the allocation.
     NotOwned(Error),
@@ -216,7 +215,6 @@ pub(super) enum CeUtilsAllocError {
 }
 
 /// Allocate a CeUtils channel and validate its semaphore description.
-#[expect(dead_code)]
 pub(super) fn alloc_ceutils(
     dev: &device::Device<device::Bound>,
     cmdq: &Cmdq<'_>,
@@ -265,7 +263,6 @@ pub(super) fn alloc_ceutils(
 }
 
 /// Release a CeUtils allocation, including one whose allocation reply was lost.
-#[expect(dead_code)]
 pub(super) fn free_ceutils(
     dev: &device::Device<device::Bound>,
     cmdq: &Cmdq<'_>,
@@ -282,7 +279,6 @@ pub(super) fn free_ceutils(
 }
 
 /// Submit an asynchronous guest FB scrub and return its work identifier.
-#[expect(dead_code)]
 pub(super) fn submit_ceutils_scrub(
     dev: &device::Device<device::Bound>,
     cmdq: &Cmdq<'_>,
