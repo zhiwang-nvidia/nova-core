@@ -814,7 +814,7 @@ impl GmcApiHeader {
     /// sequence number `sequence`.
     pub(crate) fn is_response_to(&self, command_id: u32, sequence: u32) -> bool {
         self.is_response()
-            && self.command_id() == command_id
+            && self.command_id() == (command_id & GMCAPI_COMMAND_ID_MASK)
             && self.sequence == u64::from(sequence)
     }
 }
@@ -911,8 +911,8 @@ impl GspGmcMsgElement {
     /// Creates the queue element header and the GMC API header of a request that carries
     /// `payload_size` bytes of payload under the RPC sequence number `sequence`.
     ///
-    /// `max_response_size` is the largest response that the sender accepts, and zero for a request
-    /// that GSP-RM does not answer.
+    /// `max_response_size` is the response payload capacity in bytes. Zero permits a status-only
+    /// response; whether GSP-RM sends a response at all is determined by the command's protocol.
     ///
     /// # Errors
     ///
