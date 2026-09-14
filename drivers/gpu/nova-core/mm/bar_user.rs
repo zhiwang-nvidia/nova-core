@@ -197,7 +197,6 @@ pub(crate) struct BarMapping<'map, 'gpu> {
     unmap_error: Option<Error>,
 }
 
-#[expect(dead_code)]
 impl<'map, 'gpu> BarMapping<'map, 'gpu> {
     /// Maps the containing pages while restricting CPU access to the requested byte range.
     pub(crate) fn new(
@@ -241,6 +240,10 @@ impl<'map, 'gpu> BarMapping<'map, 'gpu> {
             region_size,
             unmap_error: None,
         })
+    }
+
+    pub(crate) fn bar1(&self) -> &'gpu Bar1<'gpu> {
+        self.access.bar_user.bar1
     }
 
     pub(crate) fn region(&self) -> &VramRegion {
