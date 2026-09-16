@@ -21137,6 +21137,7 @@ L:	linux-pci@vger.kernel.org
 S:	Maintained
 C:	irc://irc.oftc.net/linux-pci
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/pci/pci.git
+F:	Documentation/rust/pci-sriov-pf-data.rst
 F:	rust/helpers/pci.c
 F:	rust/kernel/pci.rs
 F:	rust/kernel/pci/
