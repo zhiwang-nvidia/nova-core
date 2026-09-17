@@ -8,10 +8,7 @@
 use kernel::{
     device,
     prelude::*,
-    ptr::{
-        Alignable,
-        Alignment, //
-    },
+    ptr::Alignable,
     transmute::{
         AsBytes,
         FromBytes, //
@@ -33,10 +30,7 @@ use crate::{
         Tlv,
     },
     gpu::Chipset,
-    num::{
-        self,
-        FromSafeCast, //
-    },
+    num::FromSafeCast, //
 };
 
 /// Descriptor that the generic bootloader reads from DMEM offset 0 to find the image to load.
@@ -83,7 +77,7 @@ pub(crate) struct BootloaderDmemDescV2 {
 
 impl BootloaderDmemDescV2 {
     /// Size of the descriptor in bytes, as the load-and-execute event states it.
-    pub(crate) const SIZE: u32 = num::usize_into_u32::<{ size_of::<BootloaderDmemDescV2>() }>();
+    pub(crate) const SIZE: u32 = cv!(size_of::<BootloaderDmemDescV2>());
 }
 
 // SAFETY: This struct doesn't contain uninitialized bytes and doesn't have interior mutability.
@@ -128,7 +122,7 @@ impl GenericBootloader {
             let code_size = usize::from_safe_cast(tlv.get_u32(b"CDSZ")?);
             let code = blob.get(..code_size).ok_or(EINVAL)?;
             let aligned_code_size = code_size
-                .align_up(Alignment::new::<{ falcon::MEM_BLOCK_ALIGNMENT }>())
+                .align_up(cv!(falcon::MEM_BLOCK_ALIGNMENT))
                 .ok_or(EINVAL)?;
 
             let mut ucode = KVec::with_capacity(aligned_code_size, GFP_KERNEL)?;

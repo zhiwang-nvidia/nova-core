@@ -28,7 +28,6 @@ use crate::{
         hal::FbHal,
         regs, //
     },
-    num::usize_into_u32,
 };
 
 struct Gb100;
@@ -100,7 +99,7 @@ const PMU_RESERVED_SIZE: usize = const_align_up(
 .unwrap();
 
 pub(super) const fn pmu_reserved_size_gb100() -> u32 {
-    usize_into_u32::<PMU_RESERVED_SIZE>()
+    cv!(PMU_RESERVED_SIZE)
 }
 
 impl FbHal for Gb100 {
