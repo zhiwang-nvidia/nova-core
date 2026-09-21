@@ -40,6 +40,14 @@ impl Device {
         // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
         unsafe { (*self.as_raw()).is_virtfn() != 0 }
     }
+
+    /// Return the zero-based VF index within its PF, or an error for a non-VF device.
+    pub fn vf_id(&self) -> Result<u32> {
+        // SAFETY: `self.as_raw()` points to a live PCI device; the helper checks VF membership.
+        let id = unsafe { bindings::pci_iov_vf_id(self.as_raw()) };
+        to_result(id)?;
+        Ok(id as u32)
+    }
 }
 
 impl Device<device::Core<'_>> {
