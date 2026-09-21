@@ -20,4 +20,8 @@ EXPORT_SYMBOL_RUST_GPL(nova_core_vf_api_is_available);
 EXPORT_SYMBOL_RUST_GPL(nova_core_vf_api_open_instance);
 EXPORT_SYMBOL_RUST_GPL(nova_core_vf_api_close_instance);
 EXPORT_SYMBOL_RUST_GPL(nova_core_vf_api_reset_instance);
+EXPORT_SYMBOL_RUST_GPL(nova_core_vf_api_handle);
+EXPORT_SYMBOL_RUST_GPL(nova_core_vf_api_handle_open);
+EXPORT_SYMBOL_RUST_GPL(nova_core_vf_api_handle_reset);
+EXPORT_SYMBOL_RUST_GPL(nova_core_vgpu_instance_drop);
 #endif

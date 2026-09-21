@@ -9,7 +9,8 @@ use kernel::{
     device,
     pci,
     prelude::*,
-    sync::Mutex, //
+    sync::Mutex,
+    types::ForLt, //
 };
 
 use crate::{
@@ -97,6 +98,20 @@ impl<'gpu> NovaCoreVfApi<'gpu> {
 }
 
 impl NovaCoreVfApi<'_> {
+    /// Obtains the enabled PF services for a bound VF.
+    #[unsafe(export_name = "nova_core_vf_api_handle")]
+    pub fn handle(vf: &pci::Device<device::Bound>) -> Result<NovaCoreVfApiHandle<'_>> {
+        let handle = NovaCoreVfApiHandle { vf };
+        handle.with(|api| {
+            if api.is_available() {
+                Ok(())
+            } else {
+                Err(ENODEV)
+            }
+        })?;
+        Ok(handle)
+    }
+
     /// Creates and boots an instance for a one-based VF ID.
     ///
     /// `sbdf` encodes the VF address as `(segment << 16) | (bus << 8) | devfn`.
@@ -189,5 +204,67 @@ impl NovaCoreVfApi<'_> {
 
         dev_dbg!(dev, "vgpu_reset: gfid={} done\n", gfid.0);
         Ok(())
+    }
+}
+
+/// Access to PF services for the lifetime of a VF driver binding.
+///
+/// Managed SR-IOV teardown keeps the PF services registered until the VF driver
+/// has finished removing its resources.
+pub struct NovaCoreVfApiHandle<'vf> {
+    vf: &'vf pci::Device<device::Bound>,
+}
+
+impl<'vf> NovaCoreVfApiHandle<'vf> {
+    /// Borrows the typed PF services for a single operation.
+    fn with<R>(
+        &self,
+        f: impl for<'borrow, 'data> FnOnce(Pin<&'borrow NovaCoreVfApi<'data>>) -> Result<R>,
+    ) -> Result<R> {
+        self.vf
+            .vf_registration_data_with::<ForLt!(NovaCoreVfApi<'_>), _>(f)?
+    }
+
+    /// Creates and boots an instance that closes when dropped.
+    ///
+    /// The arguments have the same meaning as in [`NovaCoreVfApi::open_instance`].
+    #[unsafe(export_name = "nova_core_vf_api_handle_open")]
+    pub fn open(&self, gfid: u32, dbdf: u32, vm_pid: u32) -> Result<VgpuInstance<'vf>> {
+        let type_info = self.with(|api| api.open_instance(gfid, dbdf, vm_pid))?;
+        Ok(VgpuInstance {
+            api: Self { vf: self.vf },
+            gfid,
+            type_info,
+        })
+    }
+
+    /// Resets an active instance and scrubs its guest VRAM.
+    #[unsafe(export_name = "nova_core_vf_api_handle_reset")]
+    pub fn reset(&self, gfid: u32) -> Result {
+        self.with(|api| api.reset_instance(gfid))
+    }
+}
+
+/// An active instance whose teardown runs while its VF driver remains bound.
+///
+/// Dropping this guard may sleep while firmware teardown completes.
+pub struct VgpuInstance<'vf> {
+    api: NovaCoreVfApiHandle<'vf>,
+    gfid: u32,
+    type_info: VgpuTypeInfo,
+}
+
+impl VgpuInstance<'_> {
+    /// Returns the assigned PCI IDs and BAR1 aperture size.
+    #[inline]
+    pub fn type_info(&self) -> &VgpuTypeInfo {
+        &self.type_info
+    }
+}
+
+impl Drop for VgpuInstance<'_> {
+    #[unsafe(export_name = "nova_core_vgpu_instance_drop")]
+    fn drop(&mut self) {
+        let _ = self.api.with(|api| api.close_instance(self.gfid));
     }
 }
