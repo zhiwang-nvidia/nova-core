@@ -69,6 +69,28 @@ pub use self::irq::{
 #[cfg(CONFIG_PCI_IOV)]
 pub use self::sriov::VfRegistration;
 
+/// PCI error callbacks whose requirements are upheld by driver `D`.
+pub struct ErrorHandlers<D: Driver + ?Sized> {
+    raw: &'static bindings::pci_error_handlers,
+    _driver: PhantomData<fn(D) -> D>,
+}
+
+impl<D: Driver + ?Sized> ErrorHandlers<D> {
+    /// Wrap a subsystem's PCI error callbacks for this driver.
+    ///
+    /// # Safety
+    ///
+    /// Every callback must be valid for devices bound to `D`, including during
+    /// probe and removal. `D` must uphold any callback requirements on private
+    /// data, resource lifetimes and synchronization.
+    pub const unsafe fn new(raw: &'static bindings::pci_error_handlers) -> Self {
+        Self {
+            raw,
+            _driver: PhantomData,
+        }
+    }
+}
+
 /// An adapter for the registration of PCI drivers.
 pub struct Adapter<T: Driver>(T);
 
@@ -99,6 +121,9 @@ unsafe impl<T: Driver> driver::RegistrationOps for Adapter<T> {
             (*pdrv.get()).id_table = T::ID_TABLE.as_ptr();
             (*pdrv.get()).managed_sriov = true;
             (*pdrv.get()).driver_managed_dma = T::DRIVER_MANAGED_DMA;
+            if let Some(handlers) = T::ERROR_HANDLERS {
+                (*pdrv.get()).err_handler = handlers.raw;
+            }
             #[cfg(CONFIG_PCI_IOV)]
             if T::HAS_SRIOV_CONFIGURE {
                 (*pdrv.get()).sriov_configure = Some(Self::sriov_configure_callback);
@@ -363,6 +388,9 @@ pub trait Driver {
 
     /// Whether the driver manages DMA ownership instead of using the default DMA domain.
     const DRIVER_MANAGED_DMA: bool = false;
+
+    /// Optional C PCI error handlers supplied by a subsystem abstraction.
+    const ERROR_HANDLERS: Option<ErrorHandlers<Self>> = None;
 
     /// PCI driver probe.
     ///
