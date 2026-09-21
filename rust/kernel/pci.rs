@@ -209,6 +209,25 @@ pub struct DeviceId(bindings::pci_device_id);
 impl DeviceId {
     const PCI_ANY_ID: u32 = !0;
 
+    /// Match a vendor, device and class for a VFIO driver selected by `driver_override`.
+    pub const fn from_id_class_vfio_override(
+        vendor: Vendor,
+        device: u32,
+        class: Class,
+        class_mask: ClassMask,
+    ) -> Self {
+        Self(bindings::pci_device_id {
+            vendor: vendor.as_raw() as u32,
+            device,
+            subvendor: Self::PCI_ANY_ID,
+            subdevice: Self::PCI_ANY_ID,
+            class: class.as_raw(),
+            class_mask: class_mask.as_raw(),
+            driver_data: 0,
+            override_only: bindings::PCI_ID_F_VFIO_DRIVER_OVERRIDE,
+        })
+    }
+
     /// Equivalent to C's `PCI_DEVICE` macro.
     ///
     /// Create a new `pci::DeviceId` from a vendor and device ID.
