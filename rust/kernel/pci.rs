@@ -554,6 +554,15 @@ impl Device {
         unsafe { (*self.as_raw()).is_virtfn() != 0 }
     }
 
+    /// Return the zero-based VF index within its PF, or an error for a non-VF device.
+    #[cfg(CONFIG_PCI_IOV)]
+    pub fn vf_id(&self) -> Result<u32> {
+        // SAFETY: `self.as_raw()` points to a live PCI device; the helper checks VF membership.
+        let id = unsafe { bindings::pci_iov_vf_id(self.as_raw()) };
+        to_result(id)?;
+        Ok(id as u32)
+    }
+
     /// Returns the number of Virtual Functions (VF) enabled for a Physical Function (PF).
     #[cfg(CONFIG_PCI_IOV)]
     pub(crate) fn num_vf(&self) -> i32 {
