@@ -24,14 +24,12 @@ use kernel::{
     vfio::{
         self,
         pci::{
-            GetRegionInfo,
             Ioctl,
             Mapping,
             Mmap,
-            Open,
+            Opening,
             Position,
-            Read,
-            Write, //
+            ReadWrite, //
         }, //
     }, //
 };
@@ -85,7 +83,7 @@ struct NvidiaVgpuOpenData<'a> {
 
 impl<'a> NvidiaVgpuOpenData<'a> {
     fn new(
-        dev: &vfio::pci::Device<NvidiaVgpuOps, Open>,
+        dev: &vfio::pci::Device<NvidiaVgpuOps, Opening>,
         rd: &'a NvidiaVgpuRegData<'a>,
     ) -> Result<Self> {
         let mut state = rd.lock_instance();
@@ -159,7 +157,7 @@ impl vfio::pci::Operations for NvidiaVgpuOps {
     type OpenData<'a> = NvidiaVgpuOpenData<'a>;
 
     fn open_device<'a>(
-        dev: &'a vfio::pci::Device<Self, Open>,
+        dev: &'a vfio::pci::Device<Self, Opening>,
         rd: &'a NvidiaVgpuRegData<'a>,
     ) -> impl PinInit<Self::OpenData<'a>, Error> + 'a {
         NvidiaVgpuOpenData::new(dev, rd)
@@ -188,7 +186,7 @@ impl vfio::pci::Operations for NvidiaVgpuOps {
     }
 
     fn read<'a>(
-        dev: &vfio::pci::Device<Self, Read>,
+        dev: &vfio::pci::Device<Self, ReadWrite>,
         _rd: &NvidiaVgpuRegData<'a>,
         open_data: Pin<&Self::OpenData<'a>>,
         buf: &mut vfio::UserBuf,
@@ -214,7 +212,7 @@ impl vfio::pci::Operations for NvidiaVgpuOps {
     }
 
     fn write<'a>(
-        dev: &vfio::pci::Device<Self, Write>,
+        dev: &vfio::pci::Device<Self, ReadWrite>,
         _rd: &NvidiaVgpuRegData<'a>,
         open_data: Pin<&Self::OpenData<'a>>,
         buf: &mut vfio::UserBuf,
@@ -241,7 +239,7 @@ impl vfio::pci::Operations for NvidiaVgpuOps {
     }
 
     fn get_region_info<'a>(
-        dev: &vfio::pci::Device<Self, GetRegionInfo>,
+        dev: &vfio::pci::Device<Self, Ioctl>,
         rd: &NvidiaVgpuRegData<'a>,
         open_data: Pin<&Self::OpenData<'a>>,
         info: &mut bindings::vfio_region_info,

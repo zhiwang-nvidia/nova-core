@@ -49,7 +49,7 @@ pub const CONFIG_REGION_INDEX: u32 = bindings::VFIO_PCI_CONFIG_REGION_INDEX;
 
 /// The context in which a VFIO PCI device reference is valid.
 ///
-/// Callback views can only be borrowed from the corresponding VFIO trampoline.
+/// Callback views can only be borrowed from VFIO callbacks providing that context.
 /// They cannot be refcounted or shared across threads.
 pub trait DeviceContext: private::Sealed {}
 
@@ -57,42 +57,34 @@ pub trait DeviceContext: private::Sealed {}
 pub struct Normal;
 
 /// The device is enabled but has not yet completed its first-open callback.
-pub struct Open;
+pub struct Opening;
 
-/// The device is borrowed for a VFIO ioctl callback on the current thread.
+/// The device is borrowed for a VFIO ioctl or region-info callback on the current thread.
+///
+/// VFIO's ioctl dispatch holds the applicable runtime-PM reference during this borrow.
 pub struct Ioctl;
 
-/// The device is borrowed for a VFIO read callback on the current thread.
-pub struct Read;
-
-/// The device is borrowed for a VFIO write callback on the current thread.
-pub struct Write;
+/// The device is borrowed for a VFIO read or write callback on the current thread.
+pub struct ReadWrite;
 
 /// The device is borrowed for a VFIO mmap callback on the current thread.
 pub struct Mmap;
-
-/// The device is borrowed for a VFIO region-info callback on the current thread.
-pub struct GetRegionInfo;
 
 mod private {
     pub trait Sealed {}
 
     impl Sealed for super::Normal {}
-    impl Sealed for super::Open {}
-    impl Sealed for super::Write {}
+    impl Sealed for super::Opening {}
     impl Sealed for super::Mmap {}
     impl Sealed for super::Ioctl {}
-    impl Sealed for super::Read {}
-    impl Sealed for super::GetRegionInfo {}
+    impl Sealed for super::ReadWrite {}
 }
 
 impl DeviceContext for Normal {}
-impl DeviceContext for Open {}
-impl DeviceContext for Write {}
+impl DeviceContext for Opening {}
 impl DeviceContext for Mmap {}
 impl DeviceContext for Ioctl {}
-impl DeviceContext for Read {}
-impl DeviceContext for GetRegionInfo {}
+impl DeviceContext for ReadWrite {}
 
 /// The trait for VFIO PCI variant driver implementations.
 ///
@@ -122,7 +114,7 @@ pub trait Operations: Sized + Send + Sync + 'static {
     /// `vfio_pci_core_enable()` has already succeeded; if this returns an
     /// error, `vfio_pci_core_disable()` is called automatically.
     fn open_device<'a>(
-        dev: &'a Device<Self, Open>,
+        dev: &'a Device<Self, Opening>,
         reg_data: &'a <Self::RegistrationData as ForLt>::Of<'a>,
     ) -> impl PinInit<Self::OpenData<'a>, Error> + 'a;
 
@@ -144,7 +136,7 @@ pub trait Operations: Sized + Send + Sync + 'static {
     /// [`Device::core_read()`] to delegate the default read, and
     /// [`UserBuf::write_overlapping()`] to override specific bytes afterwards.
     fn read<'a>(
-        dev: &Device<Self, Read>,
+        dev: &Device<Self, ReadWrite>,
         reg_data: &<Self::RegistrationData as ForLt>::Of<'a>,
         open_data: Pin<&Self::OpenData<'a>>,
         buf: &mut UserBuf,
@@ -153,7 +145,7 @@ pub trait Operations: Sized + Send + Sync + 'static {
 
     /// Write to the device, delegating to [`Device::core_write()`] if appropriate.
     fn write<'a>(
-        dev: &Device<Self, Write>,
+        dev: &Device<Self, ReadWrite>,
         _reg_data: &<Self::RegistrationData as ForLt>::Of<'a>,
         _open_data: Pin<&Self::OpenData<'a>>,
         buf: &mut UserBuf,
@@ -185,7 +177,7 @@ pub trait Operations: Sized + Send + Sync + 'static {
     /// The default `vfio_pci_ioctl_get_region_info()` is available via
     /// [`Device::core_get_region_info()`] for delegation.
     fn get_region_info<'a>(
-        dev: &Device<Self, GetRegionInfo>,
+        dev: &Device<Self, Ioctl>,
         reg_data: &<Self::RegistrationData as ForLt>::Of<'a>,
         open_data: Pin<&Self::OpenData<'a>>,
         info: &mut bindings::vfio_region_info,
@@ -272,12 +264,12 @@ impl Mapping<'_> {
 /// The layout is `#[repr(C)]` with `core_device` first, so the
 /// `vfio_device` embedded at offset 0 of `vfio_pci_core_device` is also at
 /// offset 0 of `Self`, matching the `vfio_alloc_device` requirement.
-/// Callback contexts expose only their matching core helper and cannot be
+/// Callback contexts expose only the core helpers allowed in that context and cannot be
 /// refcounted or shared across threads.
 ///
 /// # Invariants
 ///
-/// - Callback contexts are only borrowed for the corresponding callback and thread.
+/// - Callback contexts are only borrowed for callbacks providing that context, on that thread.
 /// - `core_device` was initialized by `vfio_pci_core_init_dev()`.
 /// - The VFIO device refcount owns the allocation lifetime.
 /// - `reg_data` is dangling outside registration or points to a valid
@@ -377,7 +369,7 @@ impl<T: Operations> Device<T> {
     }
 
     /// # Safety
-    /// The returned view must only be used during the callback represented by `Ctx`.
+    /// The callback must provide the guarantees of `Ctx` for the duration of this borrow.
     unsafe fn with_context<Ctx: DeviceContext>(&self) -> &Device<T, Ctx> {
         // SAFETY: All contexts have the same layout; the caller guarantees the context.
         unsafe { &*core::ptr::from_ref(self).cast() }
@@ -407,7 +399,7 @@ impl<T: Operations, Ctx: DeviceContext> Device<T, Ctx> {
     }
 }
 
-impl<T: Operations> Device<T, Open> {
+impl<T: Operations> Device<T, Opening> {
     /// Set the device ID exposed through VFIO's virtual PCI configuration space.
     pub fn set_device_id(&self, device_id: u16) {
         // SAFETY: core_enable allocated vconfig; the exclusive first-open callback
@@ -425,7 +417,8 @@ impl<T: Operations> Device<T, Open> {
 impl<T: Operations> Device<T, Ioctl> {
     /// Delegate to `vfio_pci_core_ioctl()`.
     pub fn core_ioctl(&self, cmd: u32, arg: usize) -> Result<isize> {
-        // SAFETY: The Ioctl context keeps this device open on the callback thread.
+        // SAFETY: The Ioctl context keeps this device open on the callback thread,
+        // within VFIO's runtime-PM protection.
         let ret = unsafe { bindings::vfio_pci_core_ioctl(self.vfio_device(), cmd, arg) };
         if ret < 0 {
             Err(Error::from_errno(ret as i32))
@@ -435,13 +428,13 @@ impl<T: Operations> Device<T, Ioctl> {
     }
 }
 
-impl<T: Operations> Device<T, Read> {
+impl<T: Operations> Device<T, ReadWrite> {
     /// Delegate to `vfio_pci_core_read()`.
     ///
     /// The VFIO core fills the user-space buffer with the default PCI data
     /// for the region identified by `ppos` and advances the position by the bytes read.
     pub fn core_read(&self, buf: &UserBuf, ppos: &mut Position<'_>) -> Result<isize> {
-        // SAFETY: The Read context keeps this device open on the callback thread;
+        // SAFETY: The ReadWrite context keeps this device open on the callback thread;
         // `buf.ptr` is a user-space pointer supplied by VFIO.
         let ret = unsafe {
             bindings::vfio_pci_core_read(
@@ -457,12 +450,9 @@ impl<T: Operations> Device<T, Read> {
             Ok(ret)
         }
     }
-}
-
-impl<T: Operations> Device<T, Write> {
     /// Delegate to `vfio_pci_core_write()` for this callback's bounded buffer.
     pub fn core_write(&self, buf: &UserBuf, ppos: &mut Position<'_>) -> Result<isize> {
-        // SAFETY: The Write context keeps the device open on the callback thread;
+        // SAFETY: The ReadWrite context keeps the device open on the callback thread;
         // the buffer is a userspace pointer supplied by VFIO.
         let ret = unsafe {
             bindings::vfio_pci_core_write(
@@ -489,15 +479,16 @@ impl<T: Operations> Device<T, Mmap> {
     }
 }
 
-impl<T: Operations> Device<T, GetRegionInfo> {
+impl<T: Operations> Device<T, Ioctl> {
     /// Delegate to `vfio_pci_ioctl_get_region_info()`.
     pub fn core_get_region_info(
         &self,
         info: &mut bindings::vfio_region_info,
         caps: &mut InfoCap<'_>,
     ) -> Result {
-        // SAFETY: GetRegionInfo keeps the device open on the callback thread;
-        // `InfoCap` preserves the validity of VFIO's capability buffer.
+        // SAFETY: The Ioctl context keeps the device open on the callback thread,
+        // within VFIO's runtime-PM protection. `InfoCap` preserves the validity
+        // of VFIO's capability buffer.
         to_result(unsafe {
             bindings::vfio_pci_ioctl_get_region_info(self.vfio_device(), info, caps.raw)
         })
@@ -546,7 +537,7 @@ unsafe extern "C" fn open_device_cb<T: Operations>(
         dev.registration_data_with(|rd| {
             // Allocate before calling the driver so allocation failure cannot follow open.
             let data = KBox::<T::OpenData<'_>>::new_uninit(GFP_KERNEL)?;
-            let data = data.write_pin_init(T::open_device(dev.with_context::<Open>(), rd))?;
+            let data = data.write_pin_init(T::open_device(dev.with_context::<Opening>(), rd))?;
 
             // SAFETY: Only the owning pointer is moved; the allocation remains pinned.
             let raw =
@@ -634,7 +625,7 @@ unsafe extern "C" fn read_cb<T: Operations>(
     // SAFETY: VFIO invokes this callback for an open device with valid arguments.
     match unsafe {
         dev.callback_data_with(|rd, od| {
-            T::read(dev.with_context::<Read>(), rd, od, &mut ubuf, &mut pos)
+            T::read(dev.with_context::<ReadWrite>(), rd, od, &mut ubuf, &mut pos)
         })
     } {
         Ok(n) => n,
@@ -665,7 +656,7 @@ unsafe extern "C" fn get_region_info_cb<T: Operations>(
     // SAFETY: VFIO invokes this callback for an open device with valid arguments.
     match unsafe {
         dev.callback_data_with(|rd, od| {
-            T::get_region_info(dev.with_context::<GetRegionInfo>(), rd, od, info, &mut caps)
+            T::get_region_info(dev.with_context::<Ioctl>(), rd, od, info, &mut caps)
         })
     } {
         Ok(()) => 0,
@@ -697,7 +688,7 @@ unsafe extern "C" fn write_cb<T: Operations>(
     // SAFETY: This callback runs while VFIO keeps both callback data allocations alive.
     match unsafe {
         dev.callback_data_with(|rd, od| {
-            T::write(dev.with_context::<Write>(), rd, od, &mut ubuf, &mut pos)
+            T::write(dev.with_context::<ReadWrite>(), rd, od, &mut ubuf, &mut pos)
         })
     } {
         Ok(n) => n,
