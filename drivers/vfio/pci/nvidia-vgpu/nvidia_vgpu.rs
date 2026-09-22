@@ -170,7 +170,7 @@ impl vfio::pci::Operations for NvidiaVgpuOps {
         cmd: u32,
         arg: usize,
     ) -> Result<isize> {
-        let reset = cmd == vfio::DEVICE_RESET || cmd == vfio::DEVICE_PCI_HOT_RESET;
+        let reset = cmd == vfio::DEVICE_RESET || cmd == vfio::pci::DEVICE_PCI_HOT_RESET;
         if reset {
             if let Some(error) = rd.state.lock().reset_error {
                 return Err(error);
