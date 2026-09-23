@@ -180,9 +180,16 @@ impl<T: Driver> Adapter<T> {
         // SAFETY: `remove_callback` is only ever called after a successful call to
         // `probe_callback`, hence it's guaranteed that `Device::set_drvdata()` has been called
         // and stored a `Pin<KBox<T::Data<'_>>>`.
-        let data = unsafe { pdev.as_ref().drvdata_borrow::<T::Data<'_>>() };
+        let data = unsafe { pdev.as_ref().drvdata_obtain::<T::Data<'_>>() };
 
-        T::unbind(pdev, data);
+        if let Some(ref data) = data {
+            T::unbind(pdev, data.as_ref());
+        }
+
+        // The PCI bus drops the driver's bus device private data early (before the bus' remove()
+        // callback returns), as there are class devices, such as vfio-pci, that expect to be
+        // unregistered before the bus' remove() callback returns, as it interacts with the bus.
+        drop(data);
     }
 
     #[cfg(CONFIG_PCI_IOV)]

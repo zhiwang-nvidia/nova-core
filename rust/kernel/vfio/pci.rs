@@ -875,7 +875,7 @@ impl<T: Operations> Device<T> {
     ///
     /// Every VFIO registration made by `D` must be a `Device<T>`, and `D` must
     /// drain and unregister it under the PCI device lock before dropping the
-    /// registration data, including probe failure and post-unbind cleanup.
+    /// registration data, including probe failure and PCI removal.
     pub const unsafe fn pci_error_handlers<D: pci::Driver>() -> pci::ErrorHandlers<D> {
         // SAFETY: The caller associates this table with D's Device<T> registrations.
         // PCI serializes these callbacks with registration cleanup under its device lock;
