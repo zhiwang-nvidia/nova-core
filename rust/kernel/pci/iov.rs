@@ -26,6 +26,12 @@ impl Device {
         // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
         unsafe { (*self.as_raw()).is_virtfn() != 0 }
     }
+
+    /// Returns the number of Virtual Functions (VF) enabled for a Physical Function (PF).
+    pub fn num_vf(&self) -> i32 {
+        // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
+        unsafe { bindings::pci_num_vf(self.as_raw()) }
+    }
 }
 
 impl Device<device::CoreInternal<'_>> {
