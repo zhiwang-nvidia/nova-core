@@ -325,22 +325,30 @@ impl Vmm {
 
     /// Unmap all pages in a [`MappedRange`] with a single TLB flush.
     pub(crate) fn unmap_pages(&mut self, mm: &mut GpuMm<'_>, range: MappedRange) -> Result {
-        let result = self
-            .pt_map
-            .invalidate_ptes(mm, range.vfn_start, range.num_pages);
+        self.unmap_pages_in_place(mm, &range)
+    }
+
+    /// Unmaps a range without consuming it, retaining its VA allocation on failure.
+    ///
+    /// The caller must discard the range after success and must not use it again.
+    pub(super) fn unmap_pages_in_place(
+        &mut self,
+        mm: &mut GpuMm<'_>,
+        range: &MappedRange,
+    ) -> Result {
+        self.pt_map
+            .invalidate_ptes(mm, range.vfn_start, range.num_pages)?;
 
         // TODO: Internal page table pages (PDE, PTE pages) are still kept around.
         // This is by design as repeated maps/unmaps will be fast. As a future TODO,
         // we can add a reclaimer here to reclaim if VRAM is short. For now, the PT
         // pages are dropped once the `Vmm` is dropped.
 
-        // Free the VA range regardless of PTE invalidation success, so that the VA
-        // range is recovered even on failure (PTEs may be stale, but that is better
-        // than leaking both PTEs and VA range).
+        // Reuse the VA range only after PTE invalidation and the TLB flush succeed.
         self.free_vfn(range.vfn_start);
 
         // Unmap complete, safe to drop `MappedRange`.
         range._drop_guard.disarm();
-        result
+        Ok(())
     }
 }
