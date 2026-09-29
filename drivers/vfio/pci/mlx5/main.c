@@ -21,6 +21,8 @@
 
 #include "cmd.h"
 
+VFIO_PCI_CORE_DEFINE_CALLBACKS(mlx5vf)
+
 /* Device specification max LOAD size */
 #define MAX_LOAD_SIZE (BIT_ULL(__mlx5_bit_sz(load_vhca_state_in, size)) - 1)
 
@@ -1416,7 +1418,7 @@ static int mlx5vf_pci_probe(struct pci_dev *pdev,
 		return PTR_ERR(mvdev);
 
 	dev_set_drvdata(&pdev->dev, &mvdev->core_device);
-	ret = vfio_pci_core_register_device(&mvdev->core_device);
+	ret = vfio_pci_core_register_device(&mvdev->core_device, NULL);
 	if (ret)
 		goto out_put_vdev;
 	return 0;
@@ -1443,7 +1445,7 @@ MODULE_DEVICE_TABLE(pci, mlx5vf_pci_table);
 
 static const struct pci_error_handlers mlx5vf_err_handlers = {
 	.reset_done = mlx5vf_pci_aer_reset_done,
-	.error_detected = vfio_pci_core_aer_err_detected,
+	.error_detected = mlx5vf_aer_err_detected,
 };
 
 static struct pci_driver mlx5vf_pci_driver = {
@@ -1451,6 +1453,7 @@ static struct pci_driver mlx5vf_pci_driver = {
 	.id_table = mlx5vf_pci_table,
 	.probe = mlx5vf_pci_probe,
 	.remove = mlx5vf_pci_remove,
+	.driver = { .pm = &mlx5vf_pm_ops },
 	.err_handler = &mlx5vf_err_handlers,
 	.driver_managed_dma = true,
 };

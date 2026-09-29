@@ -16,6 +16,8 @@
 #include <linux/vfio_pci_core.h>
 #include <linux/qat/qat_mig_dev.h>
 
+VFIO_PCI_CORE_DEFINE_CALLBACKS(qat_vf)
+
 /*
  * The migration data of each Intel QAT VF device is encapsulated into a
  * 4096 bytes block. The data consists of two parts.
@@ -652,7 +654,7 @@ qat_vf_vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		return PTR_ERR(qat_vdev);
 
 	pci_set_drvdata(pdev, &qat_vdev->core_device);
-	ret = vfio_pci_core_register_device(&qat_vdev->core_device);
+	ret = vfio_pci_core_register_device(&qat_vdev->core_device, NULL);
 	if (ret)
 		goto out_put_device;
 
@@ -686,7 +688,7 @@ MODULE_DEVICE_TABLE(pci, qat_vf_vfio_pci_table);
 
 static const struct pci_error_handlers qat_vf_err_handlers = {
 	.reset_done = qat_vf_pci_aer_reset_done,
-	.error_detected = vfio_pci_core_aer_err_detected,
+	.error_detected = qat_vf_aer_err_detected,
 };
 
 static struct pci_driver qat_vf_vfio_pci_driver = {
@@ -694,6 +696,7 @@ static struct pci_driver qat_vf_vfio_pci_driver = {
 	.id_table = qat_vf_vfio_pci_table,
 	.probe = qat_vf_vfio_pci_probe,
 	.remove = qat_vf_vfio_pci_remove,
+	.driver = { .pm = &qat_vf_pm_ops },
 	.err_handler = &qat_vf_err_handlers,
 	.driver_managed_dma = true,
 };

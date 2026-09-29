@@ -27,6 +27,8 @@
 
 #include "vfio_pci_priv.h"
 
+VFIO_PCI_CORE_DEFINE_CALLBACKS(vfio_pci)
+
 #define DRIVER_AUTHOR   "Alex Williamson <alex.williamson@redhat.com>"
 #define DRIVER_DESC     "VFIO PCI - User Level meta-driver"
 
@@ -173,6 +175,12 @@ static const struct vfio_pci_device_ops vfio_pci_dev_ops = {
 	.get_dmabuf_phys = vfio_pci_core_get_dmabuf_phys,
 };
 
+static unsigned int vfio_pci_vga_set_decode(struct pci_dev *pdev, bool single_vga)
+{
+	return vfio_pci_core_vga_set_decode(dev_get_drvdata(&pdev->dev),
+					  single_vga);
+}
+
 static int vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct vfio_pci_core_device *vdev;
@@ -188,7 +196,7 @@ static int vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	dev_set_drvdata(&pdev->dev, vdev);
 	vdev->pci_ops = &vfio_pci_dev_ops;
-	ret = vfio_pci_core_register_device(vdev);
+	ret = vfio_pci_core_register_device(vdev, vfio_pci_vga_set_decode);
 	if (ret)
 		goto out_put_vdev;
 	return 0;
@@ -223,13 +231,18 @@ static const struct pci_device_id vfio_pci_table[] = {
 
 MODULE_DEVICE_TABLE(pci, vfio_pci_table);
 
+static const struct pci_error_handlers vfio_pci_err_handlers = {
+	.error_detected = vfio_pci_aer_err_detected,
+};
+
 static struct pci_driver vfio_pci_driver = {
 	.name			= "vfio-pci",
 	.id_table		= vfio_pci_table,
 	.probe			= vfio_pci_probe,
 	.remove			= vfio_pci_remove,
+	.driver			= { .pm = &vfio_pci_pm_ops },
 	.sriov_configure	= vfio_pci_sriov_configure,
-	.err_handler		= &vfio_pci_core_err_handlers,
+	.err_handler		= &vfio_pci_err_handlers,
 	.driver_managed_dma	= true,
 };
 

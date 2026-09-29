@@ -8,6 +8,8 @@
 #include <linux/slab.h>
 #include "../vfio_pci_priv.h"
 
+VFIO_PCI_CORE_DEFINE_CALLBACKS(ism_vfio)
+
 #define ISM_VFIO_PCI_OFFSET_SHIFT   48
 #define ISM_VFIO_PCI_OFFSET_TO_INDEX(off) ((off) >> ISM_VFIO_PCI_OFFSET_SHIFT)
 #define ISM_VFIO_PCI_INDEX_TO_OFFSET(index) ((u64)(index) << ISM_VFIO_PCI_OFFSET_SHIFT)
@@ -365,7 +367,7 @@ static int ism_vfio_pci_probe(struct pci_dev *pdev,
 
 	dev_set_drvdata(&pdev->dev, &ivpcd->core_device);
 
-	ret = vfio_pci_core_register_device(&ivpcd->core_device);
+	ret = vfio_pci_core_register_device(&ivpcd->core_device, NULL);
 	if (ret)
 		vfio_put_device(&ivpcd->core_device.vdev);
 
@@ -392,12 +394,17 @@ static const struct pci_device_id ism_device_table[] = {
 };
 MODULE_DEVICE_TABLE(pci, ism_device_table);
 
+static const struct pci_error_handlers ism_vfio_err_handlers = {
+	.error_detected = ism_vfio_aer_err_detected,
+};
+
 static struct pci_driver ism_vfio_pci_driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = ism_device_table,
 	.probe = ism_vfio_pci_probe,
 	.remove = ism_vfio_pci_remove,
-	.err_handler = &vfio_pci_core_err_handlers,
+	.driver = { .pm = &ism_vfio_pm_ops },
+	.err_handler = &ism_vfio_err_handlers,
 	.driver_managed_dma = true,
 };
 
