@@ -16,6 +16,8 @@
 #include "pci_drv.h"
 #include "cmds.h"
 
+VFIO_PCI_CORE_DEFINE_CALLBACKS(pds_vfio)
+
 #define PDS_VFIO_DRV_DESCRIPTION	"AMD/Pensando VFIO Device Driver"
 #define PCI_VENDOR_ID_PENSANDO		0x1dd8
 
@@ -120,7 +122,7 @@ static int pds_vfio_pci_probe(struct pci_dev *pdev,
 
 	dev_set_drvdata(&pdev->dev, &pds_vfio->vfio_coredev);
 
-	err = vfio_pci_core_register_device(&pds_vfio->vfio_coredev);
+	err = vfio_pci_core_register_device(&pds_vfio->vfio_coredev, NULL);
 	if (err)
 		goto out_put_vdev;
 
@@ -173,7 +175,7 @@ static void pds_vfio_pci_aer_reset_done(struct pci_dev *pdev)
 
 static const struct pci_error_handlers pds_vfio_pci_err_handlers = {
 	.reset_done = pds_vfio_pci_aer_reset_done,
-	.error_detected = vfio_pci_core_aer_err_detected,
+	.error_detected = pds_vfio_aer_err_detected,
 };
 
 static struct pci_driver pds_vfio_pci_driver = {
@@ -181,6 +183,7 @@ static struct pci_driver pds_vfio_pci_driver = {
 	.id_table = pds_vfio_pci_table,
 	.probe = pds_vfio_pci_probe,
 	.remove = pds_vfio_pci_remove,
+	.driver = { .pm = &pds_vfio_pm_ops },
 	.err_handler = &pds_vfio_pci_err_handlers,
 	.driver_managed_dma = true,
 };

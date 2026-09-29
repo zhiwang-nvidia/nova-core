@@ -8,8 +8,10 @@
  * Author: Tom Lyon, pugs@cisco.com
  */
 
+#include <linux/device.h>
 #include <linux/mutex.h>
 #include <linux/pci.h>
+#include <linux/pm.h>
 #include <linux/vfio.h>
 #include <linux/irqbypass.h>
 #include <linux/rcupdate.h>
@@ -166,9 +168,9 @@ int vfio_pci_core_register_dev_region(struct vfio_pci_core_device *vdev,
 void vfio_pci_core_close_device(struct vfio_device *core_vdev);
 int vfio_pci_core_init_dev(struct vfio_device *core_vdev);
 void vfio_pci_core_release_dev(struct vfio_device *core_vdev);
-int vfio_pci_core_register_device(struct vfio_pci_core_device *vdev);
+int vfio_pci_core_register_device(struct vfio_pci_core_device *vdev,
+				  unsigned int (*set_decode)(struct pci_dev *, bool));
 void vfio_pci_core_unregister_device(struct vfio_pci_core_device *vdev);
-extern const struct pci_error_handlers vfio_pci_core_err_handlers;
 int vfio_pci_core_sriov_configure(struct vfio_pci_core_device *vdev,
 				  int nr_virtfn);
 long vfio_pci_core_ioctl(struct vfio_device *core_vdev, unsigned int cmd,
@@ -193,8 +195,6 @@ int vfio_pci_core_match_token_uuid(struct vfio_device *core_vdev,
 int vfio_pci_core_enable(struct vfio_pci_core_device *vdev);
 void vfio_pci_core_disable(struct vfio_pci_core_device *vdev);
 void vfio_pci_core_finish_enable(struct vfio_pci_core_device *vdev);
-pci_ers_result_t vfio_pci_core_aer_err_detected(struct pci_dev *pdev,
-						pci_channel_state_t state);
 ssize_t vfio_pci_core_do_io_rw(struct vfio_pci_core_device *vdev, bool test_mem,
 			       void __iomem *io, char __user *buf,
 			       loff_t off, size_t count, size_t x_start,
@@ -259,5 +259,37 @@ vfio_pci_core_get_iomap(struct vfio_pci_core_device *vdev, unsigned int bar)
 
 int vfio_pci_dma_buf_iommufd_map(struct dma_buf_attachment *attachment,
 				 struct phys_vec *phys);
+
+int vfio_pci_core_runtime_suspend(struct vfio_pci_core_device *vdev);
+int vfio_pci_core_runtime_resume(struct vfio_pci_core_device *vdev);
+pci_ers_result_t vfio_pci_core_aer_err_detected(struct vfio_pci_core_device *vdev,
+						pci_channel_state_t state);
+unsigned int vfio_pci_core_vga_set_decode(struct vfio_pci_core_device *vdev,
+					  bool single_vga);
+
+/*
+ * Per-driver PM/AER trampolines. The generated callbacks recover vdev via
+ * dev_get_drvdata(), so driver_data must point to the embedded core device.
+ *
+ * @name: prefix for <name>_pm_ops and <name>_aer_err_detected
+ */
+#define VFIO_PCI_CORE_DEFINE_CALLBACKS(name)                                   \
+static int __maybe_unused name##_pm_suspend(struct device *dev)                \
+{                                                                              \
+	return vfio_pci_core_runtime_suspend(dev_get_drvdata(dev));            \
+}                                                                              \
+static int __maybe_unused name##_pm_resume(struct device *dev)                 \
+{                                                                              \
+	return vfio_pci_core_runtime_resume(dev_get_drvdata(dev));             \
+}                                                                              \
+static const struct dev_pm_ops name##_pm_ops = {                               \
+	SET_RUNTIME_PM_OPS(name##_pm_suspend, name##_pm_resume, NULL)          \
+};                                                                             \
+static pci_ers_result_t name##_aer_err_detected(struct pci_dev *pdev,          \
+					     pci_channel_state_t state)        \
+{                                                                              \
+	return vfio_pci_core_aer_err_detected(dev_get_drvdata(&pdev->dev),     \
+					    state);                            \
+}
 
 #endif /* VFIO_PCI_CORE_H */

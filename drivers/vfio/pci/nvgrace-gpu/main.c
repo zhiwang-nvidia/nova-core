@@ -15,6 +15,8 @@
 #include <linux/pm_runtime.h>
 #include <linux/memory-failure.h>
 
+VFIO_PCI_CORE_DEFINE_CALLBACKS(nvgrace_gpu)
+
 /*
  * The device memory usable to the workloads running in the VM is cached
  * and showcased as a 64b device BAR (comprising of BAR4 and BAR5 region)
@@ -1359,7 +1361,7 @@ static int nvgrace_gpu_probe(struct pci_dev *pdev,
 		nvdev->core_device.pci_ops = &nvgrace_gpu_pci_dev_core_ops;
 	}
 
-	ret = vfio_pci_core_register_device(&nvdev->core_device);
+	ret = vfio_pci_core_register_device(&nvdev->core_device, NULL);
 	if (ret)
 		goto out_put_vdev;
 
@@ -1417,7 +1419,7 @@ static void nvgrace_gpu_vfio_pci_reset_done(struct pci_dev *pdev)
 
 static const struct pci_error_handlers nvgrace_gpu_vfio_pci_err_handlers = {
 	.reset_done = nvgrace_gpu_vfio_pci_reset_done,
-	.error_detected = vfio_pci_core_aer_err_detected,
+	.error_detected = nvgrace_gpu_aer_err_detected,
 };
 
 static struct pci_driver nvgrace_gpu_vfio_pci_driver = {
@@ -1425,6 +1427,7 @@ static struct pci_driver nvgrace_gpu_vfio_pci_driver = {
 	.id_table = nvgrace_gpu_vfio_pci_table,
 	.probe = nvgrace_gpu_probe,
 	.remove = nvgrace_gpu_remove,
+	.driver = { .pm = &nvgrace_gpu_pm_ops },
 	.err_handler = &nvgrace_gpu_vfio_pci_err_handlers,
 	.driver_managed_dma = true,
 };

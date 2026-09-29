@@ -16,6 +16,8 @@
 #include <drm/intel/xe_sriov_vfio.h>
 #include <drm/intel/pciids.h>
 
+VFIO_PCI_CORE_DEFINE_CALLBACKS(xe_vfio)
+
 struct xe_vfio_pci_migration_file {
 	struct file *filp;
 	/* serializes accesses to migration data */
@@ -140,7 +142,7 @@ static void xe_vfio_pci_reset_done(struct pci_dev *pdev)
 static const struct pci_error_handlers xe_vfio_pci_err_handlers = {
 	.reset_prepare = xe_vfio_pci_reset_prepare,
 	.reset_done = xe_vfio_pci_reset_done,
-	.error_detected = vfio_pci_core_aer_err_detected,
+	.error_detected = xe_vfio_aer_err_detected,
 };
 
 static int xe_vfio_pci_open_device(struct vfio_device *core_vdev)
@@ -540,6 +542,12 @@ static const struct vfio_device_ops xe_vfio_pci_ops = {
 	.detach_ioas = vfio_iommufd_physical_detach_ioas,
 };
 
+static unsigned int xe_vfio_vga_set_decode(struct pci_dev *pdev, bool single_vga)
+{
+	return vfio_pci_core_vga_set_decode(dev_get_drvdata(&pdev->dev),
+					  single_vga);
+}
+
 static int xe_vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct xe_vfio_pci_core_device *xe_vdev;
@@ -552,13 +560,16 @@ static int xe_vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *i
 
 	dev_set_drvdata(&pdev->dev, &xe_vdev->core_device);
 
-	ret = vfio_pci_core_register_device(&xe_vdev->core_device);
-	if (ret) {
-		vfio_put_device(&xe_vdev->core_device.vdev);
-		return ret;
-	}
+	ret = vfio_pci_core_register_device(&xe_vdev->core_device,
+					    xe_vfio_vga_set_decode);
+	if (ret)
+		goto out_put_vdev;
 
 	return 0;
+
+out_put_vdev:
+	vfio_put_device(&xe_vdev->core_device.vdev);
+	return ret;
 }
 
 static void xe_vfio_pci_remove(struct pci_dev *pdev)
@@ -586,6 +597,7 @@ static struct pci_driver xe_vfio_pci_driver = {
 	.id_table = xe_vfio_pci_table,
 	.probe = xe_vfio_pci_probe,
 	.remove = xe_vfio_pci_remove,
+	.driver = { .pm = &xe_vfio_pm_ops },
 	.err_handler = &xe_vfio_pci_err_handlers,
 	.driver_managed_dma = true,
 };
