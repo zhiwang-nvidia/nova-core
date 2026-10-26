@@ -536,27 +536,30 @@ impl CmdqInner<'_> {
     /// Allocate enough space on the command queue to store `command`, initialize it with
     /// [`CommandElement::write`], and send the command to the GSP.
     ///
+    /// Returns the sequence number of the sent element.
+    ///
     /// # Errors
     ///
     /// - `EMSGSIZE` if the command exceeds the maximum queue element size.
     /// - `ETIMEDOUT` if space does not become available within the timeout.
     ///
     /// Error codes returned by [`CommandElement::write`] are returned as-is.
-    fn send_command_element<E: CommandElement>(&mut self, command: E) -> Result {
+    fn send_command_element<E: CommandElement>(&mut self, command: E) -> Result<u32> {
         let size_in_bytes = command.size();
+        let seq = self.seq;
         let mut dst = self
             .gsp_mem
             .allocate_command(size_in_bytes, Self::ALLOCATE_TIMEOUT)?;
 
         // Fill the header.
-        let msg_element_init = GspMsgElement::init(self.seq, size_in_bytes);
+        let msg_element_init = GspMsgElement::init(seq, size_in_bytes);
         // SAFETY: `dst.header` is a valid reference, and is not touched if the initializer fails.
         unsafe {
             pin_init::raw_try_init(core::ptr::from_mut(dst.header), msg_element_init)?;
         }
 
         // Write the message payload.
-        command.write(self.dev, self.seq, &mut dst)?;
+        command.write(self.dev, seq, &mut dst)?;
 
         // Compute checksum now that the whole message is ready.
         dst.header
@@ -571,7 +574,7 @@ impl CmdqInner<'_> {
         self.seq += 1;
         self.gsp_mem.advance_cpu_write_ptr(elem_count);
 
-        Ok(())
+        Ok(seq)
     }
 
     /// Wait for a message to become available on the message queue.
@@ -683,14 +686,17 @@ impl CmdqInner<'_> {
     ///   messages arrive while waiting.
     /// - `EIO` if a message fails framing or checksum validation.
     /// - Any error returned by `f` with the exception of `ENOMSG`.
-    fn await_msg_with<R>(&mut self, f: impl Fn(GspParsedMessage<'_>) -> Result<R>) -> Result<R> {
+    fn await_msg_with<R>(
+        &mut self,
+        mut f: impl FnMut(GspParsedMessage<'_>) -> Result<R>,
+    ) -> Result<R> {
         let deadline = Instant::<Monotonic>::now() + Cmdq::RECEIVE_TIMEOUT;
         loop {
             let remaining = deadline - Instant::<Monotonic>::now();
             if remaining.is_negative() {
                 break Err(ETIMEDOUT);
             }
-            match self.consume_element(remaining, &f)? {
+            match self.consume_element(remaining, &mut f)? {
                 Ok(m) => break Ok(m),
                 Err(ENOMSG) => continue,
                 Err(e) => break Err(e),
