@@ -29,7 +29,9 @@ use crate::{
 use super::{
     Cmdq,
     CmdqInner,
-    CommandElement, //
+    CommandElement,
+    GspMessage,
+    GspParsedMessage, //
 };
 
 /// Trait implemented by types representing a GMC command to send to the GSP.
@@ -149,7 +151,166 @@ where
     }
 }
 
+/// Trait representing replies to GMC commands received from the GSP.
+///
+/// This is the GMC counterpart of [`MessageFromGsp`](super::rpc::MessageFromGsp). The receiver
+/// matches a message against [`Self::COMMAND`], the sequence number of the request and the
+/// response flag of the GMC API header, and decodes the message with [`Self::read`].
+pub(crate) trait GmcReply: Sized {
+    /// Id of the command this is the reply to.
+    const COMMAND: GmcCommandId;
+
+    /// Error type returned by [`GmcReply::read`].
+    type InitError;
+
+    /// Method reading the reply from the payload of the message and returning it.
+    fn read(
+        payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>,
+    ) -> Result<Self, Self::InitError>;
+}
+
+/// A GMC message ready to be processed from the message queue.
+pub(crate) struct GmcMessage<'a> {
+    // Reference to the GMC API header of the message.
+    header: &'a GmcApiHeader,
+    // Slices to the payload of the message. The second slice is empty unless the message loops
+    // over the message queue.
+    contents: (&'a [u8], &'a [u8]),
+}
+
+impl<'a> GmcMessage<'a> {
+    /// Validate the GMC layer of `element` and returns its GMC API header and its contents trimmed
+    /// down to the GMC payload.
+    ///
+    /// # Errors
+    ///
+    /// - `EIO` if the element is shorter than the GMC API header, or than the payload length
+    ///   advertised by the GMC API header.
+    pub(super) fn parse(dev: &device::Device, element: GspMessage<'a>) -> Result<GmcMessage<'a>> {
+        let GspMessage {
+            contents: (slice_1, slice_2),
+            ..
+        } = element;
+
+        // The GSP message header and the GMC API header together are guaranteed to fit entirely
+        // into a single page, so it's ok to only look at `slice_1` here.
+        let (header, slice_1) = GmcApiHeader::from_bytes_prefix(slice_1).ok_or(EIO)?;
+        let payload_size = header.payload_size();
+
+        dev_dbg!(
+            dev,
+            "GSP GMC: receive: seq# {}, command={:?}, length=0x{:x}\n",
+            header.sequence(),
+            header.command(),
+            payload_size,
+        );
+
+        // Check that the driver read area is large enough for the message.
+        if slice_1.len() + slice_2.len() < payload_size {
+            return Err(EIO);
+        }
+
+        // Cut the message slices down to the actual length of the message.
+        let (slice_1, slice_2) = if slice_1.len() > payload_size {
+            // PANIC: we checked above that `slice_1` is at least as long as `payload_size`.
+            (slice_1.split_at(payload_size).0, &slice_2[0..0])
+        } else {
+            (
+                slice_1,
+                // PANIC: we checked above that `slice_1.len() + slice_2.len()` is at least as
+                // large as `payload_size`.
+                slice_2.split_at(payload_size - slice_1.len()).0,
+            )
+        };
+
+        Ok(GmcMessage {
+            header,
+            contents: (slice_1, slice_2),
+        })
+    }
+
+    /// Returns the GMC API header of the message.
+    pub(crate) fn header(&self) -> &'a GmcApiHeader {
+        self.header
+    }
+
+    /// Returns the payload of the message.
+    ///
+    /// The second slice is empty unless the message loops over the message queue.
+    pub(crate) fn payload(&self) -> (&'a [u8], &'a [u8]) {
+        self.contents
+    }
+
+    /// Returns whether this message is the reply to the command `command` that was sent with
+    /// sequence number `seq`.
+    fn is_reply_to(&self, command: GmcCommandId, seq: u32) -> bool {
+        let word = self.header.command();
+
+        word.response()
+            && matches!(word.id(), Ok(id) if id == command)
+            && self.header.sequence() == u64::from(seq)
+    }
+
+    /// Logs an event, meaning a message that no caller was waiting for.
+    ///
+    /// A reply that nobody claimed (e.g. one that arrived after its request timed out) and an
+    /// unknown command id are logged at warning level. Other events are not logged.
+    pub(super) fn log(&self, dev: &device::Device) {
+        let command = self.header.command();
+        let seq = self.header.sequence();
+
+        match command.id() {
+            Ok(id) if command.response() => {
+                dev_warn!(dev, "unclaimed GSP GMC reply to {:?} (seq {})\n", id, seq);
+            }
+            // Nothing to do for the remaining known command ids.
+            Ok(_) => {}
+            Err(_) => {
+                dev_warn!(dev, "unknown GSP GMC command {:?} (seq {})\n", command, seq);
+            }
+        }
+    }
+}
+
 impl Cmdq<'_> {
+    /// Sends `command` to the GSP and waits for the reply.
+    ///
+    /// GMC events that arrive before the reply are passed to `on_event`, and RPC messages are
+    /// logged and consumed. The boot sequence relies on this to handle the load-and-execute
+    /// events that GSP-RM raises before it answers `GSP_INIT`.
+    ///
+    /// The queue is locked for the entire send+receive cycle, including the calls to `on_event`,
+    /// to ensure that no other command can be interleaved. `on_event` must thus not use the queue.
+    ///
+    /// # Errors
+    ///
+    /// - `EMSGSIZE` if the command does not fit in a single command queue element.
+    /// - `ETIMEDOUT` if space does not become available to send the command, or if the reply does
+    ///   not arrive within [`Self::RECEIVE_TIMEOUT`] of the send, however many events arrive
+    ///   while waiting.
+    /// - `EIO` if the variable payload requested by the command has not been entirely
+    ///   written to by its [`GmcCommand::init_variable_payload`] method, or if the reply carries
+    ///   a status other than `NV_OK`.
+    ///
+    /// Error codes returned by the command and reply initializers, and by `on_event`, are
+    /// propagated as-is.
+    pub(crate) fn send_gmc_command<C>(
+        &self,
+        command: C,
+        on_event: impl FnMut(&GmcMessage<'_>) -> Result,
+    ) -> Result<C::Reply>
+    where
+        C: GmcCommand,
+        C::Reply: GmcReply,
+        Error: From<C::InitError>,
+        Error: From<<C::Reply as GmcReply>::InitError>,
+    {
+        let mut inner = self.inner.lock();
+        let seq = inner.send_gmc_command(command)?;
+
+        inner.await_gmc_reply(seq, on_event)
+    }
+
     /// Sends `command` to the GSP without waiting for a reply.
     ///
     /// # Errors
@@ -189,5 +350,69 @@ impl CmdqInner<'_> {
         Error: From<C::InitError>,
     {
         self.send_command_element(GmcCommandElement(command))
+    }
+
+    /// Receives the reply of type `R` to the command sent with sequence number `seq`, waiting up
+    /// to [`Cmdq::RECEIVE_TIMEOUT`] from the call.
+    ///
+    /// Any GMC event that arrives first is passed to `on_event`, and any RPC message is logged.
+    /// Neither extends the deadline.
+    ///
+    /// # Errors
+    ///
+    /// - `ETIMEDOUT` if the reply does not arrive before the deadline, however many other messages
+    ///   arrive while waiting.
+    /// - `EIO` if a message fails framing or checksum validation, or if the reply carries a status
+    ///   other than `NV_OK`.
+    ///
+    /// Error codes returned by [`GmcReply::read`] and by `on_event` are propagated as-is.
+    fn await_gmc_reply<R: GmcReply>(
+        &mut self,
+        seq: u32,
+        mut on_event: impl FnMut(&GmcMessage<'_>) -> Result,
+    ) -> Result<R>
+    where
+        // This allows all error types, including `Infallible`, to be used for `R::InitError`.
+        Error: From<R::InitError>,
+    {
+        let dev = self.dev;
+
+        self.await_msg_with(|message| {
+            let gmc_message = match message {
+                GspParsedMessage::Gmc(gmc_message) => gmc_message,
+                GspParsedMessage::Rpc(rpc_message) => {
+                    rpc_message.log(dev);
+
+                    return Err(ENOMSG);
+                }
+            };
+
+            if !gmc_message.is_reply_to(R::COMMAND, seq) {
+                on_event(&gmc_message)?;
+
+                return Err(ENOMSG);
+            }
+
+            let status = gmc_message.header.status();
+            if status != 0 {
+                dev_err!(
+                    dev,
+                    "GSP GMC: command {:?} failed with status {:#x}\n",
+                    R::COMMAND,
+                    status
+                );
+
+                return Err(EIO);
+            }
+
+            let mut sbuffer =
+                SBufferIter::new_reader([gmc_message.contents.0, gmc_message.contents.1]);
+
+            R::read(&mut sbuffer).map_err(|e| e.into()).inspect(|_| {
+                if !sbuffer.is_empty() {
+                    dev_warn!(dev, "GSP GMC reply {:?} has unprocessed data\n", R::COMMAND);
+                }
+            })
+        })
     }
 }
