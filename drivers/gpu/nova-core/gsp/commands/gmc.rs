@@ -15,12 +15,16 @@ use kernel::{
 use crate::{
     gpu::Chipset,
     gsp::{
-        cmdq::gmc::{
-            GmcCommand,
-            GmcReply, //
+        cmdq::{
+            gmc::{
+                GmcCommand,
+                GmcReply, //
+            },
+            NoReply, //
         },
         commands::GspStaticInfo,
         fw::{
+            self,
             commands::{
                 GspInitRequest,
                 GspInitResponseSchema, //
@@ -93,6 +97,34 @@ impl GmcCommand for GspInit {
         dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
     ) -> Result {
         dst.write_all(self.payload_bytes())
+    }
+}
+
+pub(crate) use fw::commands::PowerStateLevel;
+
+/// The `GSP_SUSPEND` command, which suspends GSP-RM.
+///
+/// GSP-RM sends no reply on the message queue. It reports the completed suspend in the GSP
+/// falcon's `MAILBOX0` register instead.
+pub(crate) struct GspSuspend {
+    level: PowerStateLevel,
+}
+
+impl GspSuspend {
+    /// Creates a `GSP_SUSPEND` command for the given [`PowerStateLevel`].
+    pub(crate) fn new(level: PowerStateLevel) -> Self {
+        Self { level }
+    }
+}
+
+impl GmcCommand for GspSuspend {
+    const COMMAND: GmcCommandId = GmcCommandId::GspSuspend;
+    type Command = fw::commands::GspSuspend;
+    type Reply = NoReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        fw::commands::GspSuspend::new(self.level)
     }
 }
 
