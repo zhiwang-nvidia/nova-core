@@ -34,6 +34,16 @@ impl NovaCoreApi<'_> {
         NovaCoreApiHandle::of(adev)
     }
 
+    /// Initializes the display during DRM probe.
+    pub fn display_init(&self) -> Result {
+        self.gpu.get_ref().display_init()
+    }
+
+    /// Shuts down the display once after DRM shutdown.
+    pub fn display_shutdown(&self) -> Result {
+        self.gpu.display_shutdown()
+    }
+
     /// Returns the GPU [`GspStaticInfo`].
     pub fn gsp_static_info(&self) -> &GspStaticInfo {
         self.gpu.gsp_static_info()

@@ -37,6 +37,13 @@ pub(crate) struct DrmRegData<'bound> {
     pub(crate) api: NovaCoreApiHandle<'bound>,
 }
 
+impl Drop for DrmRegData<'_> {
+    fn drop(&mut self) {
+        // DRM unplug and KMS shutdown precede this drop after successful registration.
+        let _ = self.api.with(|core| core.display_shutdown());
+    }
+}
+
 /// Convienence type alias for the DRM device type for this driver
 pub(crate) type NovaDevice<Ctx = drm::Normal> = drm::Device<NovaDriver, Ctx>;
 
@@ -73,9 +80,9 @@ impl auxiliary::Driver for NovaDriver {
             reg <- {
                 let drm = drm::UnregisteredDevice::<Self>::new(adev, Ok(()))?;
 
-                let reg_data = DrmRegData {
-                    api: NovaCoreApi::of(adev)?,
-                };
+                let api = NovaCoreApi::of(adev)?;
+                api.with(|core| core.display_init())?;
+                let reg_data = DrmRegData { api };
 
                 // SAFETY: `reg` is stored in `Self::Data` and dropped when the driver is unbound;
                 // it is never forgotten.

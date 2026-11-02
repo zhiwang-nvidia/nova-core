@@ -8,6 +8,7 @@ use kernel::{
     fmt,
     gpu::buddy::GpuBuddyParams,
     io::Io,
+    new_mutex,
     num::Bounded,
     pci,
     prelude::*,
@@ -16,11 +17,13 @@ use kernel::{
         SizeConstants,
         SZ_4K, //
     },
+    sync::Mutex,
     uapi, //
 };
 
 use crate::{
     bounded_enum,
+    display::Display,
     driver::{
         Bar0,
         Bar1, //
@@ -386,6 +389,9 @@ impl<'a> GspSubtree<'a> {
 #[pin_data]
 pub(crate) struct Gpu<'gpu> {
     pub(crate) spec: Spec,
+    /// Display.
+    #[pin]
+    display: Mutex<Option<Display<'gpu, 'gpu>>>,
     /// GSP event interrupt registration, and the enable of its subtree.
     ///
     /// Must be kept declared *before* `gsp_resources`, so that the handler is unregistered, and
@@ -594,7 +600,33 @@ impl<'gpu> Gpu<'gpu> {
                     bar1,
                 )
             },
+
+            display <- new_mutex!(None, "display"),
         })
+    }
+
+    pub(crate) fn display_init(&'gpu self) -> Result {
+        let mut display = self.display.lock();
+        if display.is_some() {
+            return Err(EBUSY);
+        }
+
+        *display = Some(Display::init(
+            self.gsp_resources.device.as_ref(),
+            &self.gsp_resources.gsp.cmdq,
+            self.spec,
+            &self.bar_user,
+        )?);
+
+        Ok(())
+    }
+
+    pub(crate) fn display_shutdown(&self) -> Result {
+        let mut display = self.display.lock();
+        if let Some(active) = display.take() {
+            Display::shutdown(active);
+        }
+        Ok(())
     }
 
     /// Returns the static GPU configuration that GSP-RM reported at boot.

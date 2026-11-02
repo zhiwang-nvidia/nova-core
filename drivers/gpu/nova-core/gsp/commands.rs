@@ -36,7 +36,6 @@ impl DisplayCaps {
 }
 
 /// No NVKV fields are returned in DISPLAY_SHUTDOWN.
-#[expect(dead_code)]
 pub(crate) struct DisplayShutdownReply;
 
 /// The static GPU configuration, which GSP-RM reports in reply to [`GspInit`](gmc::GspInit).
