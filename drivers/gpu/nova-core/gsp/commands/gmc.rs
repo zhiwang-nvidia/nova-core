@@ -24,6 +24,7 @@ use crate::{
         },
         commands::{
             DisplayCaps,
+            DisplayHwStaticInfo,
             DisplayShutdownReply,
             GspStaticInfo, //
         },
@@ -32,6 +33,7 @@ use crate::{
             commands::{
                 DisplayInitRequest,
                 DisplayInitResponseSchema,
+                DisplayStaticInfoResponseSchema,
                 GspInitRequest,
                 GspInitResponseSchema, //
             },
@@ -297,5 +299,37 @@ impl GmcReply for DisplayShutdownReply {
         } else {
             Err(EINVAL)
         }
+    }
+}
+
+pub(crate) struct DisplayGetStaticInfo;
+
+impl GmcCommand for DisplayGetStaticInfo {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayGetStaticInfo;
+    const MAX_REPLY_SIZE: u32 = 4096;
+    type Command = ();
+    type Reply = DisplayHwStaticInfo;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+}
+
+impl GmcReply for DisplayHwStaticInfo {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayGetStaticInfo;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        let bytes = payload.flush_into_kvec(GFP_KERNEL)?;
+        if bytes.len() > num::u32_as_usize(DisplayGetStaticInfo::MAX_REPLY_SIZE) {
+            return Err(EINVAL);
+        }
+        let words = nvkv_words(&bytes)?;
+
+        let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
+        let mut schema = KBox::init(DisplayStaticInfoResponseSchema::init(), GFP_KERNEL)?;
+        let reply = KBox::try_init(decoder.decode(&mut *schema)?, GFP_KERNEL)?;
+        Ok(KBox::into_inner(reply))
     }
 }

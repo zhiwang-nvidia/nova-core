@@ -14,10 +14,12 @@ use crate::{
         cmdq::Cmdq,
         commands::{
             gmc::{
+                DisplayGetStaticInfo,
                 DisplayInit,
                 DisplayShutdown, //
             },
-            DisplayCaps, //
+            DisplayCaps,
+            DisplayHwStaticInfo, //
         },
     },
     mm::bar_user::BarUser, //
@@ -32,6 +34,8 @@ pub(crate) struct Display<'a, 'gpu> {
     bar_user: &'a BarUser<'gpu>,
     #[expect(dead_code)]
     caps: DisplayCaps,
+    #[expect(dead_code)]
+    hw_static_info: DisplayHwStaticInfo,
 }
 
 impl<'a, 'gpu> Display<'a, 'gpu> {
@@ -51,6 +55,12 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             let _ = Self::clean(dev, cmdq);
         });
 
+        let hw_static_info = cmdq
+            .send_gmc_command(DisplayGetStaticInfo, |_| Ok(()))
+            .inspect_err(|error| {
+                dev_err!(dev, "DISPLAY_GET_STATIC_INFO failed: {:?}\n", error);
+            })?;
+
         cleanup.dismiss();
 
         Ok(Self {
@@ -59,6 +69,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             spec,
             bar_user,
             caps,
+            hw_static_info,
         })
     }
 

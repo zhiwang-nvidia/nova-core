@@ -715,6 +715,7 @@ bounded_enum! {
         // Display NVKV commands from gmcapi_table.h; not yet in the r000 bindings.
         DisplayInit = 0x05_0001,
         DisplayShutdown = 0x05_0002,
+        DisplayGetStaticInfo = 0x05_0003,
     }
 }
 
