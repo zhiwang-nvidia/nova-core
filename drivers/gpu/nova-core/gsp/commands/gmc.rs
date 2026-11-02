@@ -139,6 +139,23 @@ fn copy_name<const N: usize>(dst: &mut [u8; N], src: &[u8]) -> Result {
     Ok(())
 }
 
+/// Copies a byte payload into the aligned little-endian words required by the NVKV decoder.
+///
+/// Returns `EINVAL` for a partial word, or `ENOMEM` if allocation fails.
+fn nvkv_words(bytes: &[u8]) -> Result<KVVec<u64>> {
+    let chunks = bytes.chunks_exact(size_of::<u64>());
+    if !chunks.remainder().is_empty() {
+        return Err(EINVAL);
+    }
+    let mut words = KVVec::with_capacity(chunks.len(), GFP_KERNEL)?;
+    for chunk in chunks {
+        // `chunks_exact` yields slices of exactly `size_of::<u64>()` bytes.
+        let word = chunk.try_into().map_err(|_| EINVAL)?;
+        words.push(u64::from_le_bytes(word), GFP_KERNEL)?;
+    }
+    Ok(words)
+}
+
 impl GmcReply for GspStaticInfo {
     const COMMAND: GmcCommandId = GmcCommandId::GspInit;
     type InitError = Error;
@@ -153,16 +170,7 @@ impl GmcReply for GspStaticInfo {
     fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
         let bytes = payload.flush_into_kvec(GFP_KERNEL)?;
 
-        let chunks = bytes.chunks_exact(size_of::<u64>());
-        if !chunks.remainder().is_empty() {
-            return Err(EINVAL);
-        }
-        let mut words = KVVec::with_capacity(chunks.len(), GFP_KERNEL)?;
-        for chunk in chunks {
-            // `chunks_exact` yields slices of exactly `size_of::<u64>()` bytes.
-            let word = chunk.try_into().map_err(|_| EINVAL)?;
-            words.push(u64::from_le_bytes(word), GFP_KERNEL)?;
-        }
+        let words = nvkv_words(&bytes)?;
 
         let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
         let mut schema = KBox::init(GspInitResponseSchema::init(), GFP_KERNEL)?;
