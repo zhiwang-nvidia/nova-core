@@ -18,14 +18,19 @@ use kernel::{
 use crate::{
     gpu::Chipset,
     gsp::{
-        commands::GspStaticInfo,
+        commands::{
+            DisplayInitReply,
+            GspStaticInfo, //
+        },
         nvkv::{
             nvkv_decode,
             nvkv_encode,
             Accumulated,
+            Array,
             Encodable,
             Encoder,
             Key,
+            KeyId,
             Required,
             TruncatingArray, //
         },
@@ -382,4 +387,46 @@ struct FbRegion {
     limit: u64,
     flags: FbRegionFlags,
     tag: u32,
+}
+
+// Display NVKV keys from gmcapi_display_keys.h in pending CL 39266611.
+// These describe wire values, not the layout of the decoded firmware C structures.
+
+nvkv_encode! {
+    /// Payload of the display `INIT` command.
+    pub(crate) struct DisplayInitRequest {
+        flags: Key<u32, { Self::FLAGS_KEY }>,
+    }
+}
+
+impl DisplayInitRequest {
+    const FLAGS_KEY: KeyId = 0x0102;
+
+    /// Creates a request with no optional initialization flags.
+    pub(crate) fn new() -> Self {
+        Self { flags: 0.into() }
+    }
+}
+
+nvkv_decode! {
+    /// Schema for the display `INIT` reply.
+    pub(crate) struct DisplayInitResponseSchema => DisplayInitReply {
+        features: Required<Key<u64, { Self::FEATURES_KEY }>>,
+        display_ip_version: Required<Key<u32, { Self::DISPLAY_IP_VERSION_KEY }>>,
+        common_caps: Required<
+            Array<u8, { DisplayInitReply::COMMON_CAPS_LEN }, { Self::COMMON_CAPS_KEY }>,
+        >,
+        display_caps: Required<
+            Array<u8, { DisplayInitReply::DISPLAY_CAPS_LEN }, { Self::DISPLAY_CAPS_KEY }>,
+        >,
+        hdmi_gpu_caps: Required<Key<u32, { Self::HDMI_GPU_CAPS_KEY }>>,
+    }
+}
+
+impl DisplayInitResponseSchema {
+    const FEATURES_KEY: KeyId = 0x0106;
+    const DISPLAY_IP_VERSION_KEY: KeyId = 0x8063;
+    const COMMON_CAPS_KEY: KeyId = 0x8064;
+    const DISPLAY_CAPS_KEY: KeyId = 0x8065;
+    const HDMI_GPU_CAPS_KEY: KeyId = 0x8066;
 }

@@ -9,7 +9,35 @@ use core::{
     str::Utf8Error, //
 };
 
-use kernel::prelude::*;
+use kernel::{
+    alloc::ArrayVec,
+    prelude::*, //
+};
+
+/// Display capabilities returned by DISPLAY_INIT.
+pub(crate) struct DisplayInitReply {
+    /// Supported `GMCAPI_DISPLAY_FEATURE_*` service bits.
+    pub(crate) features: u64,
+    /// Raw `NV_PDISP_FE_IP_VER` encoding.
+    pub(crate) display_ip_version: u32,
+    /// Raw `NV0073 SYSTEM_GET_CAPS_V2` table.
+    pub(crate) common_caps: ArrayVec<u8, { Self::COMMON_CAPS_LEN }>,
+    /// Raw `NV5070 SYSTEM_GET_CAPS_V2` display-parent table.
+    pub(crate) display_caps: ArrayVec<u8, { Self::DISPLAY_CAPS_LEN }>,
+    /// Raw `SPECIFIC_GET_HDMI_GPU_CAPS.caps` word.
+    pub(crate) hdmi_gpu_caps: u32,
+}
+
+impl DisplayInitReply {
+    /// Size in bytes of the `NV0073 SYSTEM_GET_CAPS_V2` table.
+    pub(crate) const COMMON_CAPS_LEN: usize = 2;
+    /// Size in bytes of the `NV5070 SYSTEM_GET_CAPS_V2` display-parent table.
+    pub(crate) const DISPLAY_CAPS_LEN: usize = 1;
+}
+
+/// No NVKV fields are returned in DISPLAY_SHUTDOWN.
+#[expect(dead_code)]
+pub(crate) struct DisplayShutdownReply;
 
 /// The static GPU configuration, which GSP-RM reports in reply to [`GspInit`](gmc::GspInit).
 pub struct GspStaticInfo {
