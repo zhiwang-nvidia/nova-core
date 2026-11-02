@@ -712,6 +712,9 @@ bounded_enum! {
         ExecHsBinary = bindings::GMCAPI_COMMANDS_GMCAPI_CMD_EXEC_HS_BINARY,
         GspSuspend = bindings::GMCAPI_COMMANDS_GMCAPI_CMD_GSP_SUSPEND,
         MmuFaultQueued = bindings::GMCAPI_COMMANDS_GMCAPI_CMD_MMU_FAULT_QUEUED,
+        // Display NVKV commands from gmcapi_table.h; not yet in the r000 bindings.
+        DisplayInit = 0x05_0001,
+        DisplayShutdown = 0x05_0002,
     }
 }
 

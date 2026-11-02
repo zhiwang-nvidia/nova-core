@@ -22,10 +22,16 @@ use crate::{
             },
             NoReply, //
         },
-        commands::GspStaticInfo,
+        commands::{
+            DisplayCaps,
+            DisplayShutdownReply,
+            GspStaticInfo, //
+        },
         fw::{
             self,
             commands::{
+                DisplayInitRequest,
+                DisplayInitResponseSchema,
                 GspInitRequest,
                 GspInitResponseSchema, //
             },
@@ -39,6 +45,7 @@ use crate::{
             UnknownKeyPolicy, //
         },
     },
+    num,
     sbuffer::SBufferIter,
     vgpu::VgpuState, //
 };
@@ -196,5 +203,101 @@ impl GmcReply for GspStaticInfo {
             usable_fb_regions,
             total_fb_end: reply.total_fb_end().ok_or(EINVAL)?,
         })
+    }
+}
+
+pub(crate) struct DisplayInit {
+    /// The NVKV-encoded request.
+    payload: KVVec<u64>,
+}
+
+#[expect(dead_code)]
+impl DisplayInit {
+    /// Builds the request with its required zero flags field.
+    pub(crate) fn new() -> Result<Self> {
+        let mut encoder = Encoder::new();
+        DisplayInitRequest::new().encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    /// Returns the request as the bytes that the GSP reads.
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayInit {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayInit;
+    const MAX_REPLY_SIZE: u32 = 4096;
+    type Command = ();
+    type Reply = DisplayCaps;
+    type InitError = Error;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        Ok(())
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayCaps {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayInit;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        let bytes = payload.flush_into_kvec(GFP_KERNEL)?;
+        if bytes.len() > num::u32_as_usize(DisplayInit::MAX_REPLY_SIZE) {
+            return Err(EINVAL);
+        }
+        let words = nvkv_words(&bytes)?;
+
+        let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
+        let mut schema = KBox::init(DisplayInitResponseSchema::init(), GFP_KERNEL)?;
+        let reply = KBox::try_init(decoder.decode(&mut *schema)?, GFP_KERNEL)?;
+        if reply.common_caps.len() != Self::COMMON_CAPS_LEN
+            || reply.display_caps.len() != Self::DISPLAY_CAPS_LEN
+        {
+            return Err(EINVAL);
+        }
+        Ok(KBox::into_inner(reply))
+    }
+}
+
+#[expect(dead_code)]
+pub(crate) struct DisplayShutdown;
+
+impl GmcCommand for DisplayShutdown {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayShutdown;
+    type Command = ();
+    type Reply = DisplayShutdownReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+}
+
+impl GmcReply for DisplayShutdownReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayShutdown;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        if payload.is_empty() {
+            Ok(Self)
+        } else {
+            Err(EINVAL)
+        }
     }
 }
