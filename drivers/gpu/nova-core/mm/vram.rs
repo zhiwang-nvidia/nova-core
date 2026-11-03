@@ -27,7 +27,7 @@ use super::{
 pub(crate) struct VramBlock {
     _blocks: Pin<KBox<AllocatedBlocks>>,
     address: u64,
-    size: u64,
+    pub(crate) size: u64,
 }
 
 impl VramBlock {
@@ -93,6 +93,40 @@ impl VramRegion {
 }
 
 impl GpuMm<'_> {
+    pub(crate) fn alloc_vram(&self, size: Alignment) -> Result<VramBlock> {
+        let buddy = self.buddy();
+        if size < buddy.chunk_size() {
+            return Err(EINVAL);
+        }
+
+        let size_bytes: u64 = size.as_usize().into_safe_cast();
+        let base = buddy.base_offset();
+        if !base.is_multiple_of(size_bytes) {
+            return Err(EINVAL);
+        }
+        base.checked_add(buddy.size()).ok_or(EOVERFLOW)?;
+
+        let blocks = KBox::pin_init(
+            buddy.alloc_blocks(
+                GpuBuddyAllocMode::Simple,
+                size_bytes,
+                size,
+                GpuBuddyAllocFlags::default(),
+            ),
+            GFP_KERNEL,
+        )?;
+        let address = blocks.iter().next().ok_or(ENOMEM)?.offset();
+        if address == 0 {
+            return Err(EINVAL);
+        }
+
+        Ok(VramBlock {
+            _blocks: blocks,
+            address,
+            size: size_bytes,
+        })
+    }
+
     /// Allocates an exact byte range relative to the buddy allocator's base.
     pub(crate) fn alloc_vram_range(&self, range: Range<u64>, align: u64) -> Result<Arc<VramBlock>> {
         let size = range.end.checked_sub(range.start).ok_or(EINVAL)?;
