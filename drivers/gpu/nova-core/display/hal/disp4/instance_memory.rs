@@ -134,7 +134,6 @@ impl<'a, 'gpu> InstanceMemory<'a, 'gpu> {
         })
     }
 
-    #[expect(dead_code)]
     pub(crate) fn alloc_context_dma(
         &mut self,
         target_region: VramRegion,
@@ -145,12 +144,10 @@ impl<'a, 'gpu> InstanceMemory<'a, 'gpu> {
             .alloc(&self.mapping, target_region, writable, block_linear)
     }
 
-    #[expect(dead_code)]
     pub(crate) fn free_context_dma(&mut self, context_dma: ContextDmaDescriptorId) -> Result {
         self.context_dma_pool.free(context_dma)
     }
 
-    #[expect(dead_code)]
     pub(crate) fn bind_context_dma(
         &mut self,
         context_dma: ContextDmaDescriptorId,
@@ -166,7 +163,6 @@ impl<'a, 'gpu> InstanceMemory<'a, 'gpu> {
         )
     }
 
-    #[expect(dead_code)]
     pub(crate) fn unbind_context_dma(
         &mut self,
         context_dma: ContextDmaDescriptorId,

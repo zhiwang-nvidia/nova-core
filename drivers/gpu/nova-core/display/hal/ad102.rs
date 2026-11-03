@@ -9,7 +9,8 @@ use kernel::{
 use crate::{
     display::hal::{
         disp4::instance_memory::InstanceMemory,
-        DisplayHal, //
+        DisplayHal,
+        SurfaceDescriptor, //
     },
     gsp::{
         cmdq::Cmdq,
@@ -17,6 +18,7 @@ use crate::{
     },
     mm::{
         bar_user::BarUser,
+        vram::VramRegion,
         GpuMm, //
     },
 };
@@ -62,4 +64,51 @@ impl<'a, 'gpu> Ad102<'a, 'gpu> {
     }
 }
 
-impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {}
+// TODO: Factor out a common DISP 4.x HAL when adding support for more
+// DISP 4.x GPUs.
+impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
+    fn alloc_surface_descriptor(
+        &mut self,
+        target_region: VramRegion,
+        writable: bool,
+        block_linear: bool,
+    ) -> Result<SurfaceDescriptor> {
+        let context_dma_descriptor_id =
+            self.instance_memory
+                .alloc_context_dma(target_region, writable, block_linear)?;
+        Ok(SurfaceDescriptor {
+            context_dma_descriptor_id,
+        })
+    }
+
+    fn bind_surface_descriptor(
+        &mut self,
+        descriptor: SurfaceDescriptor,
+        client_id: u32,
+        display_channel: u32,
+    ) -> Result {
+        self.instance_memory.bind_context_dma(
+            descriptor.context_dma_descriptor_id,
+            client_id,
+            display_channel,
+        )
+    }
+
+    fn unbind_surface_descriptor(
+        &mut self,
+        descriptor: SurfaceDescriptor,
+        client_id: u32,
+        display_channel: u32,
+    ) -> Result {
+        self.instance_memory.unbind_context_dma(
+            descriptor.context_dma_descriptor_id,
+            client_id,
+            display_channel,
+        )
+    }
+
+    fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result {
+        self.instance_memory
+            .free_context_dma(descriptor.context_dma_descriptor_id)
+    }
+}
