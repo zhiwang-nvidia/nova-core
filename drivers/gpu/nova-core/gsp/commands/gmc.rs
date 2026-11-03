@@ -25,6 +25,7 @@ use crate::{
         commands::{
             DisplayCaps,
             DisplayHwStaticInfo,
+            DisplaySetInstanceMemoryReply,
             DisplayShutdownReply,
             GspStaticInfo, //
         },
@@ -33,6 +34,7 @@ use crate::{
             commands::{
                 DisplayInitRequest,
                 DisplayInitResponseSchema,
+                DisplaySetInstanceMemoryRequest,
                 DisplayStaticInfoResponseSchema,
                 GspInitRequest,
                 GspInitResponseSchema, //
@@ -331,5 +333,61 @@ impl GmcReply for DisplayHwStaticInfo {
         let mut schema = KBox::init(DisplayStaticInfoResponseSchema::init(), GFP_KERNEL)?;
         let reply = KBox::try_init(decoder.decode(&mut *schema)?, GFP_KERNEL)?;
         Ok(KBox::into_inner(reply))
+    }
+}
+
+pub(crate) struct DisplaySetInstanceMemory {
+    /// The NVKV-encoded request.
+    payload: KVVec<u64>,
+}
+
+#[expect(dead_code)]
+impl DisplaySetInstanceMemory {
+    pub(crate) fn new(address: u64, size: u64) -> Result<Self> {
+        let mut encoder = Encoder::new();
+        DisplaySetInstanceMemoryRequest::new(address, size).encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplaySetInstanceMemory {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplaySetInstanceMemory;
+    type Command = ();
+    type Reply = DisplaySetInstanceMemoryReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplaySetInstanceMemoryReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplaySetInstanceMemory;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        if payload.is_empty() {
+            Ok(Self)
+        } else {
+            Err(EINVAL)
+        }
     }
 }
