@@ -57,9 +57,12 @@ use kernel::{
 };
 
 use crate::{
-    display::hal::disp4::context_dma::{
-        ContextDmaDescriptorId,
-        ContextDmaPool, //
+    display::hal::disp4::{
+        context_dma::{
+            ContextDmaDescriptorId,
+            ContextDmaPool, //
+        },
+        ramht::RamhtPool, //
     },
     gsp::{
         cmdq::Cmdq,
@@ -77,6 +80,7 @@ use crate::{
 };
 
 pub(crate) struct InstanceMemory<'a, 'gpu> {
+    ramht_pool: RamhtPool,
     mapping: BarMapping<'a, 'gpu>,
     context_dma_pool: ContextDmaPool,
 }
@@ -97,6 +101,7 @@ impl<'a, 'gpu> InstanceMemory<'a, 'gpu> {
         mm: &'a Mutex<GpuMm<'gpu>>,
         bar_user: &'a BarUser<'gpu>,
     ) -> Result<Self> {
+        let ramht_pool = RamhtPool::new()?;
         let backing = mm.lock().alloc_vram(Self::INSTANCE_MEMORY_SIZE)?;
         let end = backing
             .address()
@@ -123,6 +128,7 @@ impl<'a, 'gpu> InstanceMemory<'a, 'gpu> {
             })?;
 
         Ok(Self {
+            ramht_pool,
             mapping,
             context_dma_pool,
         })
@@ -142,5 +148,53 @@ impl<'a, 'gpu> InstanceMemory<'a, 'gpu> {
     #[expect(dead_code)]
     pub(crate) fn free_context_dma(&mut self, context_dma: ContextDmaDescriptorId) -> Result {
         self.context_dma_pool.free(context_dma)
+    }
+
+    #[expect(dead_code)]
+    pub(crate) fn bind_context_dma(
+        &mut self,
+        context_dma: ContextDmaDescriptorId,
+        ramht_client_id: u32,
+        display_channel: u32,
+    ) -> Result {
+        self.ramht_pool.bind(
+            &self.mapping,
+            &mut self.context_dma_pool,
+            context_dma,
+            ramht_client_id,
+            display_channel,
+        )
+    }
+
+    #[expect(dead_code)]
+    pub(crate) fn unbind_context_dma(
+        &mut self,
+        context_dma: ContextDmaDescriptorId,
+        ramht_client_id: u32,
+        display_channel: u32,
+    ) -> Result {
+        self.context_dma_pool.lookup(context_dma)?;
+        self.ramht_pool.unbind(
+            &self.mapping,
+            &mut self.context_dma_pool,
+            context_dma.handle,
+            ramht_client_id,
+            display_channel,
+        )
+    }
+
+    /// Removes all bindings after the channel has stopped; this does not wait for hardware.
+    #[expect(dead_code)]
+    pub(crate) fn unbind_all_for_channel(
+        &mut self,
+        ramht_client_id: u32,
+        display_channel: u32,
+    ) -> Result {
+        self.ramht_pool.unbind_all_for_channel(
+            &self.mapping,
+            &mut self.context_dma_pool,
+            ramht_client_id,
+            display_channel,
+        )
     }
 }
