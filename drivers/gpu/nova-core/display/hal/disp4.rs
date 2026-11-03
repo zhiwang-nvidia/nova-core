@@ -2,4 +2,5 @@
 
 //! Display component support for DISP 4.x.
 
+pub(super) mod context_dma;
 pub(super) mod instance_memory;

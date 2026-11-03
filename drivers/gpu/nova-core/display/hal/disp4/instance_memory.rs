@@ -57,6 +57,10 @@ use kernel::{
 };
 
 use crate::{
+    display::hal::disp4::context_dma::{
+        ContextDmaDescriptorId,
+        ContextDmaPool, //
+    },
     gsp::{
         cmdq::Cmdq,
         commands::gmc::DisplaySetInstanceMemory, //
@@ -66,13 +70,15 @@ use crate::{
             BarMapping,
             BarUser, //
         },
+        vram::VramRegion,
         GpuMm, //
     },
     num::IntoSafeCast, //
 };
 
 pub(crate) struct InstanceMemory<'a, 'gpu> {
-    _mapping: BarMapping<'a, 'gpu>,
+    mapping: BarMapping<'a, 'gpu>,
+    context_dma_pool: ContextDmaPool,
 }
 
 impl InstanceMemory<'_, '_> {
@@ -102,6 +108,7 @@ impl<'a, 'gpu> InstanceMemory<'a, 'gpu> {
 
         let backing = Arc::new(backing, GFP_KERNEL)?;
         let region = backing.region(0..backing.size)?;
+        let context_dma_pool = ContextDmaPool::new(region.clone())?;
         let mapping = BarMapping::new(bar_user, mm, region, true)?;
 
         for offset in (0..mapping.size()).step_by(size_of::<u32>()) {
@@ -115,6 +122,25 @@ impl<'a, 'gpu> InstanceMemory<'a, 'gpu> {
                 dev_err!(dev, "SET_INSTANCE_MEMORY failed: {:?}\n", error);
             })?;
 
-        Ok(Self { _mapping: mapping })
+        Ok(Self {
+            mapping,
+            context_dma_pool,
+        })
+    }
+
+    #[expect(dead_code)]
+    pub(crate) fn alloc_context_dma(
+        &mut self,
+        target_region: VramRegion,
+        writable: bool,
+        block_linear: bool,
+    ) -> Result<ContextDmaDescriptorId> {
+        self.context_dma_pool
+            .alloc(&self.mapping, target_region, writable, block_linear)
+    }
+
+    #[expect(dead_code)]
+    pub(crate) fn free_context_dma(&mut self, context_dma: ContextDmaDescriptorId) -> Result {
+        self.context_dma_pool.free(context_dma)
     }
 }
