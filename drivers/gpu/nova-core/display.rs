@@ -2,6 +2,7 @@
 
 //! nova-core display support.
 
+mod hal;
 mod head;
 mod window;
 
@@ -31,6 +32,8 @@ use crate::{
 pub(crate) struct Display<'a, 'gpu> {
     dev: &'a device::Device<device::Bound>,
     cmdq: &'a Cmdq<'gpu>,
+    #[expect(dead_code)]
+    hal: KBox<dyn hal::DisplayHal<'a, 'gpu> + 'a>,
     #[expect(dead_code)]
     spec: Spec,
     #[expect(dead_code)]
@@ -80,11 +83,22 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             }
         }
 
+        let hal =
+            hal::display_hal(caps.display_ip_version, &hw_static_info).inspect_err(|error| {
+                dev_err!(
+                    dev,
+                    "Failed to initialize display HAL (IP {:#010x}): {:?}\n",
+                    caps.display_ip_version,
+                    error,
+                );
+            })?;
+
         cleanup.dismiss();
 
         Ok(Self {
             dev,
             cmdq,
+            hal,
             spec,
             bar_user,
             caps,
