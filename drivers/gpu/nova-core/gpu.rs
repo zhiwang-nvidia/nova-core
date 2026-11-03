@@ -617,6 +617,7 @@ impl<'gpu> Gpu<'gpu> {
             &self.gsp_resources.gsp.cmdq,
             self.spec,
             &self.bar_user,
+            &self.mm,
         )?);
 
         Ok(())

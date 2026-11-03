@@ -9,6 +9,7 @@ mod window;
 use kernel::{
     device,
     prelude::*,
+    sync::Mutex,
     types::ScopeGuard, //
 };
 
@@ -26,7 +27,10 @@ use crate::{
             DisplayHwStaticInfo, //
         },
     },
-    mm::bar_user::BarUser, //
+    mm::{
+        bar_user::BarUser,
+        GpuMm, //
+    },
 };
 
 pub(crate) struct Display<'a, 'gpu> {
@@ -52,6 +56,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         cmdq: &'a Cmdq<'gpu>,
         spec: Spec,
         bar_user: &'a BarUser<'gpu>,
+        mm: &'a Mutex<GpuMm<'gpu>>,
     ) -> Result<Self> {
         let caps = cmdq
             .send_gmc_command(DisplayInit::new()?, |_| Ok(()))
@@ -83,15 +88,22 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             }
         }
 
-        let hal =
-            hal::display_hal(caps.display_ip_version, &hw_static_info).inspect_err(|error| {
-                dev_err!(
-                    dev,
-                    "Failed to initialize display HAL (IP {:#010x}): {:?}\n",
-                    caps.display_ip_version,
-                    error,
-                );
-            })?;
+        let hal = hal::display_hal(
+            dev,
+            cmdq,
+            mm,
+            bar_user,
+            caps.display_ip_version,
+            &hw_static_info,
+        )
+        .inspect_err(|error| {
+            dev_err!(
+                dev,
+                "Failed to initialize display HAL (IP {:#010x}): {:?}\n",
+                caps.display_ip_version,
+                error,
+            );
+        })?;
 
         cleanup.dismiss();
 
@@ -123,8 +135,9 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         cmdq: &'a Cmdq<'gpu>,
         spec: Spec,
         bar_user: &'a BarUser<'gpu>,
+        mm: &'a Mutex<GpuMm<'gpu>>,
     ) -> Result<Self> {
-        Self::new(dev, cmdq, spec, bar_user)
+        Self::new(dev, cmdq, spec, bar_user, mm)
     }
 
     /// Called when nova-drm is unbinding or initialization fails.

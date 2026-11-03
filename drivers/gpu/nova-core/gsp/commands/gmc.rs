@@ -341,7 +341,6 @@ pub(crate) struct DisplaySetInstanceMemory {
     payload: KVVec<u64>,
 }
 
-#[expect(dead_code)]
 impl DisplaySetInstanceMemory {
     pub(crate) fn new(address: u64, size: u64) -> Result<Self> {
         let mut encoder = Encoder::new();
