@@ -41,6 +41,43 @@ pub(crate) struct DisplayShutdownReply;
 /// No NVKV fields are returned in `SET_INSTANCE_MEMORY`.
 pub(crate) struct DisplaySetInstanceMemoryReply;
 
+#[derive(Clone, Copy)]
+#[expect(dead_code)]
+pub(crate) enum DisplayChannelKind {
+    Core,
+    Window,
+    Immediate,
+    Cursor,
+}
+
+impl From<DisplayChannelKind> for u32 {
+    fn from(kind: DisplayChannelKind) -> Self {
+        match kind {
+            DisplayChannelKind::Core => 0,
+            DisplayChannelKind::Window => 1,
+            DisplayChannelKind::Immediate => 2,
+            DisplayChannelKind::Cursor => 3,
+        }
+    }
+}
+
+pub(crate) struct DisplayCreateChannelReply {
+    /// Opaque firmware channel token, consumed by successful `DESTROY_CHANNEL`.
+    pub(crate) channel: u64,
+    /// Native channel class selected for the requested kind.
+    pub(crate) class_id: u32,
+    /// Physical display channel index, used in RAMHT bindings.
+    pub(crate) hardware_index: u32,
+    /// Channel user-register byte offset from the GPU register-aperture base.
+    pub(crate) control_offset: u32,
+    /// Channel user-register aperture size in bytes.
+    pub(crate) control_size: u32,
+    /// Private RM client's low 14 bits, used in RAMHT bindings.
+    pub(crate) ramht_client_id: u32,
+}
+
+pub(crate) struct DisplayDestroyChannelReply;
+
 pub(crate) struct DisplayHwStaticInfo {
     /// Number of physical heads; not necessarily the number of usable heads.
     pub(crate) num_heads: u32,

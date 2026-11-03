@@ -24,6 +24,9 @@ use crate::{
         },
         commands::{
             DisplayCaps,
+            DisplayChannelKind,
+            DisplayCreateChannelReply,
+            DisplayDestroyChannelReply,
             DisplayHwStaticInfo,
             DisplaySetInstanceMemoryReply,
             DisplayShutdownReply,
@@ -32,6 +35,9 @@ use crate::{
         fw::{
             self,
             commands::{
+                DisplayCreateChannelRequest,
+                DisplayCreateChannelResponseSchema,
+                DisplayDestroyChannelRequest,
                 DisplayInitRequest,
                 DisplayInitResponseSchema,
                 DisplaySetInstanceMemoryRequest,
@@ -380,6 +386,128 @@ impl GmcCommand for DisplaySetInstanceMemory {
 
 impl GmcReply for DisplaySetInstanceMemoryReply {
     const COMMAND: GmcCommandId = GmcCommandId::DisplaySetInstanceMemory;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        if payload.is_empty() {
+            Ok(Self)
+        } else {
+            Err(EINVAL)
+        }
+    }
+}
+
+pub(crate) struct DisplayCreateChannel {
+    payload: KVVec<u64>,
+}
+
+#[expect(dead_code)]
+impl DisplayCreateChannel {
+    pub(crate) fn new(
+        kind: DisplayChannelKind,
+        instance: u32,
+        pb_address: u64,
+        pb_size: u64,
+    ) -> Result<Self> {
+        let mut encoder = Encoder::new();
+        DisplayCreateChannelRequest::new(kind, instance, pb_address, pb_size)
+            .encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayCreateChannel {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayCreateChannel;
+    const MAX_REPLY_SIZE: u32 = 4096;
+    type Command = ();
+    type Reply = DisplayCreateChannelReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayCreateChannelReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayCreateChannel;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        let bytes = payload.flush_into_kvec(GFP_KERNEL)?;
+        if bytes.len() > num::u32_as_usize(DisplayCreateChannel::MAX_REPLY_SIZE) {
+            return Err(EINVAL);
+        }
+        let words = nvkv_words(&bytes)?;
+
+        let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
+        let mut schema = KBox::init(DisplayCreateChannelResponseSchema::init(), GFP_KERNEL)?;
+        let reply = KBox::try_init(decoder.decode(&mut *schema)?, GFP_KERNEL)?;
+        Ok(KBox::into_inner(reply))
+    }
+}
+
+pub(crate) struct DisplayDestroyChannel {
+    payload: KVVec<u64>,
+}
+
+#[expect(dead_code)]
+impl DisplayDestroyChannel {
+    pub(crate) fn new(channel: u64) -> Result<Self> {
+        let mut encoder = Encoder::new();
+        DisplayDestroyChannelRequest::new(channel).encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayDestroyChannel {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayDestroyChannel;
+    type Command = ();
+    type Reply = DisplayDestroyChannelReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayDestroyChannelReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayDestroyChannel;
     type InitError = Error;
 
     fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
