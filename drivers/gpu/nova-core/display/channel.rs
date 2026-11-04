@@ -23,6 +23,12 @@
 //! Each GPU has one core channel, shared by all display heads. It carries methods
 //! for head timings, output configuration and window-to-head assignment.
 //! It must be created before window, window immediate and cursor channels.
+//!
+//! # Window Channel
+//!
+//! Each window channel programs the framebuffer for one display window,
+//! including its address, format, size and layout. The core channel assigns the
+//! window to a display head.
 
 use kernel::{
     io::{
@@ -284,6 +290,11 @@ impl<'gpu> ChannelUserArea<'gpu> {
 /// Identifies the core DMA channel in [`Channel`].
 pub(super) struct Core;
 
+/// Identifies a window DMA channel and its hardware window.
+pub(super) struct WindowDma {
+    pub(super) index: u32,
+}
+
 pub(super) struct Channel<'a, 'gpu, T> {
     cmdq: &'a Cmdq<'gpu>,
     pushbuffer: PushBuffer<'a, 'gpu>,
@@ -292,7 +303,6 @@ pub(super) struct Channel<'a, 'gpu, T> {
     user_area_mmio: Option<ChannelUserArea<'gpu>>,
     client_id: u32,
     display_channel: u32,
-    #[expect(dead_code)]
     pub(super) kind: T,
 }
 
@@ -452,5 +462,36 @@ impl<'a, 'gpu> Channel<'a, 'gpu, Core> {
             pushbuffer.size().into_safe_cast(),
         )?;
         self.create_channel_inner(bar, command, info.core_class, info.num_channels, hal)
+    }
+}
+
+impl<'a, 'gpu> Channel<'a, 'gpu, WindowDma> {
+    pub(super) fn new(
+        cmdq: &'a Cmdq<'gpu>,
+        mm: &'a Mutex<GpuMm<'gpu>>,
+        bar_user: &'a BarUser<'gpu>,
+        info: &DisplayHwStaticInfo,
+        index: u32,
+    ) -> Result<Self> {
+        if index >= u32::BITS || info.window_mask & (1 << index) == 0 {
+            return Err(EINVAL);
+        }
+        Self::alloc_channel_buffers(cmdq, mm, bar_user, info, WindowDma { index }, true)
+    }
+
+    pub(super) fn create(
+        &mut self,
+        bar: Bar0<'gpu>,
+        info: &DisplayHwStaticInfo,
+        hal: &mut dyn DisplayHal<'a, 'gpu>,
+    ) -> Result {
+        let pushbuffer = &self.pushbuffer.mapping;
+        let command = DisplayCreateChannel::new(
+            DisplayChannelKind::Window,
+            self.kind.index,
+            pushbuffer.region().address(),
+            pushbuffer.size().into_safe_cast(),
+        )?;
+        self.create_channel_inner(bar, command, info.window_class, info.num_channels, hal)
     }
 }

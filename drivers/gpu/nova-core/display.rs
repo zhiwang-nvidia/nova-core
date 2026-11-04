@@ -9,7 +9,8 @@ mod window;
 
 use channel::{
     Channel,
-    Core, //
+    Core,
+    WindowDma, //
 };
 
 use kernel::{
@@ -43,6 +44,7 @@ use crate::{
 pub(crate) struct Display<'a, 'gpu> {
     dev: &'a device::Device<device::Bound>,
     cmdq: &'a Cmdq<'gpu>,
+    windows: KVec<window::Window<'a, 'gpu>>,
     core_channel: Option<Channel<'a, 'gpu, Core>>,
     hal: KBox<dyn hal::DisplayHal<'a, 'gpu> + 'a>,
     #[expect(dead_code)]
@@ -52,7 +54,6 @@ pub(crate) struct Display<'a, 'gpu> {
     caps: DisplayCaps,
     hw_static_info: DisplayHwStaticInfo,
     heads: KVec<head::Head>,
-    windows: KVec<window::Window>,
 }
 
 impl<'a, 'gpu> Display<'a, 'gpu> {
@@ -89,7 +90,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         let mut windows = KVec::new();
         for id in 0..u32::BITS {
             if hw_static_info.window_mask & (1 << id) != 0 {
-                windows.push(window::Window { id }, GFP_KERNEL)?;
+                windows.push(window::Window::new(id), GFP_KERNEL)?;
             }
         }
 
@@ -115,6 +116,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         Ok(Self {
             dev,
             cmdq,
+            windows,
             core_channel: None,
             hal,
             spec,
@@ -122,7 +124,6 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             caps,
             hw_static_info,
             heads,
-            windows,
         })
     }
 
@@ -154,6 +155,31 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
                 dev_err!(dev, "Failed to create Core channel: {:?}\n", error);
             })?;
 
+        for window in &mut display.windows {
+            let channel = Channel::<WindowDma>::new(
+                cmdq,
+                mm,
+                display.bar_user,
+                &display.hw_static_info,
+                window.id,
+            )?;
+            window.channel = Some(channel);
+        }
+
+        for window in &mut display.windows {
+            let channel = window.channel.as_mut().ok_or(ENODEV)?;
+            channel
+                .create(bar, &display.hw_static_info, &mut *display.hal)
+                .inspect_err(|error| {
+                    dev_err!(
+                        dev,
+                        "Failed to create window channel {}: {:?}\n",
+                        channel.kind.index,
+                        error,
+                    );
+                })?;
+        }
+
         Ok(display)
     }
 
@@ -165,6 +191,20 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
 
 impl Drop for Display<'_, '_> {
     fn drop(&mut self) {
+        for channel in self
+            .windows
+            .iter_mut()
+            .filter_map(|window| window.channel.as_mut())
+        {
+            if let Err(error) = channel.destroy(&mut *self.hal) {
+                dev_err!(
+                    self.dev,
+                    "Failed to destroy window channel {}: {:?}\n",
+                    channel.kind.index,
+                    error,
+                );
+            }
+        }
         if let Some(channel) = self.core_channel.as_mut() {
             if let Err(error) = channel.destroy(&mut *self.hal) {
                 dev_err!(self.dev, "Failed to destroy Core channel: {:?}\n", error);
