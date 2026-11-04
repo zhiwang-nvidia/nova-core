@@ -19,7 +19,10 @@
 //! be bound to the channel through a surface descriptor.
 
 use kernel::{
-    io::Io,
+    io::{
+        poll::read_poll_timeout,
+        Io, //
+    },
     prelude::*,
     ptr::Alignment,
     sizes::SZ_4K,
@@ -27,6 +30,7 @@ use kernel::{
         Arc,
         Mutex, //
     },
+    time::Delta, //
 };
 
 use crate::{
@@ -48,11 +52,13 @@ use crate::{
         },
         GpuMm, //
     },
-    num::IntoSafeCast, //
+    num::IntoSafeCast,
+    sbuffer::SBufferIter, //
 };
 
 use super::hal::{
     DisplayHal,
+    DisplayMethodHal,
     SurfaceDescriptor, //
 };
 
@@ -73,6 +79,18 @@ fn alloc_channel_buffer<'a, 'gpu>(
 /// Command buffer for a display DMA channel.
 pub(super) struct PushBuffer<'a, 'gpu> {
     mapping: BarMapping<'a, 'gpu>,
+    next_write_offset: usize,
+    last_hw_put: usize,
+}
+
+impl PushBuffer<'_, '_> {
+    /// Emit JUMP to zero so hardware GET returns to the start of the pushbuffer.
+    /// Used when the next method packet does not fit in the remaining tail space.
+    const JUMP: u32 = 0x2000_0000;
+
+    /// When the CPU write position is below GET, require a gap greater than five
+    /// words before writing the next packet.
+    const CHASE_PAD: usize = 5 * size_of::<u32>();
 }
 
 impl<'a, 'gpu> PushBuffer<'a, 'gpu> {
@@ -81,9 +99,85 @@ impl<'a, 'gpu> PushBuffer<'a, 'gpu> {
         bar_user: &'a BarUser<'gpu>,
         size: Alignment,
     ) -> Result<Self> {
+        if size.as_usize() < 3 * size_of::<u32>() {
+            return Err(EINVAL);
+        }
+
         Ok(Self {
             mapping: alloc_channel_buffer(mm, bar_user, size)?,
+            next_write_offset: 0,
+            last_hw_put: 0,
         })
+    }
+
+    fn wait_for_space(&mut self, user_area: &ChannelUserArea<'_>, bytes: usize) -> Result {
+        let limit = self.mapping.size() - size_of::<u32>();
+        if bytes > limit {
+            return Err(E2BIG);
+        }
+
+        read_poll_timeout(
+            || {
+                let get: usize = user_area.read_get()?.into_safe_cast();
+                if get >= self.mapping.size() || !get.is_multiple_of(size_of::<u32>()) {
+                    return Err(EIO);
+                }
+
+                if self.next_write_offset < get {
+                    let available = get - self.next_write_offset;
+                    if available > Self::CHASE_PAD && bytes + size_of::<u32>() < available {
+                        return Ok(true);
+                    }
+                } else if bytes <= limit - self.next_write_offset {
+                    return Ok(true);
+                } else if get != 0 {
+                    // GET must leave the old beginning before PUT can wrap to zero.
+                    self.mapping
+                        .try_write32(Self::JUMP, self.next_write_offset)?;
+                    self.write_hw_put(user_area, 0)?;
+                    self.next_write_offset = 0;
+                }
+
+                self.advance(user_area)?;
+                Ok(false)
+            },
+            |ready| *ready,
+            Delta::from_micros(100),
+            Delta::from_secs(5),
+        )?;
+        Ok(())
+    }
+
+    fn emit(&mut self, user_area: &ChannelUserArea<'_>, header: u32, params: &[u32]) -> Result {
+        let bytes = (params.len() + 1) * size_of::<u32>();
+        self.wait_for_space(user_area, bytes)?;
+
+        let mut packet = SBufferIter::new_reader([header.as_bytes(), params.as_bytes()]);
+        let mut offset = self.next_write_offset;
+        while !packet.is_empty() {
+            let mut word = [0; size_of::<u32>()];
+            packet.read_exact(&mut word)?;
+            self.mapping.try_write32(u32::from_le_bytes(word), offset)?;
+            offset += size_of::<u32>();
+        }
+        self.next_write_offset = offset;
+        Ok(())
+    }
+
+    fn write_hw_put(&mut self, user_area: &ChannelUserArea<'_>, put: usize) -> Result {
+        let value = u32::try_from(put).map_err(|_| EOVERFLOW)?;
+        // A BAR1 framebuffer read completes prior CPU writes before publishing PUT.
+        self.mapping.try_read32(0)?;
+        user_area.write_put(value)?;
+        self.last_hw_put = put;
+        Ok(())
+    }
+
+    fn advance(&mut self, user_area: &ChannelUserArea<'_>) -> Result {
+        if self.next_write_offset != self.last_hw_put {
+            self.write_hw_put(user_area, self.next_write_offset)?;
+        }
+        Ok(())
     }
 }
 
@@ -171,12 +265,10 @@ impl<'gpu> ChannelUserArea<'gpu> {
         Ok(Self { bar, offset })
     }
 
-    #[expect(dead_code)]
     fn read_get(&self) -> Result<u32> {
         self.bar.try_read32(self.offset + Self::GET)
     }
 
-    #[expect(dead_code)]
     fn write_put(&self, value: u32) -> Result {
         self.bar.try_write32(value, self.offset + Self::PUT)
     }
@@ -184,7 +276,6 @@ impl<'gpu> ChannelUserArea<'gpu> {
 
 pub(super) struct Channel<'a, 'gpu, T> {
     cmdq: &'a Cmdq<'gpu>,
-    #[expect(dead_code)]
     pushbuffer: PushBuffer<'a, 'gpu>,
     notifier_buffer: Option<NotifierBuffer<'a, 'gpu>>,
     channel_token: Option<u64>,
@@ -226,6 +317,24 @@ impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
             return Err(ENODEV);
         }
         hal.unbind_surface_descriptor(descriptor, self.client_id, self.display_channel)
+    }
+
+    #[expect(dead_code)]
+    pub(super) fn emit(
+        &mut self,
+        hal: &dyn DisplayMethodHal,
+        method: u32,
+        params: &[u32],
+    ) -> Result {
+        let user_area = self.user_area_mmio.as_ref().ok_or(ENODEV)?;
+        let header = hal.encode_method_header(method, params.len())?;
+        self.pushbuffer.emit(user_area, header, params)
+    }
+
+    #[expect(dead_code)]
+    pub(super) fn advance(&mut self) -> Result {
+        let user_area = self.user_area_mmio.as_ref().ok_or(ENODEV)?;
+        self.pushbuffer.advance(user_area)
     }
 
     #[expect(dead_code)]

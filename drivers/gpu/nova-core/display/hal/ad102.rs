@@ -8,8 +8,12 @@ use kernel::{
 
 use crate::{
     display::hal::{
-        disp4::instance_memory::InstanceMemory,
+        disp4::{
+            instance_memory::InstanceMemory,
+            methods, //
+        },
         DisplayHal,
+        DisplayMethodHal,
         SurfaceDescriptor, //
     },
     gsp::{
@@ -61,6 +65,14 @@ impl<'a, 'gpu> Ad102<'a, 'gpu> {
             && info.window_class == NVC67E_WINDOW_CHANNEL_DMA
             && info.immediate_class == NVC67B_WINDOW_IMM_CHANNEL_DMA
             && info.cursor_class == NVC67A_CURSOR_IMM_CHANNEL_PIO
+    }
+}
+
+// TODO: Factor out a common DISP 4.x method HAL when adding support for more
+// DISP 4.x GPUs.
+impl DisplayMethodHal for Ad102<'_, '_> {
+    fn encode_method_header(&self, method: u32, count: usize) -> Result<u32> {
+        methods::encode_method(method, count)
     }
 }
 

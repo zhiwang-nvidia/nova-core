@@ -65,7 +65,11 @@ pub(super) struct SurfaceDescriptor {
     context_dma_descriptor_id: disp4::context_dma::ContextDmaDescriptorId,
 }
 
-pub(super) trait DisplayHal<'a, 'gpu>: Send {
+pub(super) trait DisplayMethodHal {
+    fn encode_method_header(&self, method: u32, count: usize) -> Result<u32>;
+}
+
+pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
     /// Allocate a surface descriptor that associates with a VRAM region.
     fn alloc_surface_descriptor(
         &mut self,
