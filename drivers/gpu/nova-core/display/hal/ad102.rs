@@ -7,15 +7,24 @@ use kernel::{
 };
 
 use crate::{
-    display::hal::{
-        disp4::{
-            instance_memory::InstanceMemory,
-            methods, //
+    display::{
+        channel::{
+            Channel,
+            Core,
+            WindowDma, //
         },
-        DisplayHal,
-        DisplayMethodHal,
-        SurfaceDescriptor, //
+        hal::{
+            disp4::{
+                self,
+                instance_memory::InstanceMemory,
+                methods, //
+            },
+            DisplayHal,
+            DisplayMethodHal,
+            SurfaceDescriptor, //
+        },
     },
+    driver::Bar0,
     gsp::{
         cmdq::Cmdq,
         commands::DisplayHwStaticInfo, //
@@ -79,6 +88,37 @@ impl DisplayMethodHal for Ad102<'_, '_> {
 // TODO: Factor out a common DISP 4.x HAL when adding support for more
 // DISP 4.x GPUs.
 impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
+    fn emit_core_notifier_methods(
+        &self,
+        channel: &mut Channel<'a, 'gpu, Core>,
+        descriptor: Option<SurfaceDescriptor>,
+    ) -> Result {
+        disp4::notifier::emit_core_notifier_methods(self, channel, descriptor)
+    }
+
+    fn emit_window_notifier_methods(
+        &self,
+        channel: &mut Channel<'a, 'gpu, WindowDma>,
+        descriptor: Option<SurfaceDescriptor>,
+    ) -> Result {
+        disp4::notifier::emit_window_notifier_methods(self, channel, descriptor)
+    }
+
+    fn init_core_channel(&self, channel: &mut Channel<'a, 'gpu, Core>, _head_mask: u32) -> Result {
+        self.emit_core_notifier_methods(channel, None)?;
+        channel.advance()
+    }
+
+    fn init_window_channel(
+        &self,
+        channel: &mut Channel<'a, 'gpu, WindowDma>,
+        _bar: Bar0<'_>,
+        _head_mask: u32,
+    ) -> Result {
+        self.emit_window_notifier_methods(channel, None)?;
+        channel.advance()
+    }
+
     fn alloc_surface_descriptor(
         &mut self,
         target_region: VramRegion,

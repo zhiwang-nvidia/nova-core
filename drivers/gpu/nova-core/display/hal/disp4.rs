@@ -6,3 +6,4 @@ pub(super) mod context_dma;
 pub(super) mod instance_memory;
 pub(super) mod methods;
 mod ramht;
+pub(super) mod notifier;

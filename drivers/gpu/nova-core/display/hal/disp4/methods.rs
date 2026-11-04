@@ -2,6 +2,8 @@
 
 //! Common channel method definitions for DISP 4.x.
 //!
+//! Channel methods share compatible definitions across DISP 4.x classes.
+//!
 //! A method packet contains a 32-bit header followed by `count` 32-bit parameter
 //! words. The incrementing METHOD opcode (0) advances the method address by four
 //! bytes for each parameter:
@@ -54,4 +56,20 @@ pub(crate) fn encode_method(method: u32, count: usize) -> Result<u32> {
     }
 
     Ok((count << METHOD_COUNT_SHIFT) | method)
+}
+
+pub(crate) mod core {
+    //! Method definitions shared by DISP 4.x core channels.
+    //!
+    //! These definitions match the C57D, C67D, C77D and C87D class interfaces.
+
+    pub(crate) const SET_CONTEXT_DMA_NOTIFIER: u32 = 0x0208;
+}
+
+pub(crate) mod window {
+    //! Method definitions shared by DISP 4.x window channels.
+    //!
+    //! These definitions match the C57E, C67E and C87E class interfaces.
+
+    pub(crate) const SET_CONTEXT_DMA_NOTIFIER: u32 = 0x021c;
 }

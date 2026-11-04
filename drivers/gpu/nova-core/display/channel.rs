@@ -350,7 +350,6 @@ impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
         hal.unbind_surface_descriptor(descriptor, self.client_id, self.display_channel)
     }
 
-    #[expect(dead_code)]
     pub(super) fn emit(
         &mut self,
         hal: &dyn DisplayMethodHal,
@@ -362,7 +361,6 @@ impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
         self.pushbuffer.emit(user_area, header, params)
     }
 
-    #[expect(dead_code)]
     pub(super) fn advance(&mut self) -> Result {
         let user_area = self.user_area_mmio.as_ref().ok_or(ENODEV)?;
         self.pushbuffer.advance(user_area)
@@ -472,7 +470,8 @@ impl<'a, 'gpu> Channel<'a, 'gpu, Core> {
             pushbuffer.region().address(),
             pushbuffer.size().into_safe_cast(),
         )?;
-        self.create_channel_inner(bar, command, info.core_class, info.num_channels, hal)
+        self.create_channel_inner(bar, command, info.core_class, info.num_channels, hal)?;
+        hal.init_core_channel(self, info.head_mask)
     }
 
     /// Waits for this core channel's hardware state to become idle.
@@ -529,7 +528,8 @@ impl<'a, 'gpu> Channel<'a, 'gpu, WindowDma> {
             pushbuffer.region().address(),
             pushbuffer.size().into_safe_cast(),
         )?;
-        self.create_channel_inner(bar, command, info.window_class, info.num_channels, hal)
+        self.create_channel_inner(bar, command, info.window_class, info.num_channels, hal)?;
+        hal.init_window_channel(self, bar, info.head_mask)
     }
 }
 

@@ -7,6 +7,12 @@ use kernel::{
 };
 
 use crate::{
+    display::channel::{
+        Channel,
+        Core,
+        WindowDma, //
+    },
+    driver::Bar0,
     gsp::{
         cmdq::Cmdq,
         commands::DisplayHwStaticInfo, //
@@ -70,6 +76,29 @@ pub(super) trait DisplayMethodHal {
 }
 
 pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
+    fn init_core_channel(&self, channel: &mut Channel<'a, 'gpu, Core>, head_mask: u32) -> Result;
+
+    fn init_window_channel(
+        &self,
+        channel: &mut Channel<'a, 'gpu, WindowDma>,
+        bar: Bar0<'_>,
+        head_mask: u32,
+    ) -> Result;
+
+    /// Emits core notifier methods using the generation's handle or address methods.
+    fn emit_core_notifier_methods(
+        &self,
+        channel: &mut Channel<'a, 'gpu, Core>,
+        descriptor: Option<SurfaceDescriptor>,
+    ) -> Result;
+
+    /// Emits window notifier methods using the generation's handle or address methods.
+    fn emit_window_notifier_methods(
+        &self,
+        channel: &mut Channel<'a, 'gpu, WindowDma>,
+        descriptor: Option<SurfaceDescriptor>,
+    ) -> Result;
+
     /// Allocate a surface descriptor that associates with a VRAM region.
     fn alloc_surface_descriptor(
         &mut self,

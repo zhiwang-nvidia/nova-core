@@ -5,6 +5,7 @@
 mod channel;
 mod hal;
 mod head;
+mod methods;
 mod window;
 
 use channel::{
