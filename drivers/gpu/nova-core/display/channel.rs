@@ -211,10 +211,23 @@ impl<'a, 'gpu> PushBuffer<'a, 'gpu> {
 pub(super) struct NotifierBuffer<'a, 'gpu> {
     mapping: BarMapping<'a, 'gpu>,
     descriptor: Option<SurfaceDescriptor>,
+    /// Hardware may still write this record, including while a Window image is active.
+    pending: bool,
     binding: Option<(u32, u32)>,
 }
 
+/// The hardware progress needed by a notifier wait.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum NotifierStatus {
+    #[expect(dead_code)]
+    Finished,
+}
+
 impl<'a, 'gpu> NotifierBuffer<'a, 'gpu> {
+    // DISP 4.x and 5.x use a 16-byte notifier with status in word 0, bits 31:30.
+    const STATUS_MASK: u32 = 3 << 30;
+    const STATUS_FINISHED: u32 = 2 << 30;
+
     pub(super) fn new(
         mm: &'a Mutex<GpuMm<'gpu>>,
         bar_user: &'a BarUser<'gpu>,
@@ -223,8 +236,54 @@ impl<'a, 'gpu> NotifierBuffer<'a, 'gpu> {
         Ok(Self {
             mapping: alloc_channel_buffer(mm, bar_user, size)?,
             descriptor: None,
+            pending: false,
             binding: None,
         })
+    }
+
+    pub(super) fn available(&self) -> Result<SurfaceDescriptor> {
+        if self.pending {
+            return Err(EBUSY);
+        }
+        self.descriptor.ok_or(ENODEV)
+    }
+
+    pub(super) fn prepare(&mut self) -> Result<SurfaceDescriptor> {
+        let descriptor = self.available()?;
+        self.mapping.try_write32(0, 0)?;
+        // An UPDATE may still write after a timeout. Only confirmed completion or
+        // retirement permits this record to be reset for another operation.
+        self.pending = true;
+        Ok(descriptor)
+    }
+
+    pub(super) fn wait(&self, expected: NotifierStatus) -> Result {
+        if !self.pending {
+            return Err(EINVAL);
+        }
+        // Hardware writes FINISHED when a core UPDATE method completes with notification enabled.
+        let expected_status = match expected {
+            NotifierStatus::Finished => Self::STATUS_FINISHED,
+        };
+        read_poll_timeout(
+            || {
+                let status = self.mapping.try_read32(0)? & Self::STATUS_MASK;
+                if status == Self::STATUS_MASK {
+                    return Err(EIO);
+                }
+                Ok(status)
+            },
+            |&status| status == expected_status,
+            Delta::from_micros(100),
+            Delta::from_secs(3),
+        )
+        .map(|_| ())
+    }
+
+    /// Allows reuse after completion or retirement has stopped hardware writes.
+    #[expect(dead_code)]
+    pub(super) fn finish(&mut self) {
+        self.pending = false;
     }
 
     fn bind(
@@ -326,6 +385,24 @@ pub(super) struct Channel<'a, 'gpu, T> {
 impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
     pub(super) fn is_created(&self) -> bool {
         self.channel_token.is_some() && self.user_area_mmio.is_some()
+    }
+
+    fn available_notifier(&self) -> Result<SurfaceDescriptor> {
+        if !self.is_created() {
+            return Err(ENODEV);
+        }
+        self.notifier_buffer.as_ref().ok_or(ENODEV)?.available()
+    }
+
+    #[expect(dead_code)]
+    fn prepare_notifier(&mut self) -> Result<SurfaceDescriptor> {
+        self.available_notifier()?;
+        self.notifier_buffer.as_mut().ok_or(ENODEV)?.prepare()
+    }
+
+    #[expect(dead_code)]
+    fn wait_notifier(&self, status: NotifierStatus) -> Result {
+        self.notifier_buffer.as_ref().ok_or(ENODEV)?.wait(status)
     }
 
     /// Binds a surface descriptor to this created channel.
