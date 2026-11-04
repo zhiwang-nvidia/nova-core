@@ -2,6 +2,7 @@
 
 //! nova-core display support.
 
+mod channel;
 mod hal;
 mod head;
 mod window;

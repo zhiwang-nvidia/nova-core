@@ -468,7 +468,6 @@ pub(crate) struct DisplayDestroyChannel {
     payload: KVVec<u64>,
 }
 
-#[expect(dead_code)]
 impl DisplayDestroyChannel {
     pub(crate) fn new(channel: u64) -> Result<Self> {
         let mut encoder = Encoder::new();

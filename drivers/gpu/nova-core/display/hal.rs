@@ -67,7 +67,6 @@ pub(super) struct SurfaceDescriptor {
 
 pub(super) trait DisplayHal<'a, 'gpu>: Send {
     /// Allocate a surface descriptor that associates with a VRAM region.
-    #[expect(dead_code)]
     fn alloc_surface_descriptor(
         &mut self,
         target_region: VramRegion,
@@ -76,7 +75,6 @@ pub(super) trait DisplayHal<'a, 'gpu>: Send {
     ) -> Result<SurfaceDescriptor>;
 
     /// Bind a surface descriptor to a channel.
-    #[expect(dead_code)]
     fn bind_surface_descriptor(
         &mut self,
         descriptor: SurfaceDescriptor,
@@ -85,7 +83,6 @@ pub(super) trait DisplayHal<'a, 'gpu>: Send {
     ) -> Result;
 
     /// Unbind a surface descriptor from a channel.
-    #[expect(dead_code)]
     fn unbind_surface_descriptor(
         &mut self,
         descriptor: SurfaceDescriptor,
@@ -94,7 +91,6 @@ pub(super) trait DisplayHal<'a, 'gpu>: Send {
     ) -> Result;
 
     /// Free a surface descriptor. It must be unbound.
-    #[expect(dead_code)]
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result;
 }
 
