@@ -616,6 +616,7 @@ impl<'gpu> Gpu<'gpu> {
             self.gsp_resources.device.as_ref(),
             &self.gsp_resources.gsp.cmdq,
             self.spec,
+            self.gsp_resources.bar,
             &self.bar_user,
             &self.mm,
         )?);

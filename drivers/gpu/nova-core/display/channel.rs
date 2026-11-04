@@ -17,6 +17,12 @@
 //!
 //! Notification writes are triggered by channel methods, so the buffer must first
 //! be bound to the channel through a surface descriptor.
+//!
+//! # Core Channel
+//!
+//! Each GPU has one core channel, shared by all display heads. It carries methods
+//! for head timings, output configuration and window-to-head assignment.
+//! It must be created before window, window immediate and cursor channels.
 
 use kernel::{
     io::{
@@ -42,6 +48,7 @@ use crate::{
                 DisplayCreateChannel,
                 DisplayDestroyChannel, //
             },
+            DisplayChannelKind,
             DisplayHwStaticInfo, //
         },
     },
@@ -274,6 +281,9 @@ impl<'gpu> ChannelUserArea<'gpu> {
     }
 }
 
+/// Identifies the core DMA channel in [`Channel`].
+pub(super) struct Core;
+
 pub(super) struct Channel<'a, 'gpu, T> {
     cmdq: &'a Cmdq<'gpu>,
     pushbuffer: PushBuffer<'a, 'gpu>,
@@ -337,7 +347,6 @@ impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
         self.pushbuffer.advance(user_area)
     }
 
-    #[expect(dead_code)]
     fn alloc_channel_buffers(
         cmdq: &'a Cmdq<'gpu>,
         mm: &'a Mutex<GpuMm<'gpu>>,
@@ -376,7 +385,6 @@ impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
         })
     }
 
-    #[expect(dead_code)]
     fn create_channel_inner(
         &mut self,
         bar: Bar0<'gpu>,
@@ -406,7 +414,6 @@ impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
         Ok(())
     }
 
-    #[expect(dead_code)]
     pub(super) fn destroy(&mut self, hal: &mut dyn DisplayHal<'a, 'gpu>) -> Result {
         if let Some(channel_token) = self.channel_token.take() {
             self.user_area_mmio = None;
@@ -418,5 +425,32 @@ impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
             notifier_buffer.unbind(hal)?;
         }
         Ok(())
+    }
+}
+
+impl<'a, 'gpu> Channel<'a, 'gpu, Core> {
+    pub(super) fn new(
+        cmdq: &'a Cmdq<'gpu>,
+        mm: &'a Mutex<GpuMm<'gpu>>,
+        bar_user: &'a BarUser<'gpu>,
+        info: &DisplayHwStaticInfo,
+    ) -> Result<Self> {
+        Self::alloc_channel_buffers(cmdq, mm, bar_user, info, Core, true)
+    }
+
+    pub(super) fn create(
+        &mut self,
+        bar: Bar0<'gpu>,
+        info: &DisplayHwStaticInfo,
+        hal: &mut dyn DisplayHal<'a, 'gpu>,
+    ) -> Result {
+        let pushbuffer = &self.pushbuffer.mapping;
+        let command = DisplayCreateChannel::new(
+            DisplayChannelKind::Core,
+            0,
+            pushbuffer.region().address(),
+            pushbuffer.size().into_safe_cast(),
+        )?;
+        self.create_channel_inner(bar, command, info.core_class, info.num_channels, hal)
     }
 }

@@ -401,7 +401,6 @@ pub(crate) struct DisplayCreateChannel {
     payload: KVVec<u64>,
 }
 
-#[expect(dead_code)]
 impl DisplayCreateChannel {
     pub(crate) fn new(
         kind: DisplayChannelKind,

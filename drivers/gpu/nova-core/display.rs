@@ -7,6 +7,11 @@ mod hal;
 mod head;
 mod window;
 
+use channel::{
+    Channel,
+    Core, //
+};
+
 use kernel::{
     device,
     prelude::*,
@@ -15,6 +20,7 @@ use kernel::{
 };
 
 use crate::{
+    driver::Bar0,
     gpu::Spec,
     gsp::{
         cmdq::Cmdq,
@@ -37,15 +43,13 @@ use crate::{
 pub(crate) struct Display<'a, 'gpu> {
     dev: &'a device::Device<device::Bound>,
     cmdq: &'a Cmdq<'gpu>,
-    #[expect(dead_code)]
+    core_channel: Option<Channel<'a, 'gpu, Core>>,
     hal: KBox<dyn hal::DisplayHal<'a, 'gpu> + 'a>,
     #[expect(dead_code)]
     spec: Spec,
-    #[expect(dead_code)]
     bar_user: &'a BarUser<'gpu>,
     #[expect(dead_code)]
     caps: DisplayCaps,
-    #[expect(dead_code)]
     hw_static_info: DisplayHwStaticInfo,
     heads: KVec<head::Head>,
     windows: KVec<window::Window>,
@@ -111,6 +115,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         Ok(Self {
             dev,
             cmdq,
+            core_channel: None,
             hal,
             spec,
             bar_user,
@@ -135,10 +140,21 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         dev: &'a device::Device<device::Bound>,
         cmdq: &'a Cmdq<'gpu>,
         spec: Spec,
+        bar: Bar0<'gpu>,
         bar_user: &'a BarUser<'gpu>,
         mm: &'a Mutex<GpuMm<'gpu>>,
     ) -> Result<Self> {
-        Self::new(dev, cmdq, spec, bar_user, mm)
+        let mut display = Self::new(dev, cmdq, spec, bar_user, mm)?;
+
+        let channel = Channel::<Core>::new(cmdq, mm, display.bar_user, &display.hw_static_info)?;
+        let channel = display.core_channel.insert(channel);
+        channel
+            .create(bar, &display.hw_static_info, &mut *display.hal)
+            .inspect_err(|error| {
+                dev_err!(dev, "Failed to create Core channel: {:?}\n", error);
+            })?;
+
+        Ok(display)
     }
 
     /// Called when nova-drm is unbinding or initialization fails.
@@ -149,6 +165,11 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
 
 impl Drop for Display<'_, '_> {
     fn drop(&mut self) {
+        if let Some(channel) = self.core_channel.as_mut() {
+            if let Err(error) = channel.destroy(&mut *self.hal) {
+                dev_err!(self.dev, "Failed to destroy Core channel: {:?}\n", error);
+            }
+        }
         let _ = Self::clean(self.dev, self.cmdq);
     }
 }
