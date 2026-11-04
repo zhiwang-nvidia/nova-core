@@ -29,6 +29,12 @@
 //! Each window channel programs the framebuffer for one display window,
 //! including its address, format, size and layout. The core channel assigns the
 //! window to a display head.
+//!
+//! # Window Immediate Channel
+//!
+//! Each window immediate channel controls the same window as the window channel
+//! with the matching index. It carries output-position updates and can interlock
+//! with that window channel.
 
 use kernel::{
     io::{
@@ -295,6 +301,10 @@ pub(super) struct WindowDma {
     pub(super) index: u32,
 }
 
+pub(super) struct WindowImmediate {
+    pub(super) index: u32,
+}
+
 pub(super) struct Channel<'a, 'gpu, T> {
     cmdq: &'a Cmdq<'gpu>,
     pushbuffer: PushBuffer<'a, 'gpu>,
@@ -493,5 +503,42 @@ impl<'a, 'gpu> Channel<'a, 'gpu, WindowDma> {
             pushbuffer.size().into_safe_cast(),
         )?;
         self.create_channel_inner(bar, command, info.window_class, info.num_channels, hal)
+    }
+}
+
+impl<'a, 'gpu> Channel<'a, 'gpu, WindowImmediate> {
+    pub(super) fn new(
+        cmdq: &'a Cmdq<'gpu>,
+        mm: &'a Mutex<GpuMm<'gpu>>,
+        bar_user: &'a BarUser<'gpu>,
+        info: &DisplayHwStaticInfo,
+        window: &Channel<'a, 'gpu, WindowDma>,
+    ) -> Result<Self> {
+        Self::alloc_channel_buffers(
+            cmdq,
+            mm,
+            bar_user,
+            info,
+            WindowImmediate {
+                index: window.kind.index,
+            },
+            false,
+        )
+    }
+
+    pub(super) fn create(
+        &mut self,
+        bar: Bar0<'gpu>,
+        info: &DisplayHwStaticInfo,
+        hal: &mut dyn DisplayHal<'a, 'gpu>,
+    ) -> Result {
+        let pushbuffer = &self.pushbuffer.mapping;
+        let command = DisplayCreateChannel::new(
+            DisplayChannelKind::Immediate,
+            self.kind.index,
+            pushbuffer.region().address(),
+            pushbuffer.size().into_safe_cast(),
+        )?;
+        self.create_channel_inner(bar, command, info.immediate_class, info.num_channels, hal)
     }
 }

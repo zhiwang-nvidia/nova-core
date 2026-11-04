@@ -5,7 +5,8 @@
 use super::{
     channel::{
         Channel,
-        WindowDma, //
+        WindowDma,
+        WindowImmediate, //
     },
     Display, //
 };
@@ -13,12 +14,17 @@ use super::{
 /// A display window.
 pub(super) struct Window<'a, 'gpu> {
     pub(super) id: u32,
+    pub(super) immediate_channel: Option<Channel<'a, 'gpu, WindowImmediate>>,
     pub(super) channel: Option<Channel<'a, 'gpu, WindowDma>>,
 }
 
 impl Window<'_, '_> {
     pub(super) fn new(id: u32) -> Self {
-        Self { id, channel: None }
+        Self {
+            id,
+            immediate_channel: None,
+            channel: None,
+        }
     }
 }
 

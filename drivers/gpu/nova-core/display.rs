@@ -10,7 +10,8 @@ mod window;
 use channel::{
     Channel,
     Core,
-    WindowDma, //
+    WindowDma,
+    WindowImmediate, //
 };
 
 use kernel::{
@@ -163,11 +164,20 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
                 &display.hw_static_info,
                 window.id,
             )?;
+            let immediate = Channel::<WindowImmediate>::new(
+                cmdq,
+                mm,
+                display.bar_user,
+                &display.hw_static_info,
+                &channel,
+            )?;
             window.channel = Some(channel);
+            window.immediate_channel = Some(immediate);
         }
 
         for window in &mut display.windows {
             let channel = window.channel.as_mut().ok_or(ENODEV)?;
+            let immediate = window.immediate_channel.as_mut().ok_or(ENODEV)?;
             channel
                 .create(bar, &display.hw_static_info, &mut *display.hal)
                 .inspect_err(|error| {
@@ -175,6 +185,16 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
                         dev,
                         "Failed to create window channel {}: {:?}\n",
                         channel.kind.index,
+                        error,
+                    );
+                })?;
+            immediate
+                .create(bar, &display.hw_static_info, &mut *display.hal)
+                .inspect_err(|error| {
+                    dev_err!(
+                        dev,
+                        "Failed to create window immediate channel {}: {:?}\n",
+                        immediate.kind.index,
                         error,
                     );
                 })?;
@@ -191,6 +211,20 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
 
 impl Drop for Display<'_, '_> {
     fn drop(&mut self) {
+        for channel in self
+            .windows
+            .iter_mut()
+            .filter_map(|window| window.immediate_channel.as_mut())
+        {
+            if let Err(error) = channel.destroy(&mut *self.hal) {
+                dev_err!(
+                    self.dev,
+                    "Failed to destroy window immediate channel {}: {:?}\n",
+                    channel.kind.index,
+                    error,
+                );
+            }
+        }
         for channel in self
             .windows
             .iter_mut()
