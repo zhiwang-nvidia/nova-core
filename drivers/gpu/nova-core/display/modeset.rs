@@ -358,7 +358,11 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
 
         let pending = self.pending_commit.as_ref().ok_or(EIO)?;
         let stream = pending.stream.as_ref().ok_or(EIO)?;
+        let head = self.heads[pending.head_index].id;
         stream.set_monitor_power(self.cmdq, bracket, true)?;
+        self.hal
+            .configure_hdmi_packets(self.bar, head, &configuration.avi_infoframe)?;
+        self.hal.set_hdmi_avmute(self.bar, head, false)?;
         self.cmdq.send_gmc_command(
             DisplayModesetEnd::new(bracket, DisplayModesetEndMode::Commit)?,
             |_| Ok(()),
@@ -424,6 +428,12 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             .filter(|other| other.display_id != display_id && other.sor == stream.sor)
             .fold(0, |mask, other| mask | (1 << other.head));
         let core = self.core_channel.as_mut().ok_or(ENODEV)?;
+        if let Some(head) = head {
+            self.hal.set_hdmi_avmute(self.bar, head, true)?;
+        }
+        if let Some(head) = head {
+            self.hal.disable_hdmi_packets(self.bar, head)?;
+        }
         stream.set_monitor_power(self.cmdq, bracket, false)?;
         if let Some(head) = head {
             self.hal.emit_disable_head(core, self.bar, head)?;
