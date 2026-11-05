@@ -65,6 +65,16 @@ impl NovaCoreApi<'_> {
         self.gpu.display_check_configuration(configuration)
     }
 
+    /// Copies an XRGB8888 image to VRAM and waits until the display starts using it.
+    pub fn display_modeset(&self, configuration: &DisplayConfiguration, pixels: &[u8]) -> Result {
+        self.gpu.display_modeset(configuration, pixels)
+    }
+
+    /// Disables one output and releases resources no longer used by other outputs.
+    pub fn display_disable_output(&self, display_id: u32) -> Result {
+        self.gpu.display_disable_output(display_id)
+    }
+
     /// Returns the GPU [`GspStaticInfo`].
     pub fn gsp_static_info(&self) -> &GspStaticInfo {
         self.gpu.gsp_static_info()

@@ -157,8 +157,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
     }
 
     /// Prepares an unbound framebuffer; failure leaves the current display untouched.
-    #[expect(dead_code)]
-    fn prepare_commit(
+    pub(crate) fn prepare_commit(
         &mut self,
         configuration: &DisplayConfiguration,
         pixels: &[u8],
@@ -220,8 +219,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
     }
 
     /// Retains all referenced resources on failure; the caller must shut down display.
-    #[expect(dead_code)]
-    fn commit(&mut self, commit: DisplayCommit<'a, 'gpu>) -> Result {
+    pub(crate) fn commit(&mut self, commit: DisplayCommit<'a, 'gpu>) -> Result {
         if self.pending_commit.is_some() {
             return Err(EBUSY);
         }
@@ -508,8 +506,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
     }
 
     /// Disables the specified output while preserving resources used by other routes.
-    #[expect(dead_code)]
-    fn disable_output(&mut self, display_id: u32) -> Result {
+    pub(crate) fn disable_output(&mut self, display_id: u32) -> Result {
         if !self
             .streams
             .iter()
@@ -556,6 +553,14 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             .position(|stream| stream.display_id == display_id)
             .ok_or(EIO)?;
         self.streams.remove(index).map_err(|_| EIO)?;
+        Ok(())
+    }
+
+    /// Stops all owned output paths during driver shutdown.
+    pub(super) fn disable_all(&mut self) -> Result {
+        while let Some(stream) = self.streams.first() {
+            self.disable_output(stream.display_id)?;
+        }
         Ok(())
     }
 }

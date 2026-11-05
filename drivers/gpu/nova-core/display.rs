@@ -240,8 +240,10 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
     }
 
     /// Called when nova-drm is unbinding or initialization fails.
-    pub(crate) fn shutdown(self) {
-        drop(self);
+    pub(crate) fn shutdown(mut self) {
+        if let Err(error) = self.disable_all() {
+            dev_err!(self.dev, "Failed to disable display: {:?}\n", error);
+        }
     }
 }
 

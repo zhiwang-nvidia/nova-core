@@ -656,6 +656,32 @@ impl<'gpu> Gpu<'gpu> {
             .map(|_| ())
     }
 
+    pub(crate) fn display_modeset(
+        &self,
+        configuration: &crate::display::DisplayConfiguration,
+        pixels: &[u8],
+    ) -> Result {
+        let display = &mut *self.display.lock();
+        let active = display.as_mut().ok_or(ENODEV)?;
+        let commit = active.prepare_commit(configuration, pixels)?;
+        let result = active.commit(commit);
+        if result.is_err() {
+            // SHUTDOWN handles partial firmware state before its backing is released.
+            display.take();
+        }
+        result
+    }
+
+    pub(crate) fn display_disable_output(&self, display_id: u32) -> Result {
+        let display = &mut *self.display.lock();
+        let active = display.as_mut().ok_or(ENODEV)?;
+        let result = active.disable_output(display_id);
+        if result.is_err() {
+            display.take();
+        }
+        result
+    }
+
     /// Returns the static GPU configuration that GSP-RM reported at boot.
     pub(crate) fn gsp_static_info(&self) -> &gsp::commands::GspStaticInfo {
         self.gsp_resources.static_info()
