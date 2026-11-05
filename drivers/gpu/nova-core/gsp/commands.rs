@@ -215,6 +215,28 @@ impl DisplayGetPortCapsReply {
     }
 }
 
+pub(crate) struct DisplayModesetBeginReply {
+    pub(crate) modeset_id: u64,
+}
+
+/// How to end a GSP-RM modeset bracket.
+#[derive(Clone, Copy)]
+pub(crate) enum DisplayModesetEndMode {
+    /// Ends the bracket after verifying the target set of enabled outputs.
+    #[expect(dead_code)]
+    Commit,
+}
+
+impl From<DisplayModesetEndMode> for u32 {
+    fn from(end_mode: DisplayModesetEndMode) -> Self {
+        match end_mode {
+            DisplayModesetEndMode::Commit => 0,
+        }
+    }
+}
+
+pub(crate) struct DisplayModesetEndReply;
+
 /// The static GPU configuration, which GSP-RM reports in reply to [`GspInit`](gmc::GspInit).
 pub struct GspStaticInfo {
     gpu_name: [u8; Self::MAX_GPU_NAME_LEN],
