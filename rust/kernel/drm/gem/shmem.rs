@@ -24,6 +24,7 @@ use crate::{
     },
     error::{
         from_err_ptr,
+        from_result,
         to_result, //
     },
     io::{
@@ -156,16 +157,11 @@ impl<T: DriverObject> Object<T> {
     }
 
     extern "C" fn free_callback(obj: *mut bindings::drm_gem_object) {
-        // SAFETY:
-        // - DRM always passes a valid gem object here
-        // - We used drm_gem_shmem_create() in our create_gem_object callback, so we know that
-        //   `obj` is contained within a drm_gem_shmem_object
+        // SAFETY: This vtable is installed only after both the shmem object and
+        // all Rust fields of Object<T> have been initialized.
         let base = unsafe { container_of!(obj, bindings::drm_gem_shmem_object, base) };
 
-        // SAFETY:
-        // - We verified above that `obj` is valid, which makes `this` valid
-        // - This function is set in AllocOps, so we know that `this` is contained within an
-        //   `Object<T>`
+        // SAFETY: Our vtable identifies the containing Object<T> allocation.
         let this = unsafe { container_of!(Opaque::cast_from(base), Self, obj) }.cast_mut();
 
         // We need to drop `sgt_res` first, since doing so requires that the GEM object is still
@@ -181,7 +177,7 @@ impl<T: DriverObject> Object<T> {
         // - We won't be using the gem resources on `this` after this call.
         unsafe { bindings::drm_gem_shmem_release(base) };
 
-        // SAFETY: We're recovering the Kbox<> we created in gem_create_object()
+        // SAFETY: The final GEM reference owns the original KBox allocation.
         let _ = unsafe { KBox::from_raw(this) };
     }
 
@@ -382,16 +378,55 @@ impl<T: DriverObject> gem::IntoGEMObject for Object<T> {
     }
 }
 
-impl<T: DriverObject> driver::AllocImpl for Object<T> {
+impl<T: DriverObject> Object<T>
+where
+    T::Args: Default,
+{
+    extern "C" fn alloc_callback(
+        _dev: *mut bindings::drm_device,
+        _size: usize,
+    ) -> *mut bindings::drm_gem_object {
+        // C shmem constructors cannot initialize the Rust object. Use Self::new().
+        EOPNOTSUPP.to_ptr()
+    }
+
+    extern "C" fn dumb_create_callback(
+        file: *mut bindings::drm_file,
+        dev: *mut bindings::drm_device,
+        args: *mut bindings::drm_mode_create_dumb,
+    ) -> core::ffi::c_int {
+        from_result(|| {
+            // SAFETY: DRM supplies this driver's device, file and writable ioctl
+            // arguments. The sizing helper validates pitch and size overflow.
+            to_result(unsafe { bindings::drm_mode_size_dumb(dev, args, 0, 0) })?;
+            // SAFETY: The callback is registered only for T::Driver.
+            let device = unsafe { Device::<T::Driver>::from_raw(dev) };
+            // SAFETY: The sizing helper initialized size, and args is exclusive.
+            let size = usize::try_from(unsafe { (*args).size }).map_err(|_| EOVERFLOW)?;
+            let obj = Self::new(device, size, ObjectConfig::default(), T::Args::default())?;
+            // SAFETY: The new object belongs to this device and file. The output
+            // handle remains valid after the local GEM reference is dropped.
+            to_result(unsafe {
+                bindings::drm_gem_handle_create(file, obj.as_raw(), &raw mut (*args).handle)
+            })?;
+            Ok(0)
+        })
+    }
+}
+
+impl<T: DriverObject> driver::AllocImpl for Object<T>
+where
+    T::Args: Default,
+{
     type Driver = T::Driver;
 
     const ALLOC_OPS: driver::AllocOps = driver::AllocOps {
-        gem_create_object: None,
+        gem_create_object: Some(Self::alloc_callback),
         prime_handle_to_fd: None,
         prime_fd_to_handle: None,
         gem_prime_import: None,
-        gem_prime_import_sg_table: Some(bindings::drm_gem_shmem_prime_import_sg_table),
-        dumb_create: Some(bindings::drm_gem_shmem_dumb_create),
+        gem_prime_import_sg_table: None,
+        dumb_create: Some(Self::dumb_create_callback),
         dumb_map_offset: None,
         #[cfg(CONFIG_RUST_DRM_KMS)]
         fbdev_probe: {
