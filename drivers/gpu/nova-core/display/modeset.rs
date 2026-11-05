@@ -290,6 +290,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         let stream = pending.stream.as_mut().ok_or(EIO)?;
         stream.assign(self.cmdq, bracket)?;
         stream.set_sink_capabilities(self.cmdq, bracket)?;
+        stream.set_tmds_protocol(self.cmdq, bracket)?;
 
         self.cmdq.send_gmc_command(
             DisplayModesetEnd::new(bracket, DisplayModesetEndMode::Commit)?,

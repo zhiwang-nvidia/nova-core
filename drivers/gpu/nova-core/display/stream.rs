@@ -11,6 +11,7 @@ use crate::gsp::{
             DisplayAssignStreamRoute,
             DisplayGetPortCaps,
             DisplayHdmiSetSinkCapabilities,
+            DisplayHdmiSetTmdsProtocol,
             DisplayReleaseStreamRoute, //
         },
         DisplayOutputResourceType, //
@@ -82,6 +83,14 @@ impl Stream {
     pub(super) fn set_sink_capabilities(&self, cmdq: &Cmdq<'_>, bracket: u64) -> Result {
         cmdq.send_gmc_command(
             DisplayHdmiSetSinkCapabilities::new(self.stream_id, bracket, self.hdmi_sink_caps)?,
+            |_| Ok(()),
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn set_tmds_protocol(&self, cmdq: &Cmdq<'_>, bracket: u64) -> Result {
+        cmdq.send_gmc_command(
+            DisplayHdmiSetTmdsProtocol::new(self.stream_id, bracket, true)?,
             |_| Ok(()),
         )?;
         Ok(())
