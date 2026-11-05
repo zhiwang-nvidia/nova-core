@@ -10,6 +10,7 @@ mod head;
 mod methods;
 mod mode;
 mod scaler;
+mod sor;
 mod tables;
 mod window;
 

@@ -34,6 +34,7 @@ use crate::{
         },
         mode::DisplayMode,
         scaler,
+        sor,
         DisplayPixelFormat, //
     },
     driver::Bar0,
@@ -57,6 +58,9 @@ const NVC77D_CORE_CHANNEL_DMA: u32 = 0xc77d;
 const NVC67E_WINDOW_CHANNEL_DMA: u32 = 0xc67e;
 const NVC67B_WINDOW_IMM_CHANNEL_DMA: u32 = 0xc67b;
 const NVC67A_CURSOR_IMM_CHANNEL_PIO: u32 = 0xc67a;
+
+// The current Ada HAL uses four SORs; the implemented count is device-specific.
+const SOR_COUNT: u32 = 4;
 
 pub(super) struct Ad102<'a, 'gpu> {
     instance_memory: InstanceMemory<'a, 'gpu>,
@@ -242,6 +246,19 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
         let caps = capability::read_postcomp_caps(bar, head.into_safe_cast())?;
         self.emit_disable_head_methods(core, head, caps)?;
         disp4::head::emit_head_display_id_methods(self, core, head, 0)
+    }
+
+    fn emit_sor_control(
+        &self,
+        core: &mut Channel<'a, 'gpu, Core>,
+        sor: u32,
+        rm_protocol: u32,
+        head_mask: u32,
+    ) -> Result {
+        if sor >= SOR_COUNT {
+            return Err(EINVAL);
+        }
+        sor::emit_sor_control_methods(self, core, sor, rm_protocol, head_mask)
     }
 
     /// Emits methods to configure head timing, viewport and output color.

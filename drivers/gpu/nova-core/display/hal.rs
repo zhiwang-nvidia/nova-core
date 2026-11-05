@@ -142,6 +142,19 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
         head: u32,
     ) -> Result;
 
+    /// Queues a SOR's head owner mask and output protocol.
+    ///
+    /// The caller preserves any remaining owners. An empty mask detaches the SOR
+    /// and ignores `rm_protocol`. Submit a core UPDATE with the corresponding head changes.
+    #[expect(dead_code)]
+    fn emit_sor_control(
+        &self,
+        core: &mut Channel<'a, 'gpu, Core>,
+        sor: u32,
+        rm_protocol: u32,
+        head_mask: u32,
+    ) -> Result;
+
     /// Emits methods to configure head timing, viewport and output color.
     #[expect(dead_code)]
     fn emit_head_configuration(

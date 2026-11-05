@@ -7,6 +7,11 @@ pub(crate) mod core {
 
     pub(crate) const SET_NOTIFIER_CONTROL: u32 = 0x020c;
     pub(crate) const SET_NOTIFIER_CONTROL_NOTIFY_ENABLE: u32 = 1 << 12;
+    // SOR control addresses and the TMDS protocol encodings match DISP 4.x and 5.x.
+    pub(crate) const SOR_SET_CONTROL: u32 = 0x0300;
+    pub(crate) const SOR_STRIDE: u32 = 0x0020;
+    pub(crate) const SOR_SET_CONTROL_PROTOCOL_SINGLE_TMDS_A: u32 = 1 << 8;
+    pub(crate) const SOR_SET_CONTROL_PROTOCOL_SINGLE_TMDS_B: u32 = 2 << 8;
     // Window ownership and usage fields match DISP 4.x and 5.x core classes.
     pub(crate) const HEAD_COUNT: u32 = 8;
     pub(crate) const WINDOW_COUNT: u32 = 32;
