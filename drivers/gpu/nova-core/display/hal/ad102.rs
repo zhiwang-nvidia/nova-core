@@ -133,6 +133,10 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
         if caps.sclr_present() && !scaler::has_postcomp_scaler(bar, head_mask)? {
             disp4::scaler::emit_precomp_scaler_coeffs_methods(self, channel)?;
         }
+
+        if caps.csc0lut_present() && caps.csc1lut_present() {
+            methods::csc::emit_csc_lut_methods(self, channel)?;
+        }
         channel.advance()
     }
 

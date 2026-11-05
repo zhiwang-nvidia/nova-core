@@ -28,6 +28,8 @@
 
 use kernel::prelude::*;
 
+pub(crate) mod csc;
+
 /// Hardware reads bits 27:18 to know how many parameter words follow the header.
 /// Shift the count into that field when encoding a method packet.
 const METHOD_COUNT_SHIFT: u32 = 18;
@@ -79,4 +81,9 @@ pub(crate) mod window {
 
     pub(crate) const SET_CONTEXT_DMA_NOTIFIER: u32 = 0x021c;
     pub(crate) const SET_INPUT_SCALER_COEFF_VALUE: u32 = 0x02ac;
+    pub(crate) const SET_CSC0LUT_SEGMENT_SIZE: u32 = 0x04a4;
+    pub(crate) const SET_CSC0LUT_ENTRY: u32 = 0x04a8;
+    pub(crate) const SET_CSC1LUT_SEGMENT_SIZE: u32 = 0x0584;
+    pub(crate) const SET_CSC1LUT_ENTRY: u32 = 0x0588;
+    pub(crate) const LUT_VALUE_SHIFT: u32 = 16;
 }
