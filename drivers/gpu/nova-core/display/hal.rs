@@ -11,7 +11,8 @@ use crate::{
         channel::{
             Channel,
             Core,
-            WindowDma, //
+            WindowDma,
+            WindowImmediate, //
         },
         mode::DisplayMode,
         DisplayPixelFormat, //
@@ -101,6 +102,21 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
         &self,
         channel: &mut Channel<'a, 'gpu, WindowDma>,
         descriptor: Option<SurfaceDescriptor>,
+    ) -> Result;
+
+    /// Emits the window UPDATE sequence, including any class-specific transition methods.
+    #[expect(dead_code)]
+    fn emit_window_update(
+        &self,
+        window: &mut Channel<'a, 'gpu, WindowDma>,
+        interlock_immediate: bool,
+    ) -> Result;
+
+    /// Emits an immediate UPDATE with the flags supported by its class.
+    #[expect(dead_code)]
+    fn emit_window_immediate_update(
+        &self,
+        immediate: &mut Channel<'a, 'gpu, WindowImmediate>,
     ) -> Result;
 
     /// Allocate a surface descriptor that associates with a VRAM region.

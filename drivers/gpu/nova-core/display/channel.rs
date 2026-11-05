@@ -76,10 +76,16 @@ use crate::{
     sbuffer::SBufferIter, //
 };
 
-use super::hal::{
-    DisplayHal,
-    DisplayMethodHal,
-    SurfaceDescriptor, //
+use super::{
+    hal::{
+        DisplayHal,
+        DisplayMethodHal,
+        SurfaceDescriptor, //
+    },
+    methods::{
+        core as core_methods,
+        window as window_methods, //
+    }, //
 };
 
 fn alloc_channel_buffer<'a, 'gpu>(
@@ -474,6 +480,31 @@ impl<'a, 'gpu> Channel<'a, 'gpu, Core> {
         hal.init_core_channel(self, info.head_mask)
     }
 
+    /// Emits core interlock methods for the participating window mask.
+    #[expect(dead_code)]
+    pub(super) fn emit_interlock_methods(
+        &mut self,
+        hal: &dyn DisplayMethodHal,
+        window_mask: u32,
+    ) -> Result {
+        self.emit(hal, core_methods::SET_INTERLOCK_FLAGS, &[0])?;
+        self.emit(
+            hal,
+            core_methods::SET_WINDOW_INTERLOCK_FLAGS,
+            &[window_mask],
+        )
+    }
+
+    /// Emits the core UPDATE method.
+    #[expect(dead_code)]
+    pub(super) fn emit_update_methods(&mut self, hal: &dyn DisplayMethodHal) -> Result {
+        self.emit(
+            hal,
+            core_methods::UPDATE,
+            &[core_methods::UPDATE_RELEASE_ELV],
+        )
+    }
+
     /// Waits for this core channel's hardware state to become idle.
     ///
     /// DISP 4.x and 5.x share the core channel state register layout and idle
@@ -530,6 +561,26 @@ impl<'a, 'gpu> Channel<'a, 'gpu, WindowDma> {
         )?;
         self.create_channel_inner(bar, command, info.window_class, info.num_channels, hal)?;
         hal.init_window_channel(self, bar, info.head_mask)
+    }
+
+    /// Emits window interlock methods to participate in a core update.
+    #[expect(dead_code)]
+    pub(super) fn emit_interlock_methods(
+        &mut self,
+        hal: &dyn DisplayMethodHal,
+        window_mask: u32,
+    ) -> Result {
+        self.emit(
+            hal,
+            window_methods::SET_INTERLOCK_FLAGS,
+            &[window_methods::SET_INTERLOCK_FLAGS_INTERLOCK_WITH_CORE],
+        )?;
+        // NVKMS includes this window itself in the participating window mask.
+        self.emit(
+            hal,
+            window_methods::SET_WINDOW_INTERLOCK_FLAGS,
+            &[window_mask],
+        )
     }
 }
 

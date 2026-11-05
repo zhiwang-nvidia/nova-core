@@ -12,7 +12,8 @@ use crate::{
         channel::{
             Channel,
             Core,
-            WindowDma, //
+            WindowDma,
+            WindowImmediate, //
         },
         hal::{
             disp4::{
@@ -20,6 +21,7 @@ use crate::{
                 instance_memory::InstanceMemory,
                 methods::{
                     self,
+                    c67b,
                     c67e,
                     c77d,
                     core as core_methods,
@@ -32,6 +34,7 @@ use crate::{
             DisplayMethodHal,
             SurfaceDescriptor, //
         },
+        methods as common_methods,
         mode::DisplayMode,
         scaler,
         sor,
@@ -157,6 +160,31 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
         descriptor: Option<SurfaceDescriptor>,
     ) -> Result {
         disp4::notifier::emit_window_notifier_methods(self, channel, descriptor)
+    }
+
+    fn emit_window_update(
+        &self,
+        window: &mut Channel<'a, 'gpu, WindowDma>,
+        interlock_immediate: bool,
+    ) -> Result {
+        // C67E needs no NULL-image transition workaround; C57E requires additional methods.
+        let mut data = common_methods::window::UPDATE_RELEASE_ELV;
+        if interlock_immediate {
+            data |= common_methods::window::UPDATE_INTERLOCK_WITH_WIN_IMM;
+        }
+        window.emit(self, common_methods::window::UPDATE, &[data])
+    }
+
+    fn emit_window_immediate_update(
+        &self,
+        immediate: &mut Channel<'a, 'gpu, WindowImmediate>,
+    ) -> Result {
+        // C57B/C67B define RELEASE_ELV; C87B and DISP 5.x immediate classes omit it.
+        immediate.emit(
+            self,
+            c67b::UPDATE,
+            &[c67b::UPDATE_RELEASE_ELV | c67b::UPDATE_INTERLOCK_WITH_WINDOW],
+        )
     }
 
     fn init_core_channel(&self, channel: &mut Channel<'a, 'gpu, Core>, head_mask: u32) -> Result {

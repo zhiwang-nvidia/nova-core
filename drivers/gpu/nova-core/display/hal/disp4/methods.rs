@@ -28,6 +28,7 @@
 
 use kernel::prelude::*;
 
+pub(crate) mod c67b;
 pub(crate) mod c67e;
 pub(crate) mod c77d;
 pub(crate) mod csc;
