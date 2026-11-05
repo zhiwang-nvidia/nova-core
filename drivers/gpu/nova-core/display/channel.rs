@@ -189,11 +189,45 @@ pub(super) struct Channel<'a, 'gpu, T> {
     notifier_buffer: Option<NotifierBuffer<'a, 'gpu>>,
     channel_token: Option<u64>,
     user_area_mmio: Option<ChannelUserArea<'gpu>>,
+    client_id: u32,
+    display_channel: u32,
     #[expect(dead_code)]
     pub(super) kind: T,
 }
 
 impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
+    pub(super) fn is_created(&self) -> bool {
+        self.channel_token.is_some() && self.user_area_mmio.is_some()
+    }
+
+    /// Binds a surface descriptor to this created channel.
+    #[expect(dead_code)]
+    pub(super) fn bind_surface_descriptor(
+        &self,
+        hal: &mut dyn DisplayHal<'a, 'gpu>,
+        descriptor: SurfaceDescriptor,
+    ) -> Result {
+        if !self.is_created() {
+            return Err(ENODEV);
+        }
+        hal.bind_surface_descriptor(descriptor, self.client_id, self.display_channel)
+    }
+
+    /// Unbinds a surface after its channel accesses have completed.
+    ///
+    /// Runtime surface bindings must be removed before destroying the channel.
+    #[expect(dead_code)]
+    pub(super) fn unbind_surface_descriptor(
+        &self,
+        hal: &mut dyn DisplayHal<'a, 'gpu>,
+        descriptor: SurfaceDescriptor,
+    ) -> Result {
+        if !self.is_created() {
+            return Err(ENODEV);
+        }
+        hal.unbind_surface_descriptor(descriptor, self.client_id, self.display_channel)
+    }
+
     #[expect(dead_code)]
     fn alloc_channel_buffers(
         cmdq: &'a Cmdq<'gpu>,
@@ -227,6 +261,8 @@ impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
             notifier_buffer,
             channel_token: None,
             user_area_mmio: None,
+            client_id: 0,
+            display_channel: 0,
             kind,
         })
     }
@@ -253,8 +289,10 @@ impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
             reply.control_offset,
             reply.control_size,
         )?);
+        self.client_id = reply.ramht_client_id;
+        self.display_channel = reply.hardware_index;
         if let Some(notifier_buffer) = self.notifier_buffer.as_mut() {
-            notifier_buffer.bind(hal, reply.ramht_client_id, reply.hardware_index)?;
+            notifier_buffer.bind(hal, self.client_id, self.display_channel)?;
         }
         Ok(())
     }
