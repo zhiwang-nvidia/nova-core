@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include <drm/drm_atomic.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_vma_manager.h>
 
 #ifdef CONFIG_DRM
+
+__rust_helper bool
+rust_helper_drm_atomic_crtc_needs_modeset(const struct drm_crtc_state *state)
+{
+	return drm_atomic_crtc_needs_modeset(state);
+}
 
 __rust_helper void rust_helper_drm_gem_object_get(struct drm_gem_object *obj)
 {

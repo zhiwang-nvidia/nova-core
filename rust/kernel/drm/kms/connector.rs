@@ -5,14 +5,20 @@
 //! C header: [`include/drm/drm_connector.h`](srctree/include/drm/drm_connector.h)
 
 use super::{
-    atomic::*, encoder::*, KmsDriver, ModeConfigGuard, ModeObject, ModeObjectVtable, RcModeObject,
+    atomic::*,
+    crtc::{AsRawCrtc, OpaqueCrtc},
+    encoder::*,
+    KmsDriver, ModeConfigGuard, ModeObject, ModeObjectVtable, RcModeObject,
 };
 use crate::{
     alloc::KBox,
     bindings,
     drm::private::Sealed,
     drm::{device::Device, kms::UnregisteredKmsDevice},
-    error::to_result,
+    error::{
+        from_err_ptr,
+        to_result, //
+    },
     prelude::*,
     types::{NotThreadSafe, Opaque},
 };
@@ -75,6 +81,48 @@ declare_conn_types! {
     USB         as Usb
 }
 
+/// Result of sink detection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectionStatus {
+    /// A sink was detected.
+    Connected,
+    /// No sink was detected.
+    Disconnected,
+    /// Detection could not establish the connection state.
+    Unknown,
+}
+
+impl ConnectionStatus {
+    fn raw(self) -> bindings::drm_connector_status {
+        match self {
+            Self::Connected => bindings::drm_connector_status_connector_status_connected,
+            Self::Disconnected => bindings::drm_connector_status_connector_status_disconnected,
+            Self::Unknown => bindings::drm_connector_status_connector_status_unknown,
+        }
+    }
+}
+
+/// Connector mode-validation outcomes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModeStatus {
+    /// The connector can use this mode.
+    Ok,
+    /// The mode violates a source or sink constraint.
+    Bad,
+    /// Validation failed for another reason.
+    Error,
+}
+
+impl ModeStatus {
+    fn raw(self) -> bindings::drm_mode_status {
+        match self {
+            Self::Ok => bindings::drm_mode_status_MODE_OK,
+            Self::Bad => bindings::drm_mode_status_MODE_BAD,
+            Self::Error => bindings::drm_mode_status_MODE_ERROR,
+        }
+    }
+}
+
 /// The main trait for implementing the [`struct drm_connector`] API for [`Connector`].
 ///
 /// Any KMS driver should have at least one implementation of this type, which allows them to create
@@ -111,14 +159,22 @@ pub trait DriverConnector: Send + Sync + Sized {
             atomic_destroy_state: Some(atomic_destroy_state_callback::<Self::State>),
             destroy: Some(connector_destroy_callback::<Self>),
             force: None,
-            detect: None,
+            detect: if Self::HAS_DETECT {
+                Some(detect_callback::<Self>)
+            } else {
+                None
+            },
             fill_modes: Some(bindings::drm_helper_probe_single_connector_modes),
             debugfs_init: None,
             oob_hotplug_event: None,
             atomic_duplicate_state: Some(atomic_duplicate_state_callback::<Self::State>),
         },
         helper_funcs: bindings::drm_connector_helper_funcs {
-            mode_valid: None,
+            mode_valid: if Self::HAS_MODE_VALID {
+                Some(mode_valid_callback::<Self>)
+            } else {
+                None
+            },
             atomic_check: None,
             get_modes: Some(get_modes_callback::<Self>),
             detect_ctx: None,
@@ -153,9 +209,25 @@ pub trait DriverConnector: Send + Sync + Sized {
     /// Drivers may use this to instantiate their [`DriverConnector`] object.
     fn new(device: &Device<Self::Driver>, args: Self::Args) -> impl PinInit<Self, Error>;
 
+    /// Detect a sink. DRM reports an error as an unknown connection state.
+    fn detect(_connector: &Connector<Self>, _force: bool) -> Result<ConnectionStatus> {
+        build_error::build_error("This should not be reachable")
+    }
+
+    /// Filter probed modes while DRM holds the connection mutex.
+    ///
+    /// Atomic checking must also enforce source constraints: userspace may
+    /// request modes that do not appear in the probed list.
+    fn mode_valid(
+        _connector: ConnectorDisplayGuard<'_, Self>,
+        _mode: &bindings::drm_display_mode,
+    ) -> ModeStatus {
+        build_error::build_error("This should not be reachable")
+    }
+
     /// Retrieve a list of available display modes for this [`Connector`].
     fn get_modes<'a>(
-        connector: ConnectorGuard<'a, Self>,
+        connector: ConnectorProbeGuard<'a, Self>,
         guard: &ModeConfigGuard<'a, Self::Driver>,
     ) -> i32;
 }
@@ -461,19 +533,55 @@ unsafe extern "C" fn connector_destroy_callback<T: DriverConnector>(
 /// # Safety
 ///
 /// `connector` must belong to a live `Connector<T>` and DRM must hold its parent
-/// mode-config mutex for the duration of this callback.
+/// mode-config and connection mutexes for the duration of this callback.
 unsafe extern "C" fn get_modes_callback<T: DriverConnector>(
     connector: *mut bindings::drm_connector,
-) -> core::ffi::c_int {
+) -> c_int {
     // SAFETY: This is safe via `DriverConnector`s type invariants.
     let connector = unsafe { Connector::<T>::from_raw(connector) };
 
-    // SAFETY: This FFI callback is only called while `mode_config.lock` is held
+    // SAFETY: This FFI callback is only called while `mode_config.mutex` is held.
     // We use ManuallyDrop here to prevent the lock from being released after the callback
     // completes, as that should be handled by DRM.
     let guard = ManuallyDrop::new(unsafe { ModeConfigGuard::new(connector.drm_dev()) });
 
-    T::get_modes(connector.guard(&guard), &guard)
+    T::get_modes(
+        ConnectorProbeGuard {
+            modes: connector.guard(&guard),
+            // SAFETY: The get_modes callback retains connection_mutex.
+            display: unsafe { ConnectorDisplayGuard::new(connector) },
+        },
+        &guard,
+    )
+}
+
+/// # Safety
+///
+/// DRM must retain a live `Connector<T>` for this detection callback.
+unsafe extern "C" fn detect_callback<T: DriverConnector>(
+    connector: *mut bindings::drm_connector,
+    force: bool,
+) -> bindings::drm_connector_status {
+    // SAFETY: The callback's vtable identifies the connector as Connector<T>.
+    T::detect(unsafe { Connector::<T>::from_raw(connector) }, force)
+        .unwrap_or(ConnectionStatus::Unknown)
+        .raw()
+}
+
+/// # Safety
+///
+/// DRM must retain a live `Connector<T>` and initialized mode while holding
+/// connection_mutex for this callback.
+unsafe extern "C" fn mode_valid_callback<T: DriverConnector>(
+    connector: *mut bindings::drm_connector,
+    mode: *const bindings::drm_display_mode,
+) -> bindings::drm_mode_status {
+    // SAFETY: The callback's vtable identifies the connector as Connector<T>.
+    let connector = unsafe { Connector::<T>::from_raw(connector) };
+    // SAFETY: The mode_valid helper contract retains connection_mutex.
+    let connector = unsafe { ConnectorDisplayGuard::new(connector) };
+    // SAFETY: DRM retains the initialized mode for this callback.
+    T::mode_valid(connector, unsafe { &*mode }).raw()
 }
 
 /// A [`struct drm_connector`] without a known [`DriverConnector`] implementation.
@@ -588,6 +696,89 @@ impl<'a, T: DriverConnector> ConnectorGuard<'a, T> {
     }
 }
 
+/// A connector borrowed under its device's connection modeset lock.
+///
+/// All EDID updates exposed by this module also require the mode-config mutex.
+/// Atomic checks can therefore read sink information under connection_mutex
+/// without taking mode_config.mutex in the reverse order.
+///
+/// # Invariants
+///
+/// The current task holds connection_mutex throughout the borrow.
+pub struct ConnectorDisplayGuard<'a, T: DriverConnector> {
+    connector: &'a Connector<T>,
+    _not_send: NotThreadSafe,
+}
+
+impl<'a, T: DriverConnector> ConnectorDisplayGuard<'a, T> {
+    /// # Safety
+    ///
+    /// The current task must retain the connector's connection_mutex for `'a`.
+    unsafe fn new(connector: &'a Connector<T>) -> Self {
+        Self {
+            connector,
+            _not_send: NotThreadSafe,
+        }
+    }
+}
+
+impl<T: DriverConnector> Deref for ConnectorDisplayGuard<'_, T> {
+    type Target = Connector<T>;
+
+    fn deref(&self) -> &Self::Target {
+        self.connector
+    }
+}
+
+/// A mode-probe callback's connector under both mode-config and connection locks.
+pub struct ConnectorProbeGuard<'a, T: DriverConnector> {
+    modes: ConnectorGuard<'a, T>,
+    display: ConnectorDisplayGuard<'a, T>,
+}
+
+impl<'a, T: DriverConnector> Deref for ConnectorProbeGuard<'a, T> {
+    type Target = ConnectorGuard<'a, T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.modes
+    }
+}
+
+impl<T: DriverConnector> ConnectorProbeGuard<'_, T> {
+    /// Borrow sink information protected by this probe's connection lock.
+    pub fn display(&self) -> &ConnectorDisplayGuard<'_, T> {
+        &self.display
+    }
+}
+
+impl<T: KmsDriver> AtomicStateComposer<T> {
+    /// Add this connector to the candidate and borrow its sink information.
+    ///
+    /// The atomic acquisition context retains connection_mutex. A lock-order
+    /// conflict returns EDEADLK to the caller's ordinary atomic retry path.
+    /// This does not acquire mode_config.mutex.
+    pub fn connector_display<'a, C>(
+        &'a self,
+        connector: &'a Connector<C>,
+    ) -> Result<ConnectorDisplayGuard<'a, C>>
+    where
+        C: DriverConnector<Driver = T>,
+    {
+        if self.drm_dev().as_raw() != connector.drm_dev().as_raw() {
+            return Err(EINVAL);
+        }
+        // SAFETY: Both objects belong to the same device. The composer carries
+        // a live acquisition context; this call adds connector state and acquires
+        // connection_mutex, without borrowing or changing its Rust private data.
+        from_err_ptr(unsafe {
+            bindings::drm_atomic_get_connector_state(self.as_raw(), connector.as_raw())
+        })?;
+        // SAFETY: Success above retains connection_mutex in the composer's
+        // acquisition context, which is borrowed for the returned guard's lifetime.
+        Ok(unsafe { ConnectorDisplayGuard::new(connector) })
+    }
+}
+
 /// A trait implemented by any type which can produce a reference to a
 /// [`struct drm_connector_state`].
 ///
@@ -668,6 +859,19 @@ pub trait RawConnectorState: AsRawConnectorState {
         // SAFETY: This is guaranteed safe by type invariance, and we're guaranteed by DRM that
         // `self.state.connector` points to a valid instance of a `Connector<T>`
         unsafe { Self::Connector::from_raw(self.as_raw().connector) }
+    }
+
+    /// Return the CRTC selected by this connector state.
+    fn crtc<D>(&self) -> Option<&OpaqueCrtc<D>>
+    where
+        Self::Connector: ModeObject<Driver = D>,
+        D: KmsDriver,
+    {
+        NonNull::new(self.as_raw().crtc).map(|crtc| {
+            // SAFETY: A connector state references a live CRTC from the same
+            // device, and the returned borrow cannot outlive that state.
+            unsafe { OpaqueCrtc::from_raw(crtc.as_ptr()) }
+        })
     }
 }
 impl<T: AsRawConnectorState> RawConnectorState for T {}

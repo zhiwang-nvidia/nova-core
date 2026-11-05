@@ -5,7 +5,15 @@
 //! C header: [`include/drm/drm_framebuffer.h`](srctree/include/drm/drm_framebuffer.h)
 
 use super::{KmsDriver, ModeObject, RcModeObject};
-use crate::{drm::device::Device, types::*};
+use crate::{
+    drm::{
+        device::Device,
+        driver::AllocImpl,
+        gem::IntoGEMObject, //
+    },
+    prelude::*,
+    types::*, //
+};
 use bindings;
 use core::{marker::*, ptr};
 
@@ -58,7 +66,78 @@ impl<T: KmsDriver> PartialEq for Framebuffer<T> {
 }
 impl<T: KmsDriver> Eq for Framebuffer<T> {}
 
+/// Immutable storage information for one framebuffer plane.
+#[derive(Clone, Copy, Debug)]
+pub struct PlaneLayout {
+    /// Framebuffer width in pixels.
+    pub width: u32,
+    /// Framebuffer height in pixels.
+    pub height: u32,
+    /// DRM fourcc pixel format.
+    pub format: u32,
+    /// DRM format modifier.
+    pub modifier: u64,
+    /// Number of storage planes described by the format.
+    pub num_planes: u8,
+    /// Byte stride for this storage plane.
+    pub pitch: u32,
+    /// Byte offset within this plane's GEM object.
+    pub offset: u32,
+}
+
 impl<T: KmsDriver> Framebuffer<T> {
+    /// Borrow the GEM object backing a framebuffer storage plane.
+    pub fn gem_object(&self, plane: usize) -> Result<&T::Object>
+    where
+        T::Object: AllocImpl<Driver = T>,
+    {
+        let fb = self.0.get();
+        // SAFETY: Framebuffer format and object pointers are initialized before
+        // publication and stay immutable while the framebuffer is referenced.
+        let format = unsafe { &*(*fb).format };
+        if plane >= usize::from(format.num_planes) {
+            return Err(EINVAL);
+        }
+        // SAFETY: The framebuffer retains every object in this immutable array.
+        let obj = unsafe { &(*fb).obj }.get(plane).copied().ok_or(EINVAL)?;
+        if obj.is_null() {
+            return Err(ENOENT);
+        }
+        // SAFETY: KmsDriver uses the GEM framebuffer helper and this driver has
+        // one GEM allocation implementation, including PRIME imports. The
+        // framebuffer owns the reference throughout the returned borrow.
+        Ok(unsafe { T::Object::from_raw(obj) })
+    }
+
+    /// Return the immutable layout of a framebuffer storage plane.
+    pub fn plane_layout(&self, plane: usize) -> Result<PlaneLayout> {
+        let fb = self.0.get();
+        // SAFETY: DRM initializes the immutable format before publishing a framebuffer.
+        let format = unsafe { &*(*fb).format };
+        // SAFETY: The immutable pitch array remains valid while this framebuffer is borrowed.
+        let pitches = unsafe { &(*fb).pitches };
+        // SAFETY: The immutable offset array has the same lifetime and bound.
+        let offsets = unsafe { &(*fb).offsets };
+        if plane >= usize::from(format.num_planes) {
+            return Err(EINVAL);
+        }
+        let pitch = *pitches.get(plane).ok_or(EINVAL)?;
+        let offset = *offsets.get(plane).ok_or(EINVAL)?;
+        // SAFETY: These layout fields are immutable throughout the framebuffer's
+        // lifetime. No reference to the mutable C framebuffer header is created.
+        Ok(unsafe {
+            PlaneLayout {
+                width: (*fb).width,
+                height: (*fb).height,
+                format: format.format,
+                modifier: (*fb).modifier,
+                num_planes: format.num_planes,
+                pitch,
+                offset,
+            }
+        })
+    }
+
     /// Convert a raw pointer to a `struct drm_framebuffer` into a [`Framebuffer`]
     ///
     /// # Safety

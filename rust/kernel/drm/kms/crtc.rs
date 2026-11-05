@@ -295,6 +295,13 @@ unsafe impl<T: DriverCrtc> ModeObjectVtable for Crtc<T> {
 }
 
 impl<T: DriverCrtc> Crtc<T> {
+    /// Return the primary plane assigned when this CRTC was created.
+    pub fn primary_plane(&self) -> &OpaquePlane<T::Driver> {
+        // SAFETY: UnregisteredCrtc::new requires a same-device primary plane.
+        // Its pointer is immutable, non-null, and the device retains both objects.
+        unsafe { OpaquePlane::from_raw((*self.as_raw()).primary) }
+    }
+
     super::impl_from_opaque_mode_obj! {
         fn <'a, D>(&'a OpaqueCrtc<D>) -> &'a Self;
         use
@@ -340,6 +347,16 @@ impl<T: DriverCrtc> UnregisteredCrtc<T> {
         PrimaryData: DriverPlane<Driver = T::Driver>,
         CursorData: DriverPlane<Driver = T::Driver>,
     {
+        // SAFETY: Both planes are initialized and their device pointers are
+        // immutable. The owning device must retain them for the CRTC's lifetime.
+        if unsafe { (*primary.as_raw()).dev != dev.as_raw() }
+            || cursor.is_some_and(|cursor| {
+                // SAFETY: The optional cursor has the same initialized-plane invariant.
+                unsafe { (*cursor.as_raw()).dev != dev.as_raw() }
+            })
+        {
+            return Err(EINVAL);
+        }
         if Crtc::<T>::has_vblank() {
             dev.has_vblanks.set(true)
         }
@@ -688,6 +705,27 @@ pub(super) use private::AsRawCrtcState as AsRawCrtcStatePrivate;
 /// This is implemented internally by DRM, and provides many of the basic methods for working with
 /// the atomic state of [`Crtc`]s.
 pub trait RawCrtcState: AsRawCrtcState {
+    /// Copy the mode requested by this atomic state.
+    fn mode(&self) -> bindings::drm_display_mode {
+        // SAFETY: Atomic checking serializes changes to the mode. After state
+        // publication, its timing fields remain immutable.
+        unsafe { (*self.as_raw()).mode }
+    }
+
+    /// Copy the hardware timing selected during atomic checking.
+    fn adjusted_mode(&self) -> bindings::drm_display_mode {
+        // SAFETY: The check phase serializes timing changes, and the adjusted
+        // mode is immutable after publication.
+        unsafe { (*self.as_raw()).adjusted_mode }
+    }
+
+    /// Return whether activation, timings or connector routing require a modeset.
+    fn needs_modeset(&self) -> bool {
+        // SAFETY: The state remains live, and atomic checking serializes changes
+        // to the flags read by this helper.
+        unsafe { bindings::drm_atomic_crtc_needs_modeset(self.as_raw()) }
+    }
+
     /// Return the CRTC that owns this state.
     fn crtc(&self) -> &Self::Crtc {
         // SAFETY:
@@ -800,6 +838,91 @@ pub struct CrtcStateMutator<'a, T: FromRawCrtcState> {
 }
 
 impl<'a, T: FromRawCrtcState> CrtcStateMutator<'a, T> {
+    /// Send the pending page-flip event after the hardware update has completed.
+    ///
+    /// No vblank interrupt implementation is required. On devices without one,
+    /// DRM supplies the current time and a zero sequence number.
+    /// This is only valid for the new CRTC state in a post-swap commit callback.
+    pub fn send_pending_event<D: KmsDriver>(&mut self) -> Result
+    where
+        T::Crtc: ModeObject<Driver = D>,
+    {
+        // SAFETY: This mutator exclusively accesses the state. DRM clears state
+        // when installing the new state and sets it on states being replaced.
+        if unsafe { !(*self.as_raw()).state.is_null() } {
+            return Err(EINVAL);
+        }
+        let crtc = self.crtc();
+        let _guard = crtc.drm_dev().event_lock().lock();
+        // SAFETY: This mutator and event_lock serialize event ownership. The
+        // CRTC and its state stay live throughout the call. Clearing the pointer
+        // before transferring the event prevents it from being sent twice.
+        unsafe {
+            let event = core::mem::replace(&mut (*self.as_raw()).event, null_mut());
+            if !event.is_null() {
+                bindings::drm_crtc_send_vblank_event(crtc.as_raw(), event);
+            }
+        }
+        Ok(())
+    }
+
+    /// Cancel the pending page-flip event after a failed hardware commit.
+    ///
+    /// Use only on the new state in a post-swap commit callback, after stopping
+    /// the failed operation's hardware accesses. This retires the commit's flip
+    /// completion and signals its out-fence with `error`, without delivering a
+    /// successful page-flip event to userspace.
+    pub fn fail_pending_event<D: KmsDriver>(&mut self, error: Error) -> Result
+    where
+        T::Crtc: ModeObject<Driver = D>,
+    {
+        // SAFETY: This mutator exclusively accesses the state. A pre-swap state
+        // may still share the event with commit->event, which must not be freed.
+        if unsafe { !(*self.as_raw()).state.is_null() } {
+            return Err(EINVAL);
+        }
+        let crtc = self.crtc();
+        let dev = crtc.drm_dev();
+        let event = {
+            let _guard = dev.event_lock().lock();
+            // SAFETY: The mutator and event_lock serialize event ownership. The
+            // post-swap check ensures the commit no longer owns commit->event.
+            let event = unsafe { mem::replace(&mut (*self.as_raw()).event, null_mut()) };
+            if event.is_null() {
+                return Ok(());
+            }
+            // SAFETY: The pending event remains owned here. Retire the completion
+            // in the same order as drm_send_event_locked(), releasing its extra
+            // commit reference exactly once before canceling the event.
+            unsafe {
+                let base = &raw mut (*event).base;
+                let completion = mem::replace(&mut (*base).completion, null_mut());
+                if !completion.is_null() {
+                    bindings::complete_all(completion);
+                    if let Some(release) = (*base).completion_release {
+                        release(completion);
+                    }
+                }
+                let fence = (*base).fence;
+                if !fence.is_null() {
+                    let mut flags = 0;
+                    bindings::dma_fence_lock_irqsave(fence, &mut flags);
+                    if !bindings::dma_fence_test_signaled_flag(fence) {
+                        bindings::dma_fence_set_error(fence, error.to_errno());
+                        bindings::dma_fence_signal_locked(fence);
+                    }
+                    bindings::dma_fence_unlock_irqrestore(fence, &mut flags);
+                }
+            }
+            event
+        };
+        // SAFETY: The event was removed from the state and its completion was
+        // retired. This function acquires event_lock itself, drops the event's
+        // fence reference and frees the event without sending it to userspace.
+        unsafe { bindings::drm_event_cancel_free(dev.as_raw(), &raw mut (*event).base) };
+        Ok(())
+    }
+
     pub(super) fn new<D: KmsDriver>(
         mutator: &'a AtomicStateMutator<D>,
         state: NonNull<bindings::drm_crtc_state>,

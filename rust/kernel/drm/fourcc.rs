@@ -18,3 +18,6 @@ pub(crate) const FORMAT_MOD_INVALID: u64 = 0xffffffffffffff;
 
 /// 32 bpp RGB
 pub const XRGB888: u32 = fourcc_code(b'X', b'R', b'2', b'4');
+
+/// Linear pixel storage without tiling or compression.
+pub const FORMAT_MOD_LINEAR: u64 = 0;

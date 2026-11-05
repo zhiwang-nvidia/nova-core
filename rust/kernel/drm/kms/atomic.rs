@@ -247,6 +247,49 @@ impl<T: KmsDriver> AtomicStateMutator<T> {
 
         ConnectorStateMutator::<C::State>::new(self, NonNull::new(state)?)
     }
+
+    /// Iterate over connectors whose candidate states belong to this commit.
+    ///
+    /// State access still goes through [`Self::get_new_connector_state`], so
+    /// iteration does not bypass the mutable-state borrow checks.
+    pub fn connectors(&self) -> AtomicConnectors<'_, T> {
+        AtomicConnectors {
+            state: self,
+            index: 0,
+        }
+    }
+}
+
+/// Connectors included in an atomic commit.
+pub struct AtomicConnectors<'a, T: KmsDriver> {
+    state: &'a AtomicStateMutator<T>,
+    index: usize,
+}
+
+impl<'a, T: KmsDriver> Iterator for AtomicConnectors<'a, T> {
+    type Item = &'a OpaqueConnector<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // SAFETY: The mutator keeps the commit and its connector references
+            // alive. Read the array anew on every iteration: adding another
+            // connector during composition can reallocate the array.
+            let connector = unsafe {
+                let state = self.state.as_raw();
+                let count = usize::try_from((*state).num_connector).ok()?;
+                if self.index >= count {
+                    return None;
+                }
+                (*(*state).connectors.add(self.index)).ptr
+            };
+            self.index += 1;
+            if let Some(connector) = NonNull::new(connector) {
+                // SAFETY: The commit owns this live connector until the borrowed
+                // mutator is released; its driver is T.
+                return Some(unsafe { OpaqueConnector::from_raw(connector.as_ptr()) });
+            }
+        }
+    }
 }
 
 /// An [`AtomicStateMutator`] wrapper which is not yet part of any commit operation.
@@ -254,6 +297,13 @@ impl<T: KmsDriver> AtomicStateMutator<T> {
 /// Since it's not yet part of a commit operation, new mode objects may be added to the state. It
 /// also holds a reference to the underlying [`AtomicState`] that will be released when this object
 /// is dropped.
+///
+/// # Invariants
+///
+/// The commit is in its check/composition phase with a live acquire context.
+/// Modeset locks acquired through that context remain held for the lifetime of
+/// the composer and any guards borrowed from it. Composition is serialized on
+/// the calling thread.
 pub struct AtomicStateComposer<T: KmsDriver>(AtomicStateMutator<T>);
 
 impl<T: KmsDriver> Deref for AtomicStateComposer<T> {
@@ -272,9 +322,23 @@ impl<T: KmsDriver> Drop for AtomicStateComposer<T> {
 }
 
 impl<T: KmsDriver> AtomicStateComposer<T> {
+    /// Whether userspace permits this check to require a full modeset.
+    ///
+    /// Drivers must decide this during atomic checking, before state is swapped
+    /// or hardware changes are made.
+    pub fn allow_modeset(&self) -> bool {
+        // SAFETY: The composer keeps the commit live and serializes composition.
+        // Reading the flag does not create a reference to mutable object states.
+        unsafe { bindings::drm_atomic_commit::allow_modeset_raw(self.as_raw()) }
+    }
+
     /// # Safety
     ///
-    /// The caller guarantees that `ptr` points to a valid instance of `drm_atomic_commit`.
+    /// `ptr` must identify a live commit in its check/composition phase. Its
+    /// acquire context must remain live, and locks it acquires must remain held,
+    /// until this composer and all borrowed guards are released. The caller
+    /// must serialize composition and supply one owned reference, unless it
+    /// suppresses this wrapper's destructor for a borrowed callback reference.
     pub(crate) unsafe fn new(ptr: NonNull<bindings::drm_atomic_commit>) -> Self {
         // SAFETY: see `AtomicStateMutator::from_raw()`
         Self(unsafe { AtomicStateMutator::new(ptr) })
@@ -355,6 +419,21 @@ impl<T: KmsDriver> AtomicStateComposer<T> {
     {
         // SAFETY: Both .as_raw() values are guaranteed to return a valid pointer
         to_result(unsafe { bindings::drm_atomic_add_affected_planes(self.as_raw(), crtc.as_raw()) })
+    }
+
+    /// Add connector states affected by changes to this CRTC.
+    pub fn add_affected_connectors<C>(&self, crtc: &C) -> Result
+    where
+        C: ModesettableCrtc + ModeObject<Driver = T>,
+    {
+        if !core::ptr::eq(self.drm_dev(), crtc.drm_dev()) {
+            return Err(EINVAL);
+        }
+        // SAFETY: Both objects are live and belong to the same DRM device. The
+        // composer retains the acquire context and any locks taken by DRM.
+        to_result(unsafe {
+            bindings::drm_atomic_add_affected_connectors(self.as_raw(), crtc.as_raw())
+        })
     }
 }
 
