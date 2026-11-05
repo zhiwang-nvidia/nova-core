@@ -170,6 +170,50 @@ impl DisplayGetPortStateReply {
     }
 }
 
+/// Hardware resource type used by a GSP-RM display output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DisplayOutputResourceType {
+    /// Serial output resource for digital display links.
+    Sor,
+    /// Resource type not currently handled, preserving the GSP-RM encoding.
+    Unknown(u32),
+}
+
+/// Output hardware resource information for one RM display ID.
+pub(crate) struct DisplayGetPortCapsReply {
+    /// Index of the hardware output resource within its resource type.
+    pub(crate) index: u32,
+    /// Raw RM output resource type.
+    pub(super) resource_type: u32,
+    /// Output protocol in RM's encoding for this resource type.
+    pub(crate) protocol: u32,
+    /// Output resource location: 0 for the GPU chip, 1 for the board.
+    pub(crate) location: u32,
+    /// RM display ID of the DisplayPort root port; zero when not applicable.
+    pub(crate) root_port_id: u32,
+    /// Output entry index in the VBIOS Display Configuration Block (DCB).
+    pub(crate) dcb_index: u32,
+    /// One if firmware identifies an internal panel, zero otherwise.
+    pub(super) internal_panel: u32,
+}
+
+impl DisplayGetPortCapsReply {
+    /// Returns whether firmware identifies this output as an internal panel.
+    #[expect(dead_code)]
+    pub(crate) fn is_internal_panel(&self) -> bool {
+        self.internal_panel != 0
+    }
+
+    /// Returns the output hardware resource type.
+    #[expect(dead_code)]
+    pub(crate) fn resource_type(&self) -> DisplayOutputResourceType {
+        match self.resource_type {
+            2 => DisplayOutputResourceType::Sor,
+            value => DisplayOutputResourceType::Unknown(value),
+        }
+    }
+}
+
 /// The static GPU configuration, which GSP-RM reports in reply to [`GspInit`](gmc::GspInit).
 pub struct GspStaticInfo {
     gpu_name: [u8; Self::MAX_GPU_NAME_LEN],

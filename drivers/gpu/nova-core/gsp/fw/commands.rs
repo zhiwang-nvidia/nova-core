@@ -22,6 +22,7 @@ use crate::{
             DisplayCaps,
             DisplayChannelKind,
             DisplayCreateChannelReply,
+            DisplayGetPortCapsReply,
             DisplayGetPortStateReply,
             DisplayHwStaticInfo,
             GspStaticInfo, //
@@ -524,6 +525,44 @@ impl DisplayGetPortStateResponseSchema {
     const FLAGS_KEY: KeyId = 0x0123;
     const STATUS_KEY: KeyId = 0x805a;
     const RETRY_MS_KEY: KeyId = 0x805b;
+}
+
+nvkv_encode! {
+    pub(crate) struct DisplayGetPortCapsRequest {
+        display_id: Key<u32, { Self::DISPLAY_ID_KEY }>,
+    }
+}
+
+impl DisplayGetPortCapsRequest {
+    const DISPLAY_ID_KEY: KeyId = 0x011b;
+
+    pub(crate) fn new(display_id: u32) -> Self {
+        Self {
+            display_id: display_id.into(),
+        }
+    }
+}
+
+nvkv_decode! {
+    pub(crate) struct DisplayGetPortCapsResponseSchema => DisplayGetPortCapsReply {
+        index: Required<Key<u32, { Self::INDEX_KEY }>>,
+        resource_type: Required<Key<u32, { Self::TYPE_KEY }>>,
+        protocol: Required<Key<u32, { Self::PROTOCOL_KEY }>>,
+        location: Required<Key<u32, { Self::LOCATION_KEY }>>,
+        root_port_id: Required<Key<u32, { Self::ROOT_PORT_ID_KEY }>>,
+        dcb_index: Required<Key<u32, { Self::DCB_INDEX_KEY }>>,
+        internal_panel: Required<Key<u32, { Self::INTERNAL_PANEL_KEY }>>,
+    }
+}
+
+impl DisplayGetPortCapsResponseSchema {
+    const INDEX_KEY: KeyId = 0x01b9;
+    const TYPE_KEY: KeyId = 0x01ba;
+    const PROTOCOL_KEY: KeyId = 0x01bb;
+    const LOCATION_KEY: KeyId = 0x01bc;
+    const ROOT_PORT_ID_KEY: KeyId = 0x01bd;
+    const DCB_INDEX_KEY: KeyId = 0x01be;
+    const INTERNAL_PANEL_KEY: KeyId = 0x01f1;
 }
 
 nvkv_encode! {

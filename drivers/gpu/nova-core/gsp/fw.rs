@@ -720,6 +720,7 @@ bounded_enum! {
         DisplaySetInstanceMemory = 0x05_000b,
         DisplayCreateChannel = 0x05_000c,
         DisplayDestroyChannel = 0x05_000e,
+        DisplayGetPortCaps = 0x05_0016,
     }
 }
 
