@@ -258,6 +258,13 @@ impl<'a, 'gpu> NotifierBuffer<'a, 'gpu> {
         Ok(descriptor)
     }
 
+    pub(super) fn pending_descriptor(&self) -> Result<SurfaceDescriptor> {
+        if !self.pending {
+            return Err(EINVAL);
+        }
+        self.descriptor.ok_or(ENODEV)
+    }
+
     pub(super) fn wait(&self, expected: NotifierStatus) -> Result {
         if !self.pending {
             return Err(EINVAL);
@@ -373,6 +380,15 @@ pub(super) struct WindowDma {
 
 pub(super) struct WindowImmediate {
     pub(super) index: u32,
+}
+
+/// Completion required for an interlocked window update.
+#[expect(dead_code)]
+pub(super) enum Update {
+    /// Waits for new framebuffer state to become active and keeps its notifier pending.
+    WaitForActive,
+    /// Waits for the current submission to retire and allows its notifier to be reused.
+    WaitForRetire,
 }
 
 pub(super) struct Channel<'a, 'gpu, T> {
@@ -675,9 +691,11 @@ impl<'a, 'gpu> Channel<'a, 'gpu, WindowDma> {
         )
     }
 
-    /// Submits an interlocked window update and waits for the new state to become active.
+    /// Submits an interlocked window update and waits for activation or retirement.
     ///
     /// Before activation, establish window ownership with a separate core-only UPDATE.
+    /// Before retirement, queue methods to stop framebuffer fetches. Keep window ownership
+    /// unchanged until retirement succeeds and pass no immediate channel.
     /// Failed updates leave notifier records pending; retain framebuffer backing until the
     /// channels are quiesced.
     #[expect(dead_code)]
@@ -686,6 +704,7 @@ impl<'a, 'gpu> Channel<'a, 'gpu, WindowDma> {
         hal: &dyn DisplayHal<'a, 'gpu>,
         core: &mut Channel<'a, 'gpu, Core>,
         immediate: Option<&mut Channel<'a, 'gpu, WindowImmediate>>,
+        update: Update,
     ) -> Result {
         if !self.is_created() {
             return Err(ENODEV);
@@ -693,30 +712,50 @@ impl<'a, 'gpu> Channel<'a, 'gpu, WindowDma> {
         let window_mask = 1u32.checked_shl(self.kind.index).ok_or(EINVAL)?;
 
         // Check all participants before reserving either notifier record.
-        if let Some(immediate) = immediate.as_ref() {
-            if !immediate.is_created() {
-                return Err(ENODEV);
+        match update {
+            Update::WaitForActive => {
+                if let Some(immediate) = immediate.as_ref() {
+                    if !immediate.is_created() {
+                        return Err(ENODEV);
+                    }
+                    if immediate.kind.index != self.kind.index {
+                        return Err(EINVAL);
+                    }
+                }
+                core.available_notifier()?;
+                self.available_notifier()?;
             }
-            if immediate.kind.index != self.kind.index {
-                return Err(EINVAL);
+            Update::WaitForRetire => {
+                if immediate.is_some() {
+                    return Err(EINVAL);
+                }
+                self.notifier_buffer
+                    .as_ref()
+                    .ok_or(ENODEV)?
+                    .pending_descriptor()?;
             }
         }
-        core.available_notifier()?;
-        self.available_notifier()?;
 
         let core_descriptor = core.prepare_notifier()?;
-        let window_descriptor = self.prepare_notifier()?;
+        let (window_descriptor, window_status) = match update {
+            Update::WaitForActive => (Some(self.prepare_notifier()?), NotifierStatus::Begun),
+            // Preserve the old record and disable notification for the retirement UPDATE.
+            Update::WaitForRetire => (None, NotifierStatus::Finished),
+        };
         hal.emit_core_notifier_methods(core, Some(core_descriptor))?;
-        hal.emit_window_notifier_methods(self, Some(window_descriptor))?;
+        hal.emit_window_notifier_methods(self, window_descriptor)?;
         self.submit_interlocked_update(hal, core, window_mask, immediate)?;
 
         // Core cannot complete its interlock until Window has also been kicked.
         core.wait_notifier(NotifierStatus::Finished)?;
-        self.wait_notifier(NotifierStatus::Begun)?;
+        self.wait_notifier(window_status)?;
         hal.emit_core_notifier_methods(core, None)?;
         core.advance()?;
         core.notifier_buffer.as_mut().ok_or(ENODEV)?.finish();
-        // Keep the window record pending until this submission is retired.
+        // Only FINISHED permits reusing the window record; BEGUN leaves it pending.
+        if window_status == NotifierStatus::Finished {
+            self.notifier_buffer.as_mut().ok_or(ENODEV)?.finish();
+        }
         Ok(())
     }
 
