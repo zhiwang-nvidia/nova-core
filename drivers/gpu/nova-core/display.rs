@@ -9,6 +9,7 @@ mod hal;
 mod head;
 mod methods;
 mod mode;
+mod output;
 mod scaler;
 mod sor;
 mod tables;
@@ -16,6 +17,7 @@ mod window;
 
 pub use format::DisplayPixelFormat;
 pub use mode::DisplayMode;
+pub use output::DisplayOutput;
 
 use channel::{
     Channel,

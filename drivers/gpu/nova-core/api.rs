@@ -15,6 +15,7 @@ use kernel::{
 
 pub use crate::display::{
     DisplayMode,
+    DisplayOutput,
     DisplayPixelFormat, //
 };
 pub use crate::gpu::Spec;
@@ -46,6 +47,11 @@ impl NovaCoreApi<'_> {
     /// Shuts down the display once after DRM shutdown.
     pub fn display_shutdown(&self) -> Result {
         self.gpu.display_shutdown()
+    }
+
+    /// Detects the HDMI outputs admitted by the display firmware.
+    pub fn display_outputs(&self) -> Result<KVec<DisplayOutput>> {
+        self.gpu.display_outputs()
     }
 
     /// Returns the GPU [`GspStaticInfo`].

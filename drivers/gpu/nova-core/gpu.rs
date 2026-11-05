@@ -632,6 +632,10 @@ impl<'gpu> Gpu<'gpu> {
         Ok(())
     }
 
+    pub(crate) fn display_outputs(&self) -> Result<KVec<crate::display::DisplayOutput>> {
+        self.display.lock().as_ref().ok_or(ENODEV)?.outputs()
+    }
+
     /// Returns the static GPU configuration that GSP-RM reported at boot.
     pub(crate) fn gsp_static_info(&self) -> &gsp::commands::GspStaticInfo {
         self.gsp_resources.static_info()
