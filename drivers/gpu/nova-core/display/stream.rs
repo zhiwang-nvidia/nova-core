@@ -11,6 +11,7 @@ use crate::gsp::{
             DisplayAssignStreamRoute,
             DisplayGetPortCaps,
             DisplayHdmiSetSinkCapabilities,
+            DisplayHdmiSetSourceActive,
             DisplayHdmiSetTmdsProtocol,
             DisplayReleaseStreamRoute,
             DisplaySetMonitorPower, //
@@ -105,6 +106,14 @@ impl Stream {
         if power.accepted_state != u32::from(enabled) {
             return Err(EIO);
         }
+        Ok(())
+    }
+
+    pub(super) fn set_source_active(&self, cmdq: &Cmdq<'_>, bracket: u64, active: bool) -> Result {
+        cmdq.send_gmc_command(
+            DisplayHdmiSetSourceActive::new(self.stream_id, bracket, active)?,
+            |_| Ok(()),
+        )?;
         Ok(())
     }
 }

@@ -362,6 +362,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         stream.set_monitor_power(self.cmdq, bracket, true)?;
         self.hal
             .configure_hdmi_packets(self.bar, head, &configuration.avi_infoframe)?;
+        stream.set_source_active(self.cmdq, bracket, true)?;
         self.hal.set_hdmi_avmute(self.bar, head, false)?;
         self.cmdq.send_gmc_command(
             DisplayModesetEnd::new(bracket, DisplayModesetEndMode::Commit)?,
@@ -431,6 +432,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         if let Some(head) = head {
             self.hal.set_hdmi_avmute(self.bar, head, true)?;
         }
+        stream.set_source_active(self.cmdq, bracket, false)?;
         if let Some(head) = head {
             self.hal.disable_hdmi_packets(self.bar, head)?;
         }
