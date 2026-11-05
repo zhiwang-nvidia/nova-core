@@ -244,6 +244,44 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
         disp4::head::emit_head_display_id_methods(self, core, head, 0)
     }
 
+    /// Emits methods to configure head timing, viewport and output color.
+    fn emit_head_configuration(
+        &self,
+        core: &mut Channel<'a, 'gpu, Core>,
+        bar: Bar0<'_>,
+        head: u32,
+        mode: &DisplayMode,
+        limited_range: bool,
+    ) -> Result {
+        modeset::validate_mode(mode)?;
+        if head >= core_methods::HEAD_COUNT {
+            return Err(EINVAL);
+        }
+        let caps = capability::read_postcomp_caps(bar, head.into_safe_cast())?;
+        if limited_range && !caps.ocsc1_present() {
+            return Err(EOPNOTSUPP);
+        }
+
+        self.emit_disable_head_methods(core, head, caps)?;
+        disp4::head::emit_head_configuration_methods(self, core, head, mode, limited_range, caps)?;
+        let offset = head * core_methods::HEAD_STRIDE;
+        // C87D omits LOCK_OFFSET; C57D has no RASTER_HBLANK_DELAY method.
+        core.emit(self, c77d::HEAD_SET_LOCK_OFFSET + offset, &[0])?;
+        core.emit(self, c77d::HEAD_SET_RASTER_HBLANK_DELAY + offset, &[0])
+    }
+
+    fn emit_head_display_id(
+        &self,
+        core: &mut Channel<'a, 'gpu, Core>,
+        head: u32,
+        display_id: u32,
+    ) -> Result {
+        if head >= core_methods::HEAD_COUNT || (display_id != 0 && !display_id.is_power_of_two()) {
+            return Err(EINVAL);
+        }
+        disp4::head::emit_head_display_id_methods(self, core, head, display_id)
+    }
+
     /// Emits methods to configure a pitch-linear framebuffer with composition bypass.
     fn emit_window_framebuffer_configuration(
         &self,

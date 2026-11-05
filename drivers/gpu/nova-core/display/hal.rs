@@ -142,6 +142,26 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
         head: u32,
     ) -> Result;
 
+    /// Emits methods to configure head timing, viewport and output color.
+    #[expect(dead_code)]
+    fn emit_head_configuration(
+        &self,
+        core: &mut Channel<'a, 'gpu, Core>,
+        bar: Bar0<'_>,
+        head: u32,
+        mode: &DisplayMode,
+        limited_range: bool,
+    ) -> Result;
+
+    /// Queues a head's GSP-RM display ID; zero unsets the association.
+    #[expect(dead_code)]
+    fn emit_head_display_id(
+        &self,
+        core: &mut Channel<'a, 'gpu, Core>,
+        head: u32,
+        display_id: u32,
+    ) -> Result;
+
     /// Emits methods to configure a pitch-linear framebuffer with composition bypass.
     #[expect(dead_code)]
     fn emit_window_framebuffer_configuration(

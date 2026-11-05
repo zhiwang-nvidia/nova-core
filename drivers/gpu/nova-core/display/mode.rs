@@ -37,6 +37,21 @@ pub struct DisplayMode {
     pub negative_vsync: bool,
 }
 
+/// Sync-relative raster coordinates shared by DISP 4.x and 5.x.
+///
+/// These values are unpacked pixel and line counts. Their method field widths
+/// and addresses depend on the display generation.
+pub(crate) struct RasterTimings {
+    pub(crate) hsync_end: u32,
+    pub(crate) vsync_end: u32,
+    pub(crate) hblank_end: u32,
+    pub(crate) vblank_end: u32,
+    pub(crate) hblank_start: u32,
+    pub(crate) vblank_start: u32,
+    pub(crate) leading_idle: u32,
+    pub(crate) trailing_idle: u32,
+}
+
 impl DisplayMode {
     /// Checks the driver mode limits and the framebuffer's minimum row stride.
     ///
@@ -93,5 +108,24 @@ impl DisplayMode {
             return Err(EINVAL);
         }
         Ok(())
+    }
+
+    /// Converts active-first timings to coordinates measured from sync start.
+    pub(crate) fn raster_timings(&self) -> Result<RasterTimings> {
+        self.validate()?;
+
+        let hblank_end = self.htotal - self.hsync_start - 1;
+        let vblank_end = self.vtotal - self.vsync_start - 1;
+        let leading_idle = vblank_end + 1;
+        Ok(RasterTimings {
+            hsync_end: self.hsync_end - self.hsync_start - 1,
+            vsync_end: self.vsync_end - self.vsync_start - 1,
+            hblank_end,
+            vblank_end,
+            hblank_start: self.hdisplay + hblank_end,
+            vblank_start: self.vdisplay + vblank_end,
+            leading_idle,
+            trailing_idle: self.vtotal - leading_idle - self.vdisplay,
+        })
     }
 }

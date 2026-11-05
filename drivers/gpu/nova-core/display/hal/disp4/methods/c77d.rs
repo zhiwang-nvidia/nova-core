@@ -4,6 +4,8 @@
 //!
 //! Definitions follow the published `clc77d.h` class interface.
 
+pub(crate) const HEAD_SET_LOCK_OFFSET: u32 = 0x2040;
 pub(crate) const HEAD_SET_CONTEXT_DMA_RG_REL_SEMAPHORE: u32 = 0x21ac;
 // C67D/C77D/C87D define six RG semaphores per head; C57D has no such methods.
 pub(crate) const HEAD_RG_REL_SEMAPHORE_COUNT: u32 = 6;
+pub(crate) const HEAD_SET_RASTER_HBLANK_DELAY: u32 = 0x2364;
