@@ -242,7 +242,6 @@ pub(crate) struct DisplayConfiguration {
     pub(crate) format: DisplayPixelFormat,
 }
 
-#[expect(dead_code)]
 pub(crate) struct DisplayCheckConfigurationReply {
     pub(crate) possible: u32,
     pub(crate) checked_domains: u32,

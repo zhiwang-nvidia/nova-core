@@ -169,6 +169,9 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
         head_mask: u32,
     ) -> Result;
 
+    /// Checks whether the hardware can represent the mode timings.
+    fn validate_mode(&self, mode: &DisplayMode) -> Result;
+
     /// Emits methods to configure head timing, viewport and output color.
     #[expect(dead_code)]
     fn emit_head_configuration(

@@ -37,6 +37,39 @@ pub struct DisplayMode {
     pub negative_vsync: bool,
 }
 
+/// Display output configuration and its framebuffer.
+///
+/// The current modeset implementation supports one active HDMI output with
+/// progressive RGB8 timings and a full-screen image without cropping or scaling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayConfiguration {
+    /// Single-bit RM display identifier.
+    pub display_id: u32,
+    /// Progressive mode selected from the sink's advertised modes.
+    pub mode: DisplayMode,
+    /// Pixel format of the framebuffer.
+    pub format: DisplayPixelFormat,
+    /// Framebuffer row stride in bytes.
+    pub pitch: u32,
+    /// GMC HDMI sink bits: above-340-MHz support, low-rate scrambling and SCDC.
+    pub hdmi_sink_caps: u32,
+    /// Packed AVI infoframe, including its header and checksum.
+    pub avi_infoframe: [u8; 17],
+    /// Whether the HDMI output converts framebuffer RGB to limited range.
+    pub limited_range: bool,
+}
+
+impl DisplayConfiguration {
+    /// Checks the driver mode limits and the framebuffer's minimum row stride.
+    ///
+    /// These checks are independent of the GPU class. Hardware pitch alignment
+    /// and method field limits are checked by the HAL.
+    #[expect(dead_code)]
+    pub(crate) fn validate_framebuffer(&self) -> Result {
+        self.mode.validate_framebuffer(self.format, self.pitch)
+    }
+}
+
 /// Sync-relative raster coordinates shared by DISP 4.x and 5.x.
 ///
 /// These values are unpacked pixel and line counts. Their method field widths

@@ -14,6 +14,7 @@ use kernel::{
 };
 
 pub use crate::display::{
+    DisplayConfiguration,
     DisplayMode,
     DisplayOutput,
     DisplayPixelFormat, //
@@ -57,6 +58,11 @@ impl NovaCoreApi<'_> {
     /// Returns the EDID bytes for an admitted display identifier.
     pub fn display_read_edid(&self, display_id: u32) -> Result<KVec<u8>> {
         self.gpu.display_read_edid(display_id)
+    }
+
+    /// Checks a single-output HDMI configuration without changing the display state.
+    pub fn display_check_configuration(&self, configuration: &DisplayConfiguration) -> Result {
+        self.gpu.display_check_configuration(configuration)
     }
 
     /// Returns the GPU [`GspStaticInfo`].

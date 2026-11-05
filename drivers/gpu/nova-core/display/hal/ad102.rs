@@ -289,6 +289,10 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
         sor::emit_sor_control_methods(self, core, sor, rm_protocol, head_mask)
     }
 
+    fn validate_mode(&self, mode: &DisplayMode) -> Result {
+        modeset::validate_mode(mode)
+    }
+
     /// Emits methods to configure head timing, viewport and output color.
     fn emit_head_configuration(
         &self,

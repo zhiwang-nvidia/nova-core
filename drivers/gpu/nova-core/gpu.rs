@@ -644,6 +644,18 @@ impl<'gpu> Gpu<'gpu> {
             .read_edid(display_id)
     }
 
+    pub(crate) fn display_check_configuration(
+        &self,
+        configuration: &crate::display::DisplayConfiguration,
+    ) -> Result {
+        self.display
+            .lock()
+            .as_ref()
+            .ok_or(ENODEV)?
+            .check_configuration(configuration)
+            .map(|_| ())
+    }
+
     /// Returns the static GPU configuration that GSP-RM reported at boot.
     pub(crate) fn gsp_static_info(&self) -> &gsp::commands::GspStaticInfo {
         self.gsp_resources.static_info()

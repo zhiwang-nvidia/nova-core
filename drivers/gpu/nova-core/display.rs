@@ -17,7 +17,10 @@ mod tables;
 mod window;
 
 pub use format::DisplayPixelFormat;
-pub use mode::DisplayMode;
+pub use mode::{
+    DisplayConfiguration,
+    DisplayMode, //
+};
 pub use output::DisplayOutput;
 
 use channel::{
@@ -65,7 +68,6 @@ pub(crate) struct Display<'a, 'gpu> {
     #[expect(dead_code)]
     spec: Spec,
     bar_user: &'a BarUser<'gpu>,
-    #[expect(dead_code)]
     caps: DisplayCaps,
     hw_static_info: DisplayHwStaticInfo,
     heads: KVec<head::Head>,
