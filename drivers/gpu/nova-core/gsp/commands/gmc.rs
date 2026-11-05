@@ -30,6 +30,7 @@ use crate::{
             DisplayGetPortCapsReply,
             DisplayGetPortStateReply,
             DisplayHwStaticInfo,
+            DisplayReadEdidReply,
             DisplaySetInstanceMemoryReply,
             DisplayShutdownReply,
             GspStaticInfo, //
@@ -46,6 +47,8 @@ use crate::{
                 DisplayGetPortStateResponseSchema,
                 DisplayInitRequest,
                 DisplayInitResponseSchema,
+                DisplayReadEdidRequest,
+                DisplayReadEdidResponseSchema,
                 DisplaySetInstanceMemoryRequest,
                 DisplayStaticInfoResponseSchema,
                 GspInitRequest,
@@ -411,6 +414,76 @@ impl GmcReply for DisplayGetPortStateReply {
             return Err(EINVAL);
         }
         Ok(KBox::into_inner(reply))
+    }
+}
+
+pub(crate) struct DisplayReadEdid {
+    payload: KVVec<u64>,
+}
+
+#[expect(dead_code)]
+impl DisplayReadEdid {
+    pub(crate) fn new(display_id: u32) -> Result<Self> {
+        if !display_id.is_power_of_two() {
+            return Err(EINVAL);
+        }
+        let mut encoder = Encoder::new();
+        DisplayReadEdidRequest::new(display_id).encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayReadEdid {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayReadEdid;
+    const MAX_REPLY_SIZE: u32 = 4096;
+    type Command = ();
+    type Reply = DisplayReadEdidReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayReadEdidReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayReadEdid;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        let bytes = payload.flush_into_kvec(GFP_KERNEL)?;
+        if bytes.len() > num::u32_as_usize(DisplayReadEdid::MAX_REPLY_SIZE) {
+            return Err(EINVAL);
+        }
+        let words = nvkv_words(&bytes)?;
+
+        let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
+        let mut schema = KBox::init(DisplayReadEdidResponseSchema::init(), GFP_KERNEL)?;
+        let reply = KBox::try_init(decoder.decode(&mut *schema)?, GFP_KERNEL)?;
+        let prefix = reply
+            .edid
+            .get(..num::u32_as_usize(reply.size))
+            .ok_or(EINVAL)?;
+        let mut edid = KVec::with_capacity(prefix.len(), GFP_KERNEL)?;
+        edid.extend_from_slice(prefix, GFP_KERNEL)?;
+        Ok(Self { edid })
     }
 }
 
