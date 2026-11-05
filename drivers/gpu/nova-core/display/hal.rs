@@ -105,7 +105,6 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
     ) -> Result;
 
     /// Emits the window UPDATE sequence, including any class-specific transition methods.
-    #[expect(dead_code)]
     fn emit_window_update(
         &self,
         window: &mut Channel<'a, 'gpu, WindowDma>,
@@ -113,7 +112,6 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
     ) -> Result;
 
     /// Emits an immediate UPDATE with the flags supported by its class.
-    #[expect(dead_code)]
     fn emit_window_immediate_update(
         &self,
         immediate: &mut Channel<'a, 'gpu, WindowImmediate>,

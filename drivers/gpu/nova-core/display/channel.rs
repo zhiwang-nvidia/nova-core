@@ -219,12 +219,14 @@ pub(super) struct NotifierBuffer<'a, 'gpu> {
 /// The hardware progress needed by a notifier wait.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum NotifierStatus {
+    Begun,
     Finished,
 }
 
 impl<'a, 'gpu> NotifierBuffer<'a, 'gpu> {
     // DISP 4.x and 5.x use a 16-byte notifier with status in word 0, bits 31:30.
     const STATUS_MASK: u32 = 3 << 30;
+    const STATUS_BEGUN: u32 = 1 << 30;
     const STATUS_FINISHED: u32 = 2 << 30;
 
     pub(super) fn new(
@@ -262,12 +264,16 @@ impl<'a, 'gpu> NotifierBuffer<'a, 'gpu> {
         }
         // Hardware writes FINISHED when a core UPDATE method completes with notification enabled.
         let expected_status = match expected {
+            NotifierStatus::Begun => Self::STATUS_BEGUN,
             NotifierStatus::Finished => Self::STATUS_FINISHED,
         };
         read_poll_timeout(
             || {
                 let status = self.mapping.try_read32(0)? & Self::STATUS_MASK;
-                if status == Self::STATUS_MASK {
+                if status == Self::STATUS_MASK
+                    || (expected == NotifierStatus::Begun && status == Self::STATUS_FINISHED)
+                {
+                    // A finished image is already retired, not currently active.
                     return Err(EIO);
                 }
                 Ok(status)
@@ -651,7 +657,6 @@ impl<'a, 'gpu> Channel<'a, 'gpu, WindowDma> {
     }
 
     /// Emits window interlock methods to participate in a core update.
-    #[expect(dead_code)]
     pub(super) fn emit_interlock_methods(
         &mut self,
         hal: &dyn DisplayMethodHal,
@@ -668,6 +673,75 @@ impl<'a, 'gpu> Channel<'a, 'gpu, WindowDma> {
             window_methods::SET_WINDOW_INTERLOCK_FLAGS,
             &[window_mask],
         )
+    }
+
+    /// Submits an interlocked window update and waits for the new state to become active.
+    ///
+    /// Before activation, establish window ownership with a separate core-only UPDATE.
+    /// Failed updates leave notifier records pending; retain framebuffer backing until the
+    /// channels are quiesced.
+    #[expect(dead_code)]
+    pub(super) fn update(
+        &mut self,
+        hal: &dyn DisplayHal<'a, 'gpu>,
+        core: &mut Channel<'a, 'gpu, Core>,
+        immediate: Option<&mut Channel<'a, 'gpu, WindowImmediate>>,
+    ) -> Result {
+        if !self.is_created() {
+            return Err(ENODEV);
+        }
+        let window_mask = 1u32.checked_shl(self.kind.index).ok_or(EINVAL)?;
+
+        // Check all participants before reserving either notifier record.
+        if let Some(immediate) = immediate.as_ref() {
+            if !immediate.is_created() {
+                return Err(ENODEV);
+            }
+            if immediate.kind.index != self.kind.index {
+                return Err(EINVAL);
+            }
+        }
+        core.available_notifier()?;
+        self.available_notifier()?;
+
+        let core_descriptor = core.prepare_notifier()?;
+        let window_descriptor = self.prepare_notifier()?;
+        hal.emit_core_notifier_methods(core, Some(core_descriptor))?;
+        hal.emit_window_notifier_methods(self, Some(window_descriptor))?;
+        self.submit_interlocked_update(hal, core, window_mask, immediate)?;
+
+        // Core cannot complete its interlock until Window has also been kicked.
+        core.wait_notifier(NotifierStatus::Finished)?;
+        self.wait_notifier(NotifierStatus::Begun)?;
+        hal.emit_core_notifier_methods(core, None)?;
+        core.advance()?;
+        core.notifier_buffer.as_mut().ok_or(ENODEV)?.finish();
+        // Keep the window record pending until this submission is retired.
+        Ok(())
+    }
+
+    fn submit_interlocked_update(
+        &mut self,
+        hal: &dyn DisplayHal<'a, 'gpu>,
+        core: &mut Channel<'a, 'gpu, Core>,
+        window_mask: u32,
+        immediate: Option<&mut Channel<'a, 'gpu, WindowImmediate>>,
+    ) -> Result {
+        core.emit_interlock_methods(hal, window_mask)?;
+        self.emit_interlock_methods(hal, window_mask)?;
+
+        // Emit each UPDATE sequence immediately before its kickoff: emit may publish
+        // earlier methods while making pushbuffer space.
+        core.emit_update_methods(hal)?;
+        core.advance()?;
+
+        let interlock_immediate = immediate.is_some();
+        if let Some(immediate) = immediate {
+            hal.emit_window_immediate_update(immediate)?;
+            immediate.advance()?;
+        }
+        hal.emit_window_update(self, interlock_immediate)?;
+        self.advance()
     }
 }
 
