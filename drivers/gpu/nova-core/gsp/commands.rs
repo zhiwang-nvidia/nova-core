@@ -283,6 +283,8 @@ pub(crate) struct DisplayHdmiSetSinkCapabilitiesReply;
 
 pub(crate) struct DisplayHdmiSetTmdsProtocolReply;
 
+pub(crate) struct DisplayHdmiSetSourceActiveReply;
+
 pub(crate) struct DisplaySetMonitorPowerReply {
     pub(crate) accepted_state: u32,
 }

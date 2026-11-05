@@ -33,6 +33,7 @@ use crate::{
             DisplayGetPortCapsReply,
             DisplayGetPortStateReply,
             DisplayHdmiSetSinkCapabilitiesReply,
+            DisplayHdmiSetSourceActiveReply,
             DisplayHdmiSetTmdsProtocolReply,
             DisplayHwStaticInfo,
             DisplayModesetBeginReply,
@@ -1257,6 +1258,64 @@ impl GmcCommand for DisplayHdmiSetTmdsProtocol {
 
 impl GmcReply for DisplayHdmiSetTmdsProtocolReply {
     const COMMAND: GmcCommandId = GmcCommandId::DisplayHdmiSetTmdsProtocol;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        if payload.is_empty() {
+            Ok(Self)
+        } else {
+            Err(EINVAL)
+        }
+    }
+}
+
+pub(crate) struct DisplayHdmiSetSourceActive {
+    payload: KVVec<u64>,
+}
+
+impl DisplayHdmiSetSourceActive {
+    #[expect(dead_code)]
+    pub(crate) fn new(stream_id: u64, modeset_id: u64, active: bool) -> Result<Self> {
+        if stream_id == 0 || modeset_id == 0 {
+            return Err(EINVAL);
+        }
+        let mut encoder = Encoder::new();
+        DisplayHdmiRequest::new(stream_id, modeset_id, u32::from(active)).encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayHdmiSetSourceActive {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayHdmiSetSourceActive;
+    type Command = ();
+    type Reply = DisplayHdmiSetSourceActiveReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayHdmiSetSourceActiveReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayHdmiSetSourceActive;
     type InitError = Error;
 
     fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
