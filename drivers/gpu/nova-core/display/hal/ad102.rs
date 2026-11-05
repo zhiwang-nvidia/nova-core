@@ -2,6 +2,13 @@
 
 use kernel::{
     device,
+    io::{
+        register::{
+            Array,
+            RegisterArray, //
+        },
+        Io, //
+    },
     prelude::*,
     sync::Mutex, //
 };
@@ -34,6 +41,7 @@ use crate::{
             DisplayMethodHal,
             SurfaceDescriptor, //
         },
+        hdmi,
         methods as common_methods,
         mode::DisplayMode,
         scaler,
@@ -405,5 +413,48 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
     ) -> Result {
         let caps = capability::read_precomp_caps(bar, window.kind.index.into_safe_cast())?;
         self.emit_disable_window_methods(window, caps)
+    }
+
+    fn configure_hdmi_packets(&self, bar: Bar0<'_>, head: u32, avi: &[u8; 17]) -> Result {
+        hdmi::validate_avi(avi)?;
+        let sf = hdmi::sf_user_head(bar, head)?;
+        self.disable_hdmi_packets(bar, head)?;
+        hdmi::program_avi(sf, avi)
+    }
+
+    fn set_hdmi_avmute(&self, bar: Bar0<'_>, head: u32, mute: bool) -> Result {
+        disp4::hdmi::set_avmute(bar, head, mute)
+    }
+
+    fn disable_hdmi_packets(&self, bar: Bar0<'_>, head: u32) -> Result {
+        let sf = hdmi::sf_user_head(bar, head)?;
+        disp4::hdmi::mute_audio(bar, head)?;
+        // C771 exposes five legacy slots and six shared packet slots.
+        for slot in 0..regs::NV_PDISP_SF_HDMI_INFO_CTRL::SIZE {
+            let control = sf.read(regs::NV_PDISP_SF_HDMI_INFO_CTRL::try_at(slot).ok_or(EINVAL)?);
+            if control.into_raw() == u32::MAX {
+                return Err(EIO);
+            }
+            sf.write(
+                regs::NV_PDISP_SF_HDMI_INFO_CTRL::try_at(slot).ok_or(EINVAL)?,
+                control.with_enable(false),
+            );
+        }
+        // Slot 2 is ACR, not an Audio InfoFrame. Its frequency selector has a
+        // separate enable. Neither field alone gates hardware-generated audio.
+        let acr = sf.read(regs::NV_PDISP_SF_HDMI_ACR_CTRL);
+        sf.write_reg(acr.with_packet_enable(false).with_freqs_enable(false));
+        for slot in 0..regs::NV_PDISP_SF_SHARED_GENERIC_CTRL::SIZE {
+            let control =
+                sf.read(regs::NV_PDISP_SF_SHARED_GENERIC_CTRL::try_at(slot).ok_or(EINVAL)?);
+            if control.into_raw() == u32::MAX {
+                return Err(EIO);
+            }
+            sf.write(
+                regs::NV_PDISP_SF_SHARED_GENERIC_CTRL::try_at(slot).ok_or(EINVAL)?,
+                control.with_enable(false),
+            );
+        }
+        hdmi::flush_avi(sf)
     }
 }

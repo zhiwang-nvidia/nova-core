@@ -218,6 +218,17 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
         window: &mut Channel<'a, 'gpu, WindowDma>,
         bar: Bar0<'_>,
     ) -> Result;
+
+    /// Configures HDMI packet transmission with the supplied AVI infoframe.
+    #[expect(dead_code)]
+    fn configure_hdmi_packets(&self, bar: Bar0<'_>, head: u32, avi: &[u8; 17]) -> Result;
+
+    /// Sets or clears HDMI AVMUTE through a General Control Packet.
+    #[expect(dead_code)]
+    fn set_hdmi_avmute(&self, bar: Bar0<'_>, head: u32, mute: bool) -> Result;
+
+    /// Disables HDMI packet transmission on the specified head.
+    fn disable_hdmi_packets(&self, bar: Bar0<'_>, head: u32) -> Result;
 }
 
 pub(super) fn display_hal<'a, 'gpu: 'a>(

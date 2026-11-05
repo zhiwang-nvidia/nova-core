@@ -7,6 +7,7 @@ mod channel;
 mod format;
 mod framebuffer;
 mod hal;
+mod hdmi;
 mod head;
 mod methods;
 mod mode;
