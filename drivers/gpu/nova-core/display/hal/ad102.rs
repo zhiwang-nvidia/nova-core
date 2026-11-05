@@ -20,8 +20,10 @@ use crate::{
                 instance_memory::InstanceMemory,
                 methods::{
                     self,
+                    c67e,
                     core as core_methods, //
                 },
+                window, //
             },
             DisplayHal,
             DisplayMethodHal,
@@ -39,7 +41,8 @@ use crate::{
         vram::VramRegion,
         GpuMm, //
     },
-    num::IntoSafeCast, //
+    num::IntoSafeCast,
+    regs, //
 };
 
 pub(super) const IP_VERSION: u32 = 0x0404_0000;
@@ -80,6 +83,22 @@ impl<'a, 'gpu> Ad102<'a, 'gpu> {
             && info.window_class == NVC67E_WINDOW_CHANNEL_DMA
             && info.immediate_class == NVC67B_WINDOW_IMM_CHANNEL_DMA
             && info.cursor_class == NVC67A_CURSOR_IMM_CHANNEL_PIO
+    }
+
+    fn emit_disable_window_methods(
+        &self,
+        window: &mut Channel<'a, 'gpu, WindowDma>,
+        caps: regs::NV_PDISP_FE_SW_PRECOMP_WIN_PIPE_HDR_CAPA,
+    ) -> Result {
+        // Acquire semaphore methods are supported by C67E/C87E, but not C57E.
+        for method in [
+            c67e::SET_CONTEXT_DMA_ACQ_SEMAPHORE,
+            c67e::SET_ACQ_SEMAPHORE_CONTROL,
+            c67e::SET_ACQ_SEMAPHORE_VALUE,
+        ] {
+            window.emit(self, method, &[0])?;
+        }
+        window::emit_disable_window_methods(self, window, caps)
     }
 }
 
@@ -183,5 +202,15 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result {
         self.instance_memory
             .free_context_dma(descriptor.context_dma_descriptor_id)
+    }
+
+    /// Queues methods to disable framebuffer/LUT and semaphore accesses.
+    fn emit_disable_window(
+        &self,
+        window: &mut Channel<'a, 'gpu, WindowDma>,
+        bar: Bar0<'_>,
+    ) -> Result {
+        let caps = capability::read_precomp_caps(bar, window.kind.index.into_safe_cast())?;
+        self.emit_disable_window_methods(window, caps)
     }
 }

@@ -9,3 +9,4 @@ pub(super) mod methods;
 mod ramht;
 pub(super) mod scaler;
 pub(super) mod notifier;
+pub(super) mod window;

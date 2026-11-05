@@ -28,6 +28,7 @@
 
 use kernel::prelude::*;
 
+pub(crate) mod c67e;
 pub(crate) mod csc;
 
 /// Hardware reads bits 27:18 to know how many parameter words follow the header.
@@ -41,6 +42,8 @@ const METHOD_COUNT_MAX: u32 = 0x3ff;
 /// DISP 4.x encodes the method byte offset in bits 13:2 of the header.
 /// Reject offsets that exceed this field or are not aligned to a 32-bit word.
 const METHOD_OFFSET_MASK: u32 = 0x3ffc;
+
+pub(crate) const METHOD_ARRAY_STRIDE: u32 = 4;
 
 pub(crate) fn encode_method(method: u32, count: usize) -> Result<u32> {
     let count = u32::try_from(count).map_err(|_| EINVAL)?;
@@ -79,10 +82,25 @@ pub(crate) mod window {
     //!
     //! These definitions match the C57E, C67E and C87E class interfaces.
 
+    pub(crate) const EYE_COUNT: u32 = 2;
+    pub(crate) const PLANE_COUNT: u32 = 3;
+    pub(crate) const ISO_CONTEXT_COUNT: u32 = EYE_COUNT * PLANE_COUNT;
+
+    pub(crate) const SET_SEMAPHORE_CONTROL: u32 = 0x020c;
+    pub(crate) const SET_SEMAPHORE_RELEASE: u32 = 0x0214;
+    pub(crate) const SET_CONTEXT_DMA_SEMAPHORE: u32 = 0x0218;
     pub(crate) const SET_CONTEXT_DMA_NOTIFIER: u32 = 0x021c;
+
+    pub(crate) const SET_CONTEXT_DMA_ISO: u32 = 0x0240;
+    pub(crate) const SET_OFFSET: u32 = 0x0260;
     pub(crate) const SET_INPUT_SCALER_COEFF_VALUE: u32 = 0x02ac;
+
+    pub(crate) const SET_CONTEXT_DMA_ILUT: u32 = 0x0444;
+    pub(crate) const SET_OFFSET_ILUT: u32 = 0x0448;
     pub(crate) const SET_CSC0LUT_SEGMENT_SIZE: u32 = 0x04a4;
     pub(crate) const SET_CSC0LUT_ENTRY: u32 = 0x04a8;
+    pub(crate) const SET_CONTEXT_DMA_TMO_LUT: u32 = 0x0528;
+    pub(crate) const SET_OFFSET_TMO_LUT: u32 = 0x052c;
     pub(crate) const SET_CSC1LUT_SEGMENT_SIZE: u32 = 0x0584;
     pub(crate) const SET_CSC1LUT_ENTRY: u32 = 0x0588;
     pub(crate) const LUT_VALUE_SHIFT: u32 = 16;
