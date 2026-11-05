@@ -63,9 +63,11 @@ use crate::{
 pub(crate) struct Display<'a, 'gpu> {
     dev: &'a device::Device<device::Bound>,
     cmdq: &'a Cmdq<'gpu>,
+    bar: Bar0<'gpu>,
     mm: &'a Mutex<GpuMm<'gpu>>,
     pending_commit: Option<modeset::DisplayCommit<'a, 'gpu>>,
     streams: KVec<stream::Stream>,
+    initial_detach_pending: bool,
     windows: KVec<window::Window<'a, 'gpu>>,
     core_channel: Option<Channel<'a, 'gpu, Core>>,
     hal: KBox<dyn hal::DisplayHal<'a, 'gpu> + 'a>,
@@ -82,6 +84,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         dev: &'a device::Device<device::Bound>,
         cmdq: &'a Cmdq<'gpu>,
         spec: Spec,
+        bar: Bar0<'gpu>,
         bar_user: &'a BarUser<'gpu>,
         mm: &'a Mutex<GpuMm<'gpu>>,
     ) -> Result<Self> {
@@ -137,9 +140,11 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         Ok(Self {
             dev,
             cmdq,
+            bar,
             mm,
             pending_commit: None,
             streams: KVec::new(),
+            initial_detach_pending: true,
             windows,
             core_channel: None,
             hal,
@@ -169,7 +174,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         bar_user: &'a BarUser<'gpu>,
         mm: &'a Mutex<GpuMm<'gpu>>,
     ) -> Result<Self> {
-        let mut display = Self::new(dev, cmdq, spec, bar_user, mm)?;
+        let mut display = Self::new(dev, cmdq, spec, bar, bar_user, mm)?;
 
         let channel = Channel::<Core>::new(cmdq, mm, display.bar_user, &display.hw_static_info)?;
         let channel = display.core_channel.insert(channel);

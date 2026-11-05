@@ -597,7 +597,6 @@ impl<'a, 'gpu> Channel<'a, 'gpu, Core> {
     }
 
     /// Submits a core-only update and waits for it to finish.
-    #[expect(dead_code)]
     pub(super) fn update(&mut self, hal: &dyn DisplayHal<'a, 'gpu>) -> Result {
         let descriptor = self.prepare_notifier()?;
         hal.emit_core_notifier_methods(self, Some(descriptor))?;
@@ -616,7 +615,6 @@ impl<'a, 'gpu> Channel<'a, 'gpu, Core> {
     ///
     /// DISP 4.x and 5.x share the core channel state register layout and idle
     /// state encoding.
-    #[expect(dead_code)]
     pub(super) fn wait_idle(&mut self) -> Result {
         const STATE_IDLE: u32 = 0x0b;
         const STATE_SHUTDOWN2: u32 = 0x0e;
