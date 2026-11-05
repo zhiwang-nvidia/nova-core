@@ -72,6 +72,7 @@ use crate::{
         GpuMm, //
     },
     num::IntoSafeCast,
+    regs,
     sbuffer::SBufferIter, //
 };
 
@@ -472,6 +473,32 @@ impl<'a, 'gpu> Channel<'a, 'gpu, Core> {
             pushbuffer.size().into_safe_cast(),
         )?;
         self.create_channel_inner(bar, command, info.core_class, info.num_channels, hal)
+    }
+
+    /// Waits for this core channel's hardware state to become idle.
+    ///
+    /// DISP 4.x and 5.x share the core channel state register layout and idle
+    /// state encoding.
+    #[expect(dead_code)]
+    pub(super) fn wait_idle(&mut self) -> Result {
+        const STATE_IDLE: u32 = 0x0b;
+        const STATE_SHUTDOWN2: u32 = 0x0e;
+        let bar = self.user_area_mmio.as_ref().ok_or(ENODEV)?.bar;
+
+        // NVKMS's 100 ms wait before reading the core armed state cache.
+        read_poll_timeout(
+            || {
+                let state = bar.read(regs::NV_PDISP_FE_CHNSTATUS_CORE).state().get();
+                if state > STATE_SHUTDOWN2 {
+                    return Err(EIO);
+                }
+                Ok(state)
+            },
+            |&state| state == STATE_IDLE,
+            Delta::from_micros(100),
+            Delta::from_millis(100),
+        )
+        .map(|_| ())
     }
 }
 

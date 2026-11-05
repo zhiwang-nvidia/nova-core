@@ -39,6 +39,16 @@ register! {
     pub(crate) NV_PBUS_SW_SCRATCH(u32)[64] @ 0x00001400 {}
 }
 
+// PDISP
+
+register! {
+    base: NovaRegisters;
+
+    pub(crate) NV_PDISP_FE_CHNSTATUS_CORE(u32) @ 0x00610630 {
+        20:16   state;
+    }
+}
+
 // PGC6 register space.
 //
 // `GC6` is a GPU low-power state where VRAM is in self-refresh and the GPU is powered down (except
