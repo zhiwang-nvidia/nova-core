@@ -40,6 +40,10 @@ use core::{
         self,
         NonNull, //
     },
+    sync::atomic::{
+        AtomicBool,
+        Ordering, //
+    },
 };
 
 #[cfg(CONFIG_DRM_LEGACY)]
@@ -261,7 +265,13 @@ impl<T: drm::Driver> UnregisteredDevice<T> {
         unsafe { (*drm_dev).driver = const { &Self::VTABLE } };
 
         // SAFETY: `raw_drm` is valid; no concurrent access before registration.
-        unsafe { (*raw_drm.as_ptr()).registration_data = UnsafeCell::new(NonNull::dangling()) };
+        unsafe {
+            (*raw_drm.as_ptr()).registration_data = UnsafeCell::new(NonNull::dangling());
+            ptr::write(
+                &raw mut (*raw_drm.as_ptr()).has_registered,
+                AtomicBool::new(false),
+            );
+        }
 
         // SAFETY: The reference count is one, and now we take ownership of that reference as a
         // `drm::Device`.
@@ -287,6 +297,7 @@ pub struct Device<T: drm::Driver, C: DeviceContext = Normal> {
     dev: Opaque<bindings::drm_device>,
     data: T::Data,
     pub(super) registration_data: UnsafeCell<NonNull<T::RegistrationData<'static>>>,
+    pub(super) has_registered: AtomicBool,
     _ctx: PhantomData<C>,
 }
 
@@ -394,6 +405,7 @@ impl<T: drm::Driver> Device<T, Ioctl> {
 /// # Invariants
 ///
 /// - `idx` is the SRCU read lock index returned by a successful `drm_dev_enter()` call.
+/// - Registration data was initialized before the device was published.
 /// - The parent bus device of `dev` is bound for the lifetime of this guard.
 #[must_use]
 pub struct RegistrationGuard<'a, T: drm::Driver> {
@@ -464,6 +476,23 @@ impl<T: drm::Driver> Deref for Device<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.data
+    }
+}
+
+impl<T: drm::Driver> Device<T> {
+    /// Access registration data from a retained device, including KMS callbacks.
+    ///
+    /// Returns `None` before registration succeeds or after unplug. The acquire
+    /// load makes initialization of the registration data visible before the
+    /// ordinary SRCU guard protects it against concurrent unbind.
+    pub fn registration_guard(&self) -> Option<RegistrationGuard<'_, T>> {
+        if !self.has_registered.load(Ordering::Acquire) {
+            return None;
+        }
+        // SAFETY: The flag is only published after drm_dev_register succeeds,
+        // proving the Ioctl context's previous-registration requirement. The
+        // returned guard then checks that unplug has not invalidated the data.
+        unsafe { self.assume_ctx::<Ioctl>() }.registration_guard()
     }
 }
 

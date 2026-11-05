@@ -14,7 +14,8 @@ use crate::{
 };
 use core::{
     marker::PhantomPinned,
-    ptr::NonNull, //
+    ptr::NonNull,
+    sync::atomic::Ordering, //
 };
 
 #[cfg(CONFIG_RUST_DRM_KMS)]
@@ -228,6 +229,8 @@ impl<'a, T: Driver> Registration<'a, T> {
                     // concurrent access to `registration_data` is possible at this point.
                     unsafe { *drm.registration_data.get() = NonNull::dangling() };
                 })?;
+
+                drm.has_registered.store(true, Ordering::Release);
 
                 #[cfg(all(CONFIG_RUST_DRM_KMS, CONFIG_DRM_CLIENT_SETUP))]
                 if let Some(info) = _mode_config_info {
