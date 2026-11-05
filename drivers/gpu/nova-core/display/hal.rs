@@ -161,7 +161,6 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
     ///
     /// SOR ownership is unchanged. The caller retires the head's window framebuffers
     /// and stops its outputs first, then submits a core UPDATE to apply these changes.
-    #[expect(dead_code)]
     fn emit_disable_head(
         &self,
         core: &mut Channel<'a, 'gpu, Core>,
@@ -173,7 +172,6 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
     ///
     /// The caller preserves any remaining owners. An empty mask detaches the SOR
     /// and ignores `rm_protocol`. Submit a core UPDATE with the corresponding head changes.
-    #[expect(dead_code)]
     fn emit_sor_control(
         &self,
         core: &mut Channel<'a, 'gpu, Core>,
@@ -218,7 +216,6 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
     ) -> Result;
 
     /// Queues methods to disable framebuffer/LUT and semaphore accesses.
-    #[expect(dead_code)]
     fn emit_disable_window(
         &self,
         window: &mut Channel<'a, 'gpu, WindowDma>,

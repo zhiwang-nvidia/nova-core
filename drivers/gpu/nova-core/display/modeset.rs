@@ -45,6 +45,7 @@ use crate::gsp::commands::{
 };
 
 use super::{
+    channel::Update,
     framebuffer::Framebuffer,
     stream::Stream,
     Display,
@@ -267,6 +268,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         let configuration = pending.configuration;
         let stream_to_release = pending.stream_to_release;
         let head_to_disable = pending.head_to_disable;
+        let window_count = pending.window_framebuffers_to_retire.len();
         let affected_outputs = if self.initial_detach_pending {
             self.hw_static_info.display_mask
         } else {
@@ -283,6 +285,14 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         if self.initial_detach_pending {
             self.detach_initial_heads_from_sors()?;
         } else if let Some(display_id) = stream_to_release {
+            for index in 0..window_count {
+                let window_index = self
+                    .pending_commit
+                    .as_ref()
+                    .ok_or(EIO)?
+                    .window_framebuffers_to_retire[index];
+                self.program_disable_window(window_index)?;
+            }
             self.program_disable_output(display_id, head_to_disable, bracket)?;
         }
 
@@ -327,11 +337,22 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         Ok((Some(head_index), windows))
     }
 
+    /// Stops a window's framebuffer fetches and queues its owner removal.
+    fn program_disable_window(&mut self, window_index: usize) -> Result {
+        let core = self.core_channel.as_mut().ok_or(ENODEV)?;
+        let window = &mut self.windows[window_index];
+        let channel = window.channel.as_mut().ok_or(ENODEV)?;
+        self.hal.emit_disable_window(channel, self.bar)?;
+        channel.update(&*self.hal, core, None, Update::WaitForRetire)?;
+        window.emit_owner_methods(&*self.hal, core, None)?;
+        window.emit_clear_format_usage_bounds_methods(&*self.hal, core)
+    }
+
     /// Programs the selected output's disable sequence within an open modeset bracket.
     fn program_disable_output(
         &mut self,
         display_id: u32,
-        _head_to_disable: Option<usize>,
+        head_to_disable: Option<usize>,
         bracket: u64,
     ) -> Result {
         let stream = self
@@ -339,6 +360,20 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             .iter()
             .find(|stream| stream.display_id == display_id)
             .ok_or(ENODEV)?;
+        let head = head_to_disable.map(|index| self.heads[index].id);
+        let remaining_sor_heads = self
+            .streams
+            .iter()
+            .filter(|other| other.display_id != display_id && other.sor == stream.sor)
+            .fold(0, |mask, other| mask | (1 << other.head));
+        let core = self.core_channel.as_mut().ok_or(ENODEV)?;
+        if let Some(head) = head {
+            self.hal.emit_disable_head(core, self.bar, head)?;
+        }
+        self.hal
+            .emit_sor_control(core, stream.sor, stream.protocol, remaining_sor_heads)?;
+        core.update(&*self.hal)?;
+        core.wait_idle()?;
         stream.release(self.cmdq, bracket)
     }
 
@@ -358,6 +393,9 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             .cmdq
             .send_gmc_command(DisplayModesetBegin::new(display_id, 0)?, |_| Ok(()))?
             .modeset_id;
+        for &index in &window_framebuffers_to_retire {
+            self.program_disable_window(index)?;
+        }
         self.program_disable_output(display_id, head_to_disable, bracket)?;
         self.cmdq.send_gmc_command(
             DisplayModesetEnd::new(bracket, DisplayModesetEndMode::Commit)?,
