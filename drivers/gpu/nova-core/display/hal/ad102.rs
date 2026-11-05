@@ -262,6 +262,24 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
             .free_context_dma(descriptor.context_dma_descriptor_id)
     }
 
+    fn emit_disable_heads_and_detach_sors(
+        &self,
+        core: &mut Channel<'a, 'gpu, Core>,
+        bar: Bar0<'_>,
+        head_mask: u32,
+    ) -> Result {
+        if head_mask == 0 || head_mask >> core_methods::HEAD_COUNT != 0 {
+            return Err(EINVAL);
+        }
+        for head in 0..core_methods::HEAD_COUNT {
+            if head_mask & (1 << head) != 0 {
+                let caps = capability::read_postcomp_caps(bar, head.into_safe_cast())?;
+                self.emit_disable_head_methods(core, head, caps)?;
+            }
+        }
+        modeset::emit_detach_heads_from_sors_methods(self, core, head_mask, SOR_COUNT)
+    }
+
     fn emit_disable_head(
         &self,
         core: &mut Channel<'a, 'gpu, Core>,
