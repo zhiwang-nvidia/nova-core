@@ -71,6 +71,7 @@ pub(crate) mod core {
     pub(crate) const SET_CONTEXT_DMA_NOTIFIER: u32 = 0x0208;
 
     pub(crate) const HEAD_STRIDE: u32 = 0x0400;
+    pub(crate) const COORDINATE_MAX: u32 = 0x7fff;
     pub(crate) const HEAD_SET_OUTPUT_SCALER_COEFF_VALUE: u32 = 0x2214;
     pub(crate) const HEAD_SET_DESKTOP_COLOR_ALPHA_RED: u32 = 0x2220;
     pub(crate) const HEAD_SET_DESKTOP_COLOR_GREEN_BLUE: u32 = 0x2224;
@@ -91,17 +92,49 @@ pub(crate) mod window {
     pub(crate) const SET_CONTEXT_DMA_SEMAPHORE: u32 = 0x0218;
     pub(crate) const SET_CONTEXT_DMA_NOTIFIER: u32 = 0x021c;
 
+    pub(crate) const SET_SIZE: u32 = 0x0224;
+    pub(crate) const SET_SIZE_HEIGHT_SHIFT: u32 = 16;
+    pub(crate) const SET_PLANAR_STORAGE: u32 = 0x0230;
+    // Pitch-linear storage encodes the byte pitch in units of 64 bytes.
+    pub(crate) const SET_PLANAR_STORAGE_PITCH_BYTE_SHIFT: u32 = 6;
+    pub(crate) const SET_PLANAR_STORAGE_PITCH_MASK: u32 = 0x1fff;
     pub(crate) const SET_CONTEXT_DMA_ISO: u32 = 0x0240;
     pub(crate) const SET_OFFSET: u32 = 0x0260;
+    pub(crate) const SET_POINT_IN: u32 = 0x0290;
+    pub(crate) const SET_SIZE_IN: u32 = 0x0298;
+    pub(crate) const SET_SIZE_OUT: u32 = 0x02a4;
+    pub(crate) const SET_CONTROL_INPUT_SCALER: u32 = 0x02a8;
+    pub(crate) const SET_CONTROL_INPUT_SCALER_VERTICAL_TAPS_2: u32 = 1;
+    pub(crate) const SET_CONTROL_INPUT_SCALER_HORIZONTAL_TAPS_2: u32 = 1 << 4;
     pub(crate) const SET_INPUT_SCALER_COEFF_VALUE: u32 = 0x02ac;
 
+    pub(crate) const SET_COMPOSITION_CONTROL: u32 = 0x02ec;
+    pub(crate) const SET_COMPOSITION_CONTROL_BYPASS_ENABLE: u32 = 1 << 16;
+    pub(crate) const SET_PRESENT_CONTROL: u32 = 0x0308;
+    pub(crate) const SET_PRESENT_CONTROL_MIN_PRESENT_INTERVAL_ONE: u32 = 1;
+    pub(crate) const SET_PRESENT_CONTROL_BEGIN_MODE_NON_TEARING: u32 = 0;
+    pub(crate) const SET_PRESENT_CONTROL_TIMESTAMP_MODE_DISABLE: u32 = 0;
+    pub(crate) const SET_PRESENT_CONTROL_STEREO_MODE_MONO: u32 = 0;
+    pub(crate) const SET_UPDATE_TIMESTAMP_LO: u32 = 0x0348;
+    pub(crate) const SET_UPDATE_TIMESTAMP_HI: u32 = 0x034c;
+
+    pub(crate) const SET_FMT_COEFFICIENT_C00: u32 = 0x0400;
+    // Row-major S5.16 coefficients for the RGB identity transform.
+    pub(crate) const FMT_IDENTITY_COEFFICIENTS: [u32; 12] =
+        [0x10000, 0, 0, 0, 0, 0x10000, 0, 0, 0, 0, 0x10000, 0];
     pub(crate) const SET_CONTEXT_DMA_ILUT: u32 = 0x0444;
     pub(crate) const SET_OFFSET_ILUT: u32 = 0x0448;
+    pub(crate) const SET_CSC00CONTROL: u32 = 0x045c;
+    pub(crate) const SET_CSC0LUT_CONTROL: u32 = 0x04a0;
     pub(crate) const SET_CSC0LUT_SEGMENT_SIZE: u32 = 0x04a4;
     pub(crate) const SET_CSC0LUT_ENTRY: u32 = 0x04a8;
+    pub(crate) const SET_CSC01CONTROL: u32 = 0x04bc;
     pub(crate) const SET_CONTEXT_DMA_TMO_LUT: u32 = 0x0528;
     pub(crate) const SET_OFFSET_TMO_LUT: u32 = 0x052c;
+    pub(crate) const SET_CSC10CONTROL: u32 = 0x053c;
+    pub(crate) const SET_CSC1LUT_CONTROL: u32 = 0x0580;
     pub(crate) const SET_CSC1LUT_SEGMENT_SIZE: u32 = 0x0584;
     pub(crate) const SET_CSC1LUT_ENTRY: u32 = 0x0588;
+    pub(crate) const SET_CSC11CONTROL: u32 = 0x059c;
     pub(crate) const LUT_VALUE_SHIFT: u32 = 16;
 }

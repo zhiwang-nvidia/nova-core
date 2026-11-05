@@ -21,15 +21,19 @@ use crate::{
                 methods::{
                     self,
                     c67e,
-                    core as core_methods, //
+                    core as core_methods,
+                    window as window_methods, //
                 },
+                modeset,
                 window, //
             },
             DisplayHal,
             DisplayMethodHal,
             SurfaceDescriptor, //
         },
-        scaler, //
+        mode::DisplayMode,
+        scaler,
+        DisplayPixelFormat, //
     },
     driver::Bar0,
     gsp::{
@@ -202,6 +206,54 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result {
         self.instance_memory
             .free_context_dma(descriptor.context_dma_descriptor_id)
+    }
+
+    /// Emits methods to configure a pitch-linear framebuffer with composition bypass.
+    fn emit_window_framebuffer_configuration(
+        &self,
+        window: &mut Channel<'a, 'gpu, WindowDma>,
+        bar: Bar0<'_>,
+        mode: &DisplayMode,
+        format: DisplayPixelFormat,
+        pitch: u32,
+        descriptor: SurfaceDescriptor,
+    ) -> Result {
+        const PITCH_ALIGNMENT: u32 = 256;
+
+        mode.validate_framebuffer(format, pitch)?;
+        modeset::validate_mode(mode)?;
+        let encoded_pitch = pitch >> window_methods::SET_PLANAR_STORAGE_PITCH_BYTE_SHIFT;
+        if !pitch.is_multiple_of(PITCH_ALIGNMENT)
+            || encoded_pitch > window_methods::SET_PLANAR_STORAGE_PITCH_MASK
+            || descriptor.context_dma_descriptor_id.handle == 0
+        {
+            return Err(EINVAL);
+        }
+        let caps = capability::read_precomp_caps(bar, window.kind.index.into_safe_cast())?;
+        window::emit_window_geometry_methods(self, window, mode, pitch, caps)?;
+        window::emit_window_color_methods(self, window, caps)?;
+        let format = match format {
+            DisplayPixelFormat::Xrgb8888 => c67e::SET_PARAMS_FORMAT_X8R8G8B8,
+        };
+        // C57E has a MEMORY_LAYOUT field here; C67E uses its Context DMA descriptor.
+        window.emit(
+            self,
+            c67e::SET_STORAGE,
+            &[c67e::SET_STORAGE_BLOCK_HEIGHT_ONE_GOB],
+        )?;
+        window.emit(self, c67e::SET_PARAMS, &[format])?;
+        // SET_SCAN_DIRECTION is available in C67E/C87E, but not C57E.
+        window.emit(
+            self,
+            c67e::SET_SCAN_DIRECTION,
+            &[c67e::SET_SCAN_DIRECTION_FROM_TOP_LEFT],
+        )?;
+        self.emit_disable_window_methods(window, caps)?;
+        window.emit(
+            self,
+            window_methods::SET_CONTEXT_DMA_ISO,
+            &[descriptor.context_dma_descriptor_id.handle],
+        )
     }
 
     /// Queues methods to disable framebuffer/LUT and semaphore accesses.

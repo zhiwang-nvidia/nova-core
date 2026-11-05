@@ -53,10 +53,14 @@ register! {
     }
 
     pub(crate) NV_PDISP_FE_SW_PRECOMP_WIN_PIPE_HDR_CAPA(u32)[32, stride = 32] @ 0x00640780 {
+        16:16   csc00_present => bool;
         17:17   csc0lut_present => bool;
+        18:18   csc01_present => bool;
         19:19   sclr_present => bool;
         20:20   tmo_present => bool;
+        22:22   csc10_present => bool;
         23:23   csc1lut_present => bool;
+        24:24   csc11_present => bool;
     }
 
     /// Core armed aperture (0x688000) plus WINDOW_SET_CONTROL (0x1000).

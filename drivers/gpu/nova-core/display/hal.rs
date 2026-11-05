@@ -7,10 +7,14 @@ use kernel::{
 };
 
 use crate::{
-    display::channel::{
-        Channel,
-        Core,
-        WindowDma, //
+    display::{
+        channel::{
+            Channel,
+            Core,
+            WindowDma, //
+        },
+        mode::DisplayMode,
+        DisplayPixelFormat, //
     },
     driver::Bar0,
     gsp::{
@@ -125,6 +129,18 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
 
     /// Free a surface descriptor. It must be unbound.
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result;
+
+    /// Emits methods to configure a pitch-linear framebuffer with composition bypass.
+    #[expect(dead_code)]
+    fn emit_window_framebuffer_configuration(
+        &self,
+        window: &mut Channel<'a, 'gpu, WindowDma>,
+        bar: Bar0<'_>,
+        mode: &DisplayMode,
+        format: DisplayPixelFormat,
+        pitch: u32,
+        descriptor: SurfaceDescriptor,
+    ) -> Result;
 
     /// Queues methods to disable framebuffer/LUT and semaphore accesses.
     #[expect(dead_code)]

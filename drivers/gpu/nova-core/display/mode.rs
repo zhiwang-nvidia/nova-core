@@ -8,6 +8,8 @@
 
 use kernel::prelude::*;
 
+use super::DisplayPixelFormat;
+
 /// Active-first raster coordinates, with the pixel clock in kHz.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DisplayMode {
@@ -36,6 +38,22 @@ pub struct DisplayMode {
 }
 
 impl DisplayMode {
+    /// Checks the driver mode limits and the framebuffer's minimum row stride.
+    ///
+    /// These checks are independent of the GPU class. Hardware pitch alignment
+    /// and method field limits are checked by the HAL.
+    pub(crate) fn validate_framebuffer(&self, format: DisplayPixelFormat, pitch: u32) -> Result {
+        self.validate()?;
+        let minimum_pitch = self
+            .hdisplay
+            .checked_mul(format.bytes_per_pixel())
+            .ok_or(EOVERFLOW)?;
+        if pitch < minimum_pitch {
+            return Err(EINVAL);
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate(&self) -> Result {
         // The current clock path converts kHz to the 31-bit HERTZ field of
         // HEAD_SET_PIXEL_CLOCK_FREQUENCY. Bit 31 controls ADJ1000DIV1001, so
