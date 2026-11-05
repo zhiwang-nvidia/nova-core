@@ -8,6 +8,7 @@ use kernel::{
 
 use crate::{
     display::{
+        capability,
         channel::{
             Channel,
             Core,
@@ -26,6 +27,7 @@ use crate::{
             DisplayMethodHal,
             SurfaceDescriptor, //
         },
+        scaler, //
     },
     driver::Bar0,
     gsp::{
@@ -37,6 +39,7 @@ use crate::{
         vram::VramRegion,
         GpuMm, //
     },
+    num::IntoSafeCast, //
 };
 
 pub(super) const IP_VERSION: u32 = 0x0404_0000;
@@ -112,6 +115,7 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
         if head_mask == 0 || head_mask >> core_methods::HEAD_COUNT != 0 {
             return Err(EINVAL);
         }
+        disp4::scaler::emit_postcomp_scaler_coeffs_methods(self, channel, head_mask)?;
         disp4::head::emit_desktop_color_methods(self, channel, head_mask)?;
         channel.advance()
     }
@@ -119,10 +123,16 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
     fn init_window_channel(
         &self,
         channel: &mut Channel<'a, 'gpu, WindowDma>,
-        _bar: Bar0<'_>,
-        _head_mask: u32,
+        bar: Bar0<'_>,
+        head_mask: u32,
     ) -> Result {
         self.emit_window_notifier_methods(channel, None)?;
+        let caps = capability::read_precomp_caps(bar, channel.kind.index.into_safe_cast())?;
+
+        // NVKMS: prefer postcomp scaling when any usable head provides it.
+        if caps.sclr_present() && !scaler::has_postcomp_scaler(bar, head_mask)? {
+            disp4::scaler::emit_precomp_scaler_coeffs_methods(self, channel)?;
+        }
         channel.advance()
     }
 

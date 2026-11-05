@@ -7,4 +7,5 @@ pub(super) mod head;
 pub(super) mod instance_memory;
 pub(super) mod methods;
 mod ramht;
+pub(super) mod scaler;
 pub(super) mod notifier;

@@ -48,6 +48,14 @@ register! {
         20:16   state;
     }
 
+    pub(crate) NV_PDISP_FE_SW_POSTCOMP_HEAD_HDR_CAPA(u32)[8, stride = 32] @ 0x00640680 {
+        18:18   sclr_present => bool;
+    }
+
+    pub(crate) NV_PDISP_FE_SW_PRECOMP_WIN_PIPE_HDR_CAPA(u32)[32, stride = 32] @ 0x00640780 {
+        19:19   sclr_present => bool;
+    }
+
     /// Core armed aperture (0x688000) plus WINDOW_SET_CONTROL (0x1000).
     pub(crate) NV_UDISP_FE_CHN_ARMED_CORE_WINDOW_SET_CONTROL(u32)[32, stride = 128] @ 0x00689000 {
         3:0     owner;

@@ -2,10 +2,13 @@
 
 //! nova-core display support.
 
+mod capability;
 mod channel;
 mod hal;
 mod head;
 mod methods;
+mod scaler;
+mod tables;
 mod window;
 
 use channel::{

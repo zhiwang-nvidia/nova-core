@@ -67,6 +67,7 @@ pub(crate) mod core {
 
     pub(crate) const HEAD_COUNT: u32 = 8;
     pub(crate) const HEAD_STRIDE: u32 = 0x0400;
+    pub(crate) const HEAD_SET_OUTPUT_SCALER_COEFF_VALUE: u32 = 0x2214;
     pub(crate) const HEAD_SET_DESKTOP_COLOR_ALPHA_RED: u32 = 0x2220;
     pub(crate) const HEAD_SET_DESKTOP_COLOR_GREEN_BLUE: u32 = 0x2224;
 }
@@ -77,4 +78,5 @@ pub(crate) mod window {
     //! These definitions match the C57E, C67E and C87E class interfaces.
 
     pub(crate) const SET_CONTEXT_DMA_NOTIFIER: u32 = 0x021c;
+    pub(crate) const SET_INPUT_SCALER_COEFF_VALUE: u32 = 0x02ac;
 }
