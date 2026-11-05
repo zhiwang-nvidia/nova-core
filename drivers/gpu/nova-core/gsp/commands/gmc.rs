@@ -27,6 +27,7 @@ use crate::{
             DisplayChannelKind,
             DisplayCreateChannelReply,
             DisplayDestroyChannelReply,
+            DisplayGetPortStateReply,
             DisplayHwStaticInfo,
             DisplaySetInstanceMemoryReply,
             DisplayShutdownReply,
@@ -38,6 +39,8 @@ use crate::{
                 DisplayCreateChannelRequest,
                 DisplayCreateChannelResponseSchema,
                 DisplayDestroyChannelRequest,
+                DisplayGetPortStateRequest,
+                DisplayGetPortStateResponseSchema,
                 DisplayInitRequest,
                 DisplayInitResponseSchema,
                 DisplaySetInstanceMemoryRequest,
@@ -338,6 +341,73 @@ impl GmcReply for DisplayHwStaticInfo {
         let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
         let mut schema = KBox::init(DisplayStaticInfoResponseSchema::init(), GFP_KERNEL)?;
         let reply = KBox::try_init(decoder.decode(&mut *schema)?, GFP_KERNEL)?;
+        Ok(KBox::into_inner(reply))
+    }
+}
+
+pub(crate) struct DisplayGetPortState {
+    payload: KVVec<u64>,
+}
+
+#[expect(dead_code)]
+impl DisplayGetPortState {
+    pub(crate) fn new(display_id: u32) -> Result<Self> {
+        if !display_id.is_power_of_two() {
+            return Err(EINVAL);
+        }
+        let mut encoder = Encoder::new();
+        DisplayGetPortStateRequest::new(display_id).encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayGetPortState {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayGetPortState;
+    const MAX_REPLY_SIZE: u32 = 4096;
+    type Command = ();
+    type Reply = DisplayGetPortStateReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayGetPortStateReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayGetPortState;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        let bytes = payload.flush_into_kvec(GFP_KERNEL)?;
+        if bytes.len() > num::u32_as_usize(DisplayGetPortState::MAX_REPLY_SIZE) {
+            return Err(EINVAL);
+        }
+        let words = nvkv_words(&bytes)?;
+
+        let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
+        let mut schema = KBox::init(DisplayGetPortStateResponseSchema::init(), GFP_KERNEL)?;
+        let reply = KBox::try_init(decoder.decode(&mut *schema)?, GFP_KERNEL)?;
+        if !reply.display_id.is_power_of_two() || reply.connected > 1 {
+            return Err(EINVAL);
+        }
         Ok(KBox::into_inner(reply))
     }
 }
