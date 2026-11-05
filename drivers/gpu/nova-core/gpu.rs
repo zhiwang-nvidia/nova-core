@@ -636,6 +636,14 @@ impl<'gpu> Gpu<'gpu> {
         self.display.lock().as_ref().ok_or(ENODEV)?.outputs()
     }
 
+    pub(crate) fn display_read_edid(&self, display_id: u32) -> Result<KVec<u8>> {
+        self.display
+            .lock()
+            .as_ref()
+            .ok_or(ENODEV)?
+            .read_edid(display_id)
+    }
+
     /// Returns the static GPU configuration that GSP-RM reported at boot.
     pub(crate) fn gsp_static_info(&self) -> &gsp::commands::GspStaticInfo {
         self.gsp_resources.static_info()

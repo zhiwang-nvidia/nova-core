@@ -54,6 +54,11 @@ impl NovaCoreApi<'_> {
         self.gpu.display_outputs()
     }
 
+    /// Returns the EDID bytes for an admitted display identifier.
+    pub fn display_read_edid(&self, display_id: u32) -> Result<KVec<u8>> {
+        self.gpu.display_read_edid(display_id)
+    }
+
     /// Returns the GPU [`GspStaticInfo`].
     pub fn gsp_static_info(&self) -> &GspStaticInfo {
         self.gpu.gsp_static_info()

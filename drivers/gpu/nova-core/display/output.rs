@@ -27,7 +27,8 @@ use kernel::prelude::*;
 use crate::gsp::commands::{
     gmc::{
         DisplayGetPortCaps,
-        DisplayGetPortState, //
+        DisplayGetPortState,
+        DisplayReadEdid, //
     },
     DisplayOutputResourceType, //
 };
@@ -47,6 +48,13 @@ pub struct DisplayOutput {
 }
 
 impl Display<'_, '_> {
+    fn validate_display_id(&self, display_id: u32) -> Result {
+        if !display_id.is_power_of_two() || self.hw_static_info.display_mask & display_id == 0 {
+            return Err(EINVAL);
+        }
+        Ok(())
+    }
+
     pub(crate) fn outputs(&self) -> Result<KVec<DisplayOutput>> {
         let mut outputs = KVec::new();
         for index in 0..u32::BITS {
@@ -81,5 +89,13 @@ impl Display<'_, '_> {
             )?;
         }
         Ok(outputs)
+    }
+
+    pub(crate) fn read_edid(&self, display_id: u32) -> Result<KVec<u8>> {
+        self.validate_display_id(display_id)?;
+        let reply = self
+            .cmdq
+            .send_gmc_command(DisplayReadEdid::new(display_id)?, |_| Ok(()))?;
+        Ok(reply.edid)
     }
 }

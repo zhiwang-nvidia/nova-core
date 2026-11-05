@@ -421,7 +421,6 @@ pub(crate) struct DisplayReadEdid {
     payload: KVVec<u64>,
 }
 
-#[expect(dead_code)]
 impl DisplayReadEdid {
     pub(crate) fn new(display_id: u32) -> Result<Self> {
         if !display_id.is_power_of_two() {
