@@ -14,6 +14,8 @@ use kernel::{
     prelude::*, //
 };
 
+use crate::display::DisplayPixelFormat;
+
 /// Display capabilities returned by DISPLAY_INIT.
 pub(crate) struct DisplayCaps {
     /// Supported `GMCAPI_DISPLAY_FEATURE_*` service bits.
@@ -213,6 +215,37 @@ impl DisplayGetPortCapsReply {
             value => DisplayOutputResourceType::Unknown(value),
         }
     }
+}
+
+impl From<DisplayPixelFormat> for u32 {
+    fn from(format: DisplayPixelFormat) -> Self {
+        match format {
+            DisplayPixelFormat::Xrgb8888 => 1,
+        }
+    }
+}
+
+pub(crate) struct DisplayConfiguration {
+    pub(crate) head: u32,
+    pub(crate) window: u32,
+    pub(crate) display_id: u32,
+    pub(crate) clock_khz: u32,
+    pub(crate) htotal: u32,
+    pub(crate) vtotal: u32,
+    pub(crate) hblank_start: u32,
+    pub(crate) hblank_end: u32,
+    pub(crate) vblank_start: u32,
+    pub(crate) vblank_end: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch: u32,
+    pub(crate) format: DisplayPixelFormat,
+}
+
+#[expect(dead_code)]
+pub(crate) struct DisplayCheckConfigurationReply {
+    pub(crate) possible: u32,
+    pub(crate) checked_domains: u32,
 }
 
 pub(crate) struct DisplayModesetBeginReply {
