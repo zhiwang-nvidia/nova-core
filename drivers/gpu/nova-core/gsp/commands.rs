@@ -247,7 +247,6 @@ pub(crate) struct DisplayCheckConfigurationReply {
     pub(crate) checked_domains: u32,
 }
 
-#[expect(dead_code)]
 pub(crate) struct DisplayAssignStreamRouteReply {
     pub(crate) stream_id: u64,
     pub(crate) assigned: ArrayVec<u32, { Self::NUM_SORS }>,

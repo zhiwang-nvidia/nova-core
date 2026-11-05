@@ -744,7 +744,6 @@ pub(crate) struct DisplayAssignStreamRoute {
 }
 
 impl DisplayAssignStreamRoute {
-    #[expect(dead_code)]
     pub(crate) fn new(
         modeset_id: u64,
         display_id: u32,
@@ -1016,7 +1015,6 @@ pub(crate) struct DisplayReleaseStreamRoute {
 }
 
 impl DisplayReleaseStreamRoute {
-    #[expect(dead_code)]
     pub(crate) fn new(stream_id: u64, modeset_id: u64) -> Result<Self> {
         if stream_id == 0 || modeset_id == 0 {
             return Err(EINVAL);
