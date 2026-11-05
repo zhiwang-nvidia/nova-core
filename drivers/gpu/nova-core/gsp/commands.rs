@@ -247,6 +247,16 @@ pub(crate) struct DisplayCheckConfigurationReply {
     pub(crate) checked_domains: u32,
 }
 
+#[expect(dead_code)]
+pub(crate) struct DisplayAssignStreamRouteReply {
+    pub(crate) stream_id: u64,
+    pub(crate) assigned: ArrayVec<u32, { Self::NUM_SORS }>,
+}
+
+impl DisplayAssignStreamRouteReply {
+    pub(crate) const NUM_SORS: usize = 4;
+}
+
 pub(crate) struct DisplayModesetBeginReply {
     pub(crate) modeset_id: u64,
 }
@@ -267,6 +277,8 @@ impl From<DisplayModesetEndMode> for u32 {
 }
 
 pub(crate) struct DisplayModesetEndReply;
+
+pub(crate) struct DisplayReleaseStreamRouteReply;
 
 /// The static GPU configuration, which GSP-RM reports in reply to [`GspInit`](gmc::GspInit).
 pub struct GspStaticInfo {

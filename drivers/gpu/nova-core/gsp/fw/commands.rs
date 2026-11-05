@@ -20,6 +20,7 @@ use crate::{
     gpu::Chipset,
     gsp::{
         commands::{
+            DisplayAssignStreamRouteReply,
             DisplayCaps,
             DisplayChannelKind,
             DisplayConfiguration,
@@ -720,6 +721,51 @@ impl DisplayDestroyChannelRequest {
 }
 
 nvkv_encode! {
+    pub(crate) struct DisplayAssignStreamRouteRequest {
+        modeset_id: Key<u64, { Self::MODESET_ID_KEY }>,
+        display_id: Key<u32, { Self::DISPLAY_ID_KEY }>,
+        head: Key<u32, { Self::HEAD_KEY }>,
+        exclude_mask: Key<u32, { Self::EXCLUDE_MASK_KEY }>,
+    }
+}
+
+impl DisplayAssignStreamRouteRequest {
+    const MODESET_ID_KEY: KeyId = 0x0150;
+    const DISPLAY_ID_KEY: KeyId = 0x0151;
+    const HEAD_KEY: KeyId = 0x0152;
+    const EXCLUDE_MASK_KEY: KeyId = 0x0153;
+
+    pub(crate) fn new(modeset_id: u64, display_id: u32, head: u32, exclude_mask: u32) -> Self {
+        Self {
+            modeset_id: modeset_id.into(),
+            display_id: display_id.into(),
+            head: head.into(),
+            exclude_mask: exclude_mask.into(),
+        }
+    }
+}
+
+nvkv_decode! {
+    pub(crate) struct DisplayAssignStreamRouteResponseSchema => DisplayAssignStreamRouteResponse {
+        stream_id: Required<Key<u64, { Self::STREAM_ID_KEY }>>,
+        assigned: Required<Array<u32, { DisplayAssignStreamRouteReply::NUM_SORS }, { Self::ASSIGNED_KEY }>>,
+        flags: Required<Key<u32, { Self::FLAGS_KEY }>>,
+    }
+}
+
+impl DisplayAssignStreamRouteResponseSchema {
+    const STREAM_ID_KEY: KeyId = 0x0154;
+    const ASSIGNED_KEY: KeyId = 0x0156;
+    const FLAGS_KEY: KeyId = 0x0157;
+}
+
+pub(crate) struct DisplayAssignStreamRouteResponse {
+    pub(crate) stream_id: u64,
+    pub(crate) assigned: ArrayVec<u32, { DisplayAssignStreamRouteReply::NUM_SORS }>,
+    flags: u32,
+}
+
+nvkv_encode! {
     pub(crate) struct DisplayCheckConfigurationRequest {
         head: Key<u32, { Self::HEAD_KEY }>,
         window: Key<u32, { Self::WINDOW_KEY }>,
@@ -856,6 +902,25 @@ impl DisplayModesetEndRequest {
         Self {
             modeset_id: modeset_id.into(),
             end_mode: end_mode.into(),
+        }
+    }
+}
+
+nvkv_encode! {
+    pub(crate) struct DisplayReleaseStreamRouteRequest {
+        stream_id: Key<u64, { Self::STREAM_ID_KEY }>,
+        modeset_id: Key<u64, { Self::MODESET_ID_KEY }>,
+    }
+}
+
+impl DisplayReleaseStreamRouteRequest {
+    const STREAM_ID_KEY: KeyId = 0x01c7;
+    const MODESET_ID_KEY: KeyId = 0x01c8;
+
+    pub(crate) fn new(stream_id: u64, modeset_id: u64) -> Self {
+        Self {
+            stream_id: stream_id.into(),
+            modeset_id: modeset_id.into(),
         }
     }
 }
