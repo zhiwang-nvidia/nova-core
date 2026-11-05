@@ -283,6 +283,11 @@ pub(crate) struct DisplayHdmiSetSinkCapabilitiesReply;
 
 pub(crate) struct DisplayHdmiSetTmdsProtocolReply;
 
+#[expect(dead_code)]
+pub(crate) struct DisplaySetMonitorPowerReply {
+    pub(crate) accepted_state: u32,
+}
+
 /// The static GPU configuration, which GSP-RM reports in reply to [`GspInit`](gmc::GspInit).
 pub struct GspStaticInfo {
     gpu_name: [u8; Self::MAX_GPU_NAME_LEN],

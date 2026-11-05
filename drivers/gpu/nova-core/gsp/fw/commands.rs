@@ -943,6 +943,45 @@ impl DisplayModesetEndRequest {
 }
 
 nvkv_encode! {
+    pub(crate) struct DisplaySetMonitorPowerRequest {
+        stream_id: Key<u64, { Self::STREAM_ID_KEY }>,
+        modeset_id: Key<u64, { Self::MODESET_ID_KEY }>,
+        state: Key<u32, { Self::STATE_KEY }>,
+    }
+}
+
+impl DisplaySetMonitorPowerRequest {
+    const STREAM_ID_KEY: KeyId = 0x018e;
+    const MODESET_ID_KEY: KeyId = 0x018f;
+    const STATE_KEY: KeyId = 0x0190;
+
+    pub(crate) fn new(stream_id: u64, modeset_id: u64, on: bool) -> Self {
+        Self {
+            stream_id: stream_id.into(),
+            modeset_id: modeset_id.into(),
+            state: u32::from(on).into(),
+        }
+    }
+}
+
+nvkv_decode! {
+    pub(crate) struct DisplaySetMonitorPowerResponseSchema => DisplaySetMonitorPowerResponse {
+        accepted_state: Required<Key<u32, { Self::ACCEPTED_STATE_KEY }>>,
+        flags: Required<Key<u32, { Self::FLAGS_KEY }>>,
+    }
+}
+
+impl DisplaySetMonitorPowerResponseSchema {
+    const ACCEPTED_STATE_KEY: KeyId = 0x0191;
+    const FLAGS_KEY: KeyId = 0x0192;
+}
+
+pub(crate) struct DisplaySetMonitorPowerResponse {
+    pub(crate) accepted_state: u32,
+    flags: u32,
+}
+
+nvkv_encode! {
     pub(crate) struct DisplayReleaseStreamRouteRequest {
         stream_id: Key<u64, { Self::STREAM_ID_KEY }>,
         modeset_id: Key<u64, { Self::MODESET_ID_KEY }>,
