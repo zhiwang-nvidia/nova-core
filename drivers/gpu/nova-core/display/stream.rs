@@ -12,7 +12,8 @@ use crate::gsp::{
             DisplayGetPortCaps,
             DisplayHdmiSetSinkCapabilities,
             DisplayHdmiSetTmdsProtocol,
-            DisplayReleaseStreamRoute, //
+            DisplayReleaseStreamRoute,
+            DisplaySetMonitorPower, //
         },
         DisplayOutputResourceType, //
     },
@@ -93,6 +94,17 @@ impl Stream {
             DisplayHdmiSetTmdsProtocol::new(self.stream_id, bracket, true)?,
             |_| Ok(()),
         )?;
+        Ok(())
+    }
+
+    pub(super) fn set_monitor_power(&self, cmdq: &Cmdq<'_>, bracket: u64, enabled: bool) -> Result {
+        let power = cmdq.send_gmc_command(
+            DisplaySetMonitorPower::new(self.stream_id, bracket, enabled)?,
+            |_| Ok(()),
+        )?;
+        if power.accepted_state != u32::from(enabled) {
+            return Err(EIO);
+        }
         Ok(())
     }
 }
