@@ -65,7 +65,6 @@ impl Window<'_, '_> {
     ///
     /// The caller must wait for core idle and prevent further core submissions
     /// while reading the armed state.
-    #[expect(dead_code)]
     pub(super) fn read_armed_owner(&self, bar: Bar0<'_>) -> Result<Option<u32>> {
         // OWNER encodes HEAD0 through HEAD7, independently of which heads are usable.
         const OWNER_HEAD_COUNT: u32 = 8;
@@ -122,7 +121,6 @@ impl Window<'_, '_> {
     }
 
     /// Queues usage bounds for an unscaled window framebuffer.
-    #[expect(dead_code)]
     pub(super) fn emit_usage_methods(
         &self,
         hal: &dyn DisplayMethodHal,
@@ -167,7 +165,6 @@ impl Window<'_, '_> {
     ///
     /// SET_POINT_OUT is shared by DISP 4.x and 5.x. UPDATE emission is separate
     /// because its encoding differs between classes.
-    #[expect(dead_code)]
     pub(super) fn emit_set_window_position(&mut self, hal: &dyn DisplayMethodHal) -> Result {
         let immediate = self.immediate_channel.as_mut().ok_or(ENODEV)?;
         if immediate.kind.index >= core::WINDOW_COUNT {

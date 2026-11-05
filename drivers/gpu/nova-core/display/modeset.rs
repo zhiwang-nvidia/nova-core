@@ -197,6 +197,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         let head_index = commit.head_index;
         let window_index = commit.window_index;
         let stream_to_release = commit.stream_to_release;
+        let head_to_disable = commit.head_to_disable;
         self.pending_commit = Some(commit);
         let channel = self.windows[window_index].channel.as_ref().ok_or(ENODEV)?;
         self.pending_commit
@@ -206,6 +207,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             .bind(channel, &mut *self.hal)?;
 
         self.program_modeset()?;
+        // Hardware has accepted the change; release the retired resources.
         let pending = self.pending_commit.as_ref().ok_or(EIO)?;
         for &index in &pending.window_framebuffers_to_retire {
             let window = &mut self.windows[index];
@@ -238,9 +240,16 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
                 window.head = None;
             }
         }
+        if let Some(index) = head_to_disable.filter(|&index| index != head_index) {
+            let head = &mut self.heads[index];
+            head.mode = None;
+            head.limited_range = false;
+        }
         let head = self.heads.get_mut(head_index).ok_or(EIO)?;
         let window = self.windows.get_mut(window_index).ok_or(EIO)?;
         let pending = self.pending_commit.take().ok_or(EIO)?;
+        head.mode = Some(pending.configuration.mode);
+        head.limited_range = pending.configuration.limited_range;
         window.head = Some(head.id);
         window.framebuffer = Some(pending.framebuffer);
         Ok(())
@@ -261,6 +270,49 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         core.wait_idle()?;
         self.initial_detach_pending = false;
         Ok(())
+    }
+
+    /// Applies the head and window configuration and waits for the framebuffer to become active.
+    fn apply_head_and_window_state(&mut self) -> Result {
+        let pending = self.pending_commit.as_ref().ok_or(EIO)?;
+        let configuration = pending.configuration;
+        let head = self.heads[pending.head_index].id;
+        let window_index = pending.window_index;
+        let stream = pending.stream.as_ref().ok_or(EIO)?;
+        let core = self.core_channel.as_mut().ok_or(ENODEV)?;
+        core.wait_idle()?;
+        let window = &mut self.windows[window_index];
+        if window.read_armed_owner(self.bar)? != Some(head) {
+            window.emit_owner_methods(&*self.hal, core, Some(head))?;
+            window.emit_clear_format_usage_bounds_methods(&*self.hal, core)?;
+            core.update(&*self.hal)?;
+        }
+        window.emit_usage_methods(&*self.hal, core, &configuration.mode, configuration.format)?;
+        let channel = window.channel.as_mut().ok_or(ENODEV)?;
+        window.immediate_channel.as_ref().ok_or(ENODEV)?;
+        self.hal.emit_head_configuration(
+            core,
+            self.bar,
+            head,
+            &configuration.mode,
+            configuration.limited_range,
+        )?;
+        self.hal
+            .emit_sor_control(core, stream.sor, stream.protocol, 1 << head)?;
+        self.hal
+            .emit_head_display_id(core, head, configuration.display_id)?;
+        self.hal.emit_window_framebuffer_configuration(
+            channel,
+            self.bar,
+            &configuration.mode,
+            configuration.format,
+            configuration.pitch,
+            pending.framebuffer.descriptor()?,
+        )?;
+        window.emit_set_window_position(&*self.hal)?;
+        let channel = window.channel.as_mut().ok_or(ENODEV)?;
+        let immediate = window.immediate_channel.as_mut().ok_or(ENODEV)?;
+        channel.update(&*self.hal, core, Some(immediate), Update::WaitForActive)
     }
 
     fn program_modeset(&mut self) -> Result {
@@ -301,6 +353,8 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         stream.assign(self.cmdq, bracket)?;
         stream.set_sink_capabilities(self.cmdq, bracket)?;
         stream.set_tmds_protocol(self.cmdq, bracket)?;
+
+        self.apply_head_and_window_state()?;
 
         self.cmdq.send_gmc_command(
             DisplayModesetEnd::new(bracket, DisplayModesetEndMode::Commit)?,
@@ -414,6 +468,11 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             let window = &mut self.windows[index];
             window.framebuffer = None;
             window.head = None;
+        }
+        if let Some(index) = head_to_disable {
+            let head = &mut self.heads[index];
+            head.mode = None;
+            head.limited_range = false;
         }
         let index = self
             .streams
