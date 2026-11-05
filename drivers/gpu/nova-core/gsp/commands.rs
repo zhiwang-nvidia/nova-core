@@ -281,6 +281,8 @@ pub(crate) struct DisplayReleaseStreamRouteReply;
 
 pub(crate) struct DisplayHdmiSetSinkCapabilitiesReply;
 
+pub(crate) struct DisplayHdmiSetTmdsProtocolReply;
+
 /// The static GPU configuration, which GSP-RM reports in reply to [`GspInit`](gmc::GspInit).
 pub struct GspStaticInfo {
     gpu_name: [u8; Self::MAX_GPU_NAME_LEN],
