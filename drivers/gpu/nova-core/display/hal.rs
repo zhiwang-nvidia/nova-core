@@ -130,6 +130,18 @@ pub(super) trait DisplayHal<'a, 'gpu>: DisplayMethodHal + Send {
     /// Free a surface descriptor. It must be unbound.
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result;
 
+    /// Queues methods to disable a head's auxiliary memory accesses and unset its display ID.
+    ///
+    /// SOR ownership is unchanged. The caller retires the head's window framebuffers
+    /// and stops its outputs first, then submits a core UPDATE to apply these changes.
+    #[expect(dead_code)]
+    fn emit_disable_head(
+        &self,
+        core: &mut Channel<'a, 'gpu, Core>,
+        bar: Bar0<'_>,
+        head: u32,
+    ) -> Result;
+
     /// Emits methods to configure a pitch-linear framebuffer with composition bypass.
     #[expect(dead_code)]
     fn emit_window_framebuffer_configuration(

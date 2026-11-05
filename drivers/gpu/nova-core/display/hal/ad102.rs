@@ -21,6 +21,7 @@ use crate::{
                 methods::{
                     self,
                     c67e,
+                    c77d,
                     core as core_methods,
                     window as window_methods, //
                 },
@@ -87,6 +88,27 @@ impl<'a, 'gpu> Ad102<'a, 'gpu> {
             && info.window_class == NVC67E_WINDOW_CHANNEL_DMA
             && info.immediate_class == NVC67B_WINDOW_IMM_CHANNEL_DMA
             && info.cursor_class == NVC67A_CURSOR_IMM_CHANNEL_PIO
+    }
+
+    fn emit_disable_head_methods(
+        &self,
+        core: &mut Channel<'a, 'gpu, Core>,
+        head: u32,
+        caps: regs::NV_PDISP_FE_SW_POSTCOMP_HEAD_HDR_CAPA,
+    ) -> Result {
+        disp4::head::emit_disable_head_methods(self, core, head, caps)?;
+        let offset = head * core_methods::HEAD_STRIDE;
+        // A NULL ContextDMA disables each RG release semaphore.
+        for index in 0..c77d::HEAD_RG_REL_SEMAPHORE_COUNT {
+            core.emit(
+                self,
+                c77d::HEAD_SET_CONTEXT_DMA_RG_REL_SEMAPHORE
+                    + offset
+                    + index * methods::METHOD_ARRAY_STRIDE,
+                &[0],
+            )?;
+        }
+        Ok(())
     }
 
     fn emit_disable_window_methods(
@@ -206,6 +228,20 @@ impl<'a, 'gpu> DisplayHal<'a, 'gpu> for Ad102<'a, 'gpu> {
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result {
         self.instance_memory
             .free_context_dma(descriptor.context_dma_descriptor_id)
+    }
+
+    fn emit_disable_head(
+        &self,
+        core: &mut Channel<'a, 'gpu, Core>,
+        bar: Bar0<'_>,
+        head: u32,
+    ) -> Result {
+        if head >= core_methods::HEAD_COUNT {
+            return Err(EINVAL);
+        }
+        let caps = capability::read_postcomp_caps(bar, head.into_safe_cast())?;
+        self.emit_disable_head_methods(core, head, caps)?;
+        disp4::head::emit_head_display_id_methods(self, core, head, 0)
     }
 
     /// Emits methods to configure a pitch-linear framebuffer with composition bypass.

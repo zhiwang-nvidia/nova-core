@@ -49,6 +49,7 @@ register! {
     }
 
     pub(crate) NV_PDISP_FE_SW_POSTCOMP_HEAD_HDR_CAPA(u32)[8, stride = 32] @ 0x00640680 {
+        16:16   ocsc0_present => bool;
         18:18   sclr_present => bool;
     }
 
