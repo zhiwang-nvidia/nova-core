@@ -29,3 +29,8 @@ pub(crate) mod window {
     pub(crate) const SET_NOTIFIER_CONTROL: u32 = 0x0220;
     pub(crate) const SET_NOTIFIER_CONTROL_MODE_WRITE: u32 = 0;
 }
+
+pub(crate) mod window_immediate {
+    //! Point-out method shared by DISP 4.x and 5.x immediate channels.
+    pub(crate) const SET_POINT_OUT: u32 = 0x0208;
+}
