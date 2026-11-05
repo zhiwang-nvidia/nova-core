@@ -5,6 +5,8 @@
 mod capability;
 mod channel;
 mod format;
+#[expect(dead_code)]
+mod framebuffer;
 mod hal;
 mod head;
 mod methods;

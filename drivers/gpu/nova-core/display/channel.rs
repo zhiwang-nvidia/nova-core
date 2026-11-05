@@ -424,7 +424,6 @@ impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
     }
 
     /// Binds a surface descriptor to this created channel.
-    #[expect(dead_code)]
     pub(super) fn bind_surface_descriptor(
         &self,
         hal: &mut dyn DisplayHal<'a, 'gpu>,
@@ -439,7 +438,6 @@ impl<'a, 'gpu, T> Channel<'a, 'gpu, T> {
     /// Unbinds a surface after its channel accesses have completed.
     ///
     /// Runtime surface bindings must be removed before destroying the channel.
-    #[expect(dead_code)]
     pub(super) fn unbind_surface_descriptor(
         &self,
         hal: &mut dyn DisplayHal<'a, 'gpu>,

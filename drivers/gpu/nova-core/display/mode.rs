@@ -64,7 +64,6 @@ impl DisplayConfiguration {
     ///
     /// These checks are independent of the GPU class. Hardware pitch alignment
     /// and method field limits are checked by the HAL.
-    #[expect(dead_code)]
     pub(crate) fn validate_framebuffer(&self) -> Result {
         self.mode.validate_framebuffer(self.format, self.pitch)
     }
