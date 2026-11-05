@@ -13,6 +13,10 @@ use kernel::{
     types::ForLt, //
 };
 
+pub use crate::display::{
+    DisplayMode,
+    DisplayPixelFormat, //
+};
 pub use crate::gpu::Spec;
 
 use crate::{

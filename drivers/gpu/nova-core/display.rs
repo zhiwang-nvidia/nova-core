@@ -4,12 +4,17 @@
 
 mod capability;
 mod channel;
+mod format;
 mod hal;
 mod head;
 mod methods;
+mod mode;
 mod scaler;
 mod tables;
 mod window;
+
+pub use format::DisplayPixelFormat;
+pub use mode::DisplayMode;
 
 use channel::{
     Channel,
