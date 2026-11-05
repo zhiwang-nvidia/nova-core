@@ -223,7 +223,6 @@ pub(crate) struct DisplayModesetBeginReply {
 #[derive(Clone, Copy)]
 pub(crate) enum DisplayModesetEndMode {
     /// Ends the bracket after verifying the target set of enabled outputs.
-    #[expect(dead_code)]
     Commit,
 }
 

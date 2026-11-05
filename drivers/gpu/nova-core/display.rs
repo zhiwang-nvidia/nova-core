@@ -9,6 +9,7 @@ mod hal;
 mod head;
 mod methods;
 mod mode;
+mod modeset;
 mod output;
 mod scaler;
 mod sor;
@@ -57,6 +58,7 @@ use crate::{
 pub(crate) struct Display<'a, 'gpu> {
     dev: &'a device::Device<device::Bound>,
     cmdq: &'a Cmdq<'gpu>,
+    pending_commit: Option<modeset::DisplayCommit<'a, 'gpu>>,
     windows: KVec<window::Window<'a, 'gpu>>,
     core_channel: Option<Channel<'a, 'gpu, Core>>,
     hal: KBox<dyn hal::DisplayHal<'a, 'gpu> + 'a>,
@@ -129,6 +131,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         Ok(Self {
             dev,
             cmdq,
+            pending_commit: None,
             windows,
             core_channel: None,
             hal,
