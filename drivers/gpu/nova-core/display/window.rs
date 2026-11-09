@@ -27,6 +27,7 @@ use super::{
         WindowDma,
         WindowImmediate, //
     },
+    framebuffer::Framebuffer,
     hal::DisplayMethodHal,
     methods::{
         core,
@@ -43,6 +44,7 @@ pub(super) struct Window<'a, 'gpu> {
     pub(super) immediate_channel: Option<Channel<'a, 'gpu, WindowImmediate>>,
     pub(super) channel: Option<Channel<'a, 'gpu, WindowDma>>,
     pub(super) head: Option<u32>,
+    pub(super) framebuffer: Option<Framebuffer<'a, 'gpu>>,
 }
 
 impl Window<'_, '_> {
@@ -52,6 +54,7 @@ impl Window<'_, '_> {
             immediate_channel: None,
             channel: None,
             head: None,
+            framebuffer: None,
         }
     }
 

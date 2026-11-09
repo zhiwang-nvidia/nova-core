@@ -32,8 +32,6 @@
 //! containing all affected CRTCs and planes. The shared core channel is serialized
 //! by the existing display mutex.
 
-use core::marker::PhantomData;
-
 use kernel::prelude::*;
 
 use crate::gsp::commands::{
@@ -47,6 +45,7 @@ use crate::gsp::commands::{
 };
 
 use super::{
+    framebuffer::Framebuffer,
     stream::Stream,
     Display,
     DisplayConfiguration, //
@@ -54,7 +53,6 @@ use super::{
 
 /// Resources and scope for one update, prepared before hardware state changes.
 pub(crate) struct DisplayCommit<'a, 'gpu> {
-    _lifetimes: PhantomData<(&'a (), &'gpu ())>,
     configuration: DisplayConfiguration,
     head_index: usize,
     window_index: usize,
@@ -64,6 +62,7 @@ pub(crate) struct DisplayCommit<'a, 'gpu> {
     head_to_disable: Option<usize>,
     /// Window indices whose old framebuffers must finish before being unbound.
     window_framebuffers_to_retire: KVec<usize>,
+    framebuffer: Framebuffer<'a, 'gpu>,
     stream: Option<Stream>,
 }
 
@@ -149,11 +148,12 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         Ok((head_index, window_index))
     }
 
-    /// Prepares the output association before changing the current display state.
+    /// Prepares an unbound framebuffer; failure leaves the current display untouched.
     #[expect(dead_code)]
     fn prepare_commit(
         &mut self,
         configuration: &DisplayConfiguration,
+        pixels: &[u8],
     ) -> Result<DisplayCommit<'a, 'gpu>> {
         if self.pending_commit.is_some() {
             return Err(EBUSY);
@@ -161,6 +161,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         let (head_index, window_index) = self.check_configuration(configuration)?;
         let head = &self.heads[head_index];
         let window = &self.windows[window_index];
+        // Check all participating channels before allocating the new framebuffer.
         window.channel.as_ref().ok_or(ENODEV)?;
         window.immediate_channel.as_ref().ok_or(ENODEV)?;
         self.core_channel.as_ref().ok_or(ENODEV)?;
@@ -172,15 +173,16 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             } else {
                 (None, None, KVec::new())
             };
+        let framebuffer = Framebuffer::new(self.mm, self.bar_user, configuration, pixels)?;
         self.streams.reserve(1, GFP_KERNEL)?;
         Ok(DisplayCommit {
-            _lifetimes: PhantomData,
             configuration: *configuration,
             head_index,
             window_index,
             stream_to_release,
             head_to_disable,
             window_framebuffers_to_retire,
+            framebuffer,
             stream: Some(Stream::new(configuration, head.id)),
         })
     }
@@ -195,8 +197,24 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         let window_index = commit.window_index;
         let stream_to_release = commit.stream_to_release;
         self.pending_commit = Some(commit);
+        let channel = self.windows[window_index].channel.as_ref().ok_or(ENODEV)?;
+        self.pending_commit
+            .as_mut()
+            .ok_or(EIO)?
+            .framebuffer
+            .bind(channel, &mut *self.hal)?;
 
         self.program_modeset()?;
+        let pending = self.pending_commit.as_ref().ok_or(EIO)?;
+        for &index in &pending.window_framebuffers_to_retire {
+            let window = &mut self.windows[index];
+            let channel = window.channel.as_ref().ok_or(ENODEV)?;
+            window
+                .framebuffer
+                .as_mut()
+                .ok_or(EIO)?
+                .unbind(channel, &mut *self.hal)?;
+        }
         // Record the new Window -> Head -> Output association after success.
         if let Some(display_id) = stream_to_release {
             let index = self
@@ -207,20 +225,23 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             self.streams.remove(index).map_err(|_| EIO)?;
         }
         if let Some(stream) = self.pending_commit.as_mut().ok_or(EIO)?.stream.take() {
-            // Capacity was reserved before changing hardware.
+            // Capacity was reserved before changing hardware. The pending framebuffer
+            // remains owned even if publishing the stream unexpectedly fails.
             self.streams.push(stream, GFP_KERNEL)?;
         }
         let pending = self.pending_commit.as_ref().ok_or(EIO)?;
         for &index in &pending.window_framebuffers_to_retire {
             if index != window_index {
                 let window = &mut self.windows[index];
+                window.framebuffer = None;
                 window.head = None;
             }
         }
         let head = self.heads.get_mut(head_index).ok_or(EIO)?;
         let window = self.windows.get_mut(window_index).ok_or(EIO)?;
-        self.pending_commit.take().ok_or(EIO)?;
+        let pending = self.pending_commit.take().ok_or(EIO)?;
         window.head = Some(head.id);
+        window.framebuffer = Some(pending.framebuffer);
         Ok(())
     }
 
@@ -312,8 +333,18 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             DisplayModesetEnd::new(bracket, DisplayModesetEndMode::Commit)?,
             |_| Ok(()),
         )?;
+        for &index in &window_framebuffers_to_retire {
+            let window = &mut self.windows[index];
+            let channel = window.channel.as_ref().ok_or(ENODEV)?;
+            window
+                .framebuffer
+                .as_mut()
+                .ok_or(EIO)?
+                .unbind(channel, &mut *self.hal)?;
+        }
         for index in window_framebuffers_to_retire {
             let window = &mut self.windows[index];
+            window.framebuffer = None;
             window.head = None;
         }
         let index = self

@@ -5,7 +5,6 @@
 mod capability;
 mod channel;
 mod format;
-#[expect(dead_code)]
 mod framebuffer;
 mod hal;
 mod head;
@@ -64,6 +63,7 @@ use crate::{
 pub(crate) struct Display<'a, 'gpu> {
     dev: &'a device::Device<device::Bound>,
     cmdq: &'a Cmdq<'gpu>,
+    mm: &'a Mutex<GpuMm<'gpu>>,
     pending_commit: Option<modeset::DisplayCommit<'a, 'gpu>>,
     streams: KVec<stream::Stream>,
     windows: KVec<window::Window<'a, 'gpu>>,
@@ -137,6 +137,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         Ok(Self {
             dev,
             cmdq,
+            mm,
             pending_commit: None,
             streams: KVec::new(),
             windows,
