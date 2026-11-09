@@ -3,6 +3,7 @@
 //! nova-core display support.
 
 mod head;
+mod window;
 
 use kernel::{
     device,
@@ -39,6 +40,7 @@ pub(crate) struct Display<'a, 'gpu> {
     #[expect(dead_code)]
     hw_static_info: DisplayHwStaticInfo,
     heads: KVec<head::Head>,
+    windows: KVec<window::Window>,
 }
 
 impl<'a, 'gpu> Display<'a, 'gpu> {
@@ -71,6 +73,13 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             }
         }
 
+        let mut windows = KVec::new();
+        for id in 0..u32::BITS {
+            if hw_static_info.window_mask & (1 << id) != 0 {
+                windows.push(window::Window { id }, GFP_KERNEL)?;
+            }
+        }
+
         cleanup.dismiss();
 
         Ok(Self {
@@ -81,6 +90,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             caps,
             hw_static_info,
             heads,
+            windows,
         })
     }
 
