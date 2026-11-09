@@ -23,6 +23,9 @@ use crate::gsp::{
 use super::DisplayConfiguration;
 
 /// A display stream from one head to an output.
+///
+/// Only a pending commit owns an unassigned stream. Active streams have a validated
+/// GSP-RM stream assignment and SOR.
 pub(super) struct Stream {
     pub(super) display_id: u32,
     pub(super) head: u32,
@@ -30,6 +33,7 @@ pub(super) struct Stream {
     pub(super) sor: u32,
     pub(super) protocol: u32,
     hdmi_sink_caps: u32,
+    avi_infoframe: [u8; 17],
 }
 
 impl Stream {
@@ -41,7 +45,14 @@ impl Stream {
             sor: 0,
             protocol: 0,
             hdmi_sink_caps: configuration.hdmi_sink_caps,
+            avi_infoframe: configuration.avi_infoframe,
         }
+    }
+
+    pub(super) fn matches_configuration(&self, configuration: &DisplayConfiguration) -> bool {
+        self.display_id == configuration.display_id
+            && self.hdmi_sink_caps == configuration.hdmi_sink_caps
+            && self.avi_infoframe == configuration.avi_infoframe
     }
 
     pub(super) fn assign(&mut self, cmdq: &Cmdq<'_>, bracket: u64) -> Result {

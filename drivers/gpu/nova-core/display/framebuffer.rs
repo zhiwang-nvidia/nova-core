@@ -35,7 +35,8 @@ use super::{
         DisplayHal,
         SurfaceDescriptor, //
     },
-    DisplayConfiguration, //
+    DisplayConfiguration,
+    DisplayPixelFormat, //
 };
 
 /// A framebuffer retained until the window has finished reading it or display shutdown.
@@ -43,6 +44,10 @@ pub(super) struct Framebuffer<'a, 'gpu> {
     mapping: BarMapping<'a, 'gpu>,
     descriptor: Option<SurfaceDescriptor>,
     bound: bool,
+    format: DisplayPixelFormat,
+    pitch: u32,
+    width: u32,
+    height: u32,
 }
 
 impl<'a, 'gpu> Framebuffer<'a, 'gpu> {
@@ -83,7 +88,18 @@ impl<'a, 'gpu> Framebuffer<'a, 'gpu> {
             mapping,
             descriptor: None,
             bound: false,
+            format: configuration.format,
+            pitch: configuration.pitch,
+            width: configuration.mode.hdisplay,
+            height: configuration.mode.vdisplay,
         })
+    }
+
+    pub(super) fn matches_layout(&self, configuration: &DisplayConfiguration) -> bool {
+        self.format == configuration.format
+            && self.pitch == configuration.pitch
+            && self.width == configuration.mode.hdisplay
+            && self.height == configuration.mode.vdisplay
     }
 
     /// Retain this framebuffer through display shutdown if binding fails after allocation.
