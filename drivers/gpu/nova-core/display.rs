@@ -2,6 +2,8 @@
 
 //! nova-core display support.
 
+mod head;
+
 use kernel::{
     device,
     prelude::*,
@@ -36,6 +38,7 @@ pub(crate) struct Display<'a, 'gpu> {
     caps: DisplayCaps,
     #[expect(dead_code)]
     hw_static_info: DisplayHwStaticInfo,
+    heads: KVec<head::Head>,
 }
 
 impl<'a, 'gpu> Display<'a, 'gpu> {
@@ -61,6 +64,13 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
                 dev_err!(dev, "DISPLAY_GET_STATIC_INFO failed: {:?}\n", error);
             })?;
 
+        let mut heads = KVec::new();
+        for id in 0..u32::BITS {
+            if hw_static_info.head_mask & (1 << id) != 0 {
+                heads.push(head::Head { id }, GFP_KERNEL)?;
+            }
+        }
+
         cleanup.dismiss();
 
         Ok(Self {
@@ -70,6 +80,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             bar_user,
             caps,
             hw_static_info,
+            heads,
         })
     }
 
