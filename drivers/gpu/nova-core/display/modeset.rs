@@ -47,6 +47,7 @@ use crate::gsp::commands::{
 };
 
 use super::{
+    stream::Stream,
     Display,
     DisplayConfiguration, //
 };
@@ -55,24 +56,48 @@ use super::{
 pub(crate) struct DisplayCommit<'a, 'gpu> {
     _lifetimes: PhantomData<(&'a (), &'gpu ())>,
     configuration: DisplayConfiguration,
+    head_index: usize,
+    window_index: usize,
+    /// Display ID of the old stream to release.
+    stream_to_release: Option<u32>,
+    /// Index of the old head to disable, if no other stream uses it.
+    head_to_disable: Option<usize>,
+    /// Window indices whose old framebuffers must finish before being unbound.
+    window_framebuffers_to_retire: KVec<usize>,
+    stream: Option<Stream>,
 }
 
 impl<'a, 'gpu> Display<'a, 'gpu> {
     fn select_head_and_window(&self, display_id: u32) -> Result<(usize, usize)> {
+        // The current GMC check describes one head/window, not aggregate bandwidth.
+        if self.streams.len() > 1 {
+            return Err(EOPNOTSUPP);
+        }
         let output = self
             .outputs()?
             .into_iter()
             .find(|output| output.display_id == display_id && output.connected)
             .ok_or(ENODEV)?;
-        if self.windows.is_empty() {
-            return Err(ENODEV);
-        }
+        let previous_head = self.streams.first().map(|stream| stream.head);
         let head_index = self
             .heads
             .iter()
-            .position(|head| output.head_mask & (1 << head.id) != 0)
+            .position(|head| {
+                Some(head.id) == previous_head && output.head_mask & (1 << head.id) != 0
+            })
+            .or_else(|| {
+                self.heads
+                    .iter()
+                    .position(|head| output.head_mask & (1 << head.id) != 0)
+            })
             .ok_or(ENODEV)?;
-        Ok((head_index, 0))
+        let window_index = self
+            .windows
+            .iter()
+            .position(|window| previous_head.is_some() && window.head == previous_head)
+            .or_else(|| self.windows.iter().position(|window| window.head.is_none()))
+            .ok_or(EBUSY)?;
+        Ok((head_index, window_index))
     }
 
     /// Checks the configuration and returns the selected head and window indices.
@@ -133,10 +158,30 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         if self.pending_commit.is_some() {
             return Err(EBUSY);
         }
-        self.check_configuration(configuration)?;
+        let (head_index, window_index) = self.check_configuration(configuration)?;
+        let head = &self.heads[head_index];
+        let window = &self.windows[window_index];
+        window.channel.as_ref().ok_or(ENODEV)?;
+        window.immediate_channel.as_ref().ok_or(ENODEV)?;
+        self.core_channel.as_ref().ok_or(ENODEV)?;
+
+        let (stream_to_release, head_to_disable, window_framebuffers_to_retire) =
+            if let Some(previous) = self.streams.first() {
+                let (head, windows) = self.prepare_output_disable(previous.display_id)?;
+                (Some(previous.display_id), head, windows)
+            } else {
+                (None, None, KVec::new())
+            };
+        self.streams.reserve(1, GFP_KERNEL)?;
         Ok(DisplayCommit {
             _lifetimes: PhantomData,
             configuration: *configuration,
+            head_index,
+            window_index,
+            stream_to_release,
+            head_to_disable,
+            window_framebuffers_to_retire,
+            stream: Some(Stream::new(configuration, head.id)),
         })
     }
 
@@ -146,26 +191,56 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         if self.pending_commit.is_some() {
             return Err(EBUSY);
         }
+        let head_index = commit.head_index;
+        let window_index = commit.window_index;
+        let stream_to_release = commit.stream_to_release;
         self.pending_commit = Some(commit);
 
         self.program_modeset()?;
+        // Record the new Window -> Head -> Output association after success.
+        if let Some(display_id) = stream_to_release {
+            let index = self
+                .streams
+                .iter()
+                .position(|stream| stream.display_id == display_id)
+                .ok_or(EIO)?;
+            self.streams.remove(index).map_err(|_| EIO)?;
+        }
+        if let Some(stream) = self.pending_commit.as_mut().ok_or(EIO)?.stream.take() {
+            // Capacity was reserved before changing hardware.
+            self.streams.push(stream, GFP_KERNEL)?;
+        }
+        let pending = self.pending_commit.as_ref().ok_or(EIO)?;
+        for &index in &pending.window_framebuffers_to_retire {
+            if index != window_index {
+                let window = &mut self.windows[index];
+                window.head = None;
+            }
+        }
+        let head = self.heads.get_mut(head_index).ok_or(EIO)?;
+        let window = self.windows.get_mut(window_index).ok_or(EIO)?;
         self.pending_commit.take().ok_or(EIO)?;
+        window.head = Some(head.id);
         Ok(())
     }
 
     fn program_modeset(&mut self) -> Result {
         let pending = self.pending_commit.as_ref().ok_or(EIO)?;
         let configuration = pending.configuration;
+        let stream_to_release = pending.stream_to_release;
+        let head_to_disable = pending.head_to_disable;
+        let affected_outputs = stream_to_release.unwrap_or(0) | configuration.display_id;
         let bracket = self
             .cmdq
             .send_gmc_command(
-                DisplayModesetBegin::new(
-                    self.hw_static_info.display_mask,
-                    configuration.display_id,
-                )?,
+                DisplayModesetBegin::new(affected_outputs, configuration.display_id)?,
                 |_| Ok(()),
             )?
             .modeset_id;
+
+        if let Some(display_id) = stream_to_release {
+            self.program_disable_output(display_id, head_to_disable, bracket)?;
+        }
 
         self.cmdq.send_gmc_command(
             DisplayModesetEnd::new(bracket, DisplayModesetEndMode::Commit)?,
@@ -174,28 +249,79 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
         Ok(())
     }
 
+    /// Finds the head and windows that become unused when the stream is removed.
+    fn prepare_output_disable(&self, display_id: u32) -> Result<(Option<usize>, KVec<usize>)> {
+        let stream = self
+            .streams
+            .iter()
+            .find(|stream| stream.display_id == display_id)
+            .ok_or(ENODEV)?;
+        if self
+            .streams
+            .iter()
+            .any(|other| other.display_id != display_id && other.head == stream.head)
+        {
+            return Ok((None, KVec::new()));
+        }
+        let head_index = self
+            .heads
+            .iter()
+            .position(|head| head.id == stream.head)
+            .ok_or(EIO)?;
+        let mut windows = KVec::new();
+        for (index, window) in self.windows.iter().enumerate() {
+            if window.head == Some(stream.head) {
+                windows.push(index, GFP_KERNEL)?;
+            }
+        }
+        Ok((Some(head_index), windows))
+    }
+
     /// Programs the selected output's disable sequence within an open modeset bracket.
     fn program_disable_output(
         &mut self,
-        _display_id: u32,
+        display_id: u32,
         _head_to_disable: Option<usize>,
         _bracket: u64,
     ) -> Result {
+        self.streams
+            .iter()
+            .find(|stream| stream.display_id == display_id)
+            .ok_or(ENODEV)?;
         Ok(())
     }
 
     /// Disables the specified output while preserving resources used by other routes.
     #[expect(dead_code)]
     fn disable_output(&mut self, display_id: u32) -> Result {
+        if !self
+            .streams
+            .iter()
+            .any(|stream| stream.display_id == display_id)
+        {
+            return Ok(());
+        }
+        let (head_to_disable, window_framebuffers_to_retire) =
+            self.prepare_output_disable(display_id)?;
         let bracket = self
             .cmdq
             .send_gmc_command(DisplayModesetBegin::new(display_id, 0)?, |_| Ok(()))?
             .modeset_id;
-        self.program_disable_output(display_id, None, bracket)?;
+        self.program_disable_output(display_id, head_to_disable, bracket)?;
         self.cmdq.send_gmc_command(
             DisplayModesetEnd::new(bracket, DisplayModesetEndMode::Commit)?,
             |_| Ok(()),
         )?;
+        for index in window_framebuffers_to_retire {
+            let window = &mut self.windows[index];
+            window.head = None;
+        }
+        let index = self
+            .streams
+            .iter()
+            .position(|stream| stream.display_id == display_id)
+            .ok_or(EIO)?;
+        self.streams.remove(index).map_err(|_| EIO)?;
         Ok(())
     }
 }

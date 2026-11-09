@@ -42,6 +42,7 @@ pub(super) struct Window<'a, 'gpu> {
     pub(super) id: u32,
     pub(super) immediate_channel: Option<Channel<'a, 'gpu, WindowImmediate>>,
     pub(super) channel: Option<Channel<'a, 'gpu, WindowDma>>,
+    pub(super) head: Option<u32>,
 }
 
 impl Window<'_, '_> {
@@ -50,6 +51,7 @@ impl Window<'_, '_> {
             id,
             immediate_channel: None,
             channel: None,
+            head: None,
         }
     }
 

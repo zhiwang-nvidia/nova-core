@@ -13,6 +13,7 @@ mod modeset;
 mod output;
 mod scaler;
 mod sor;
+mod stream;
 mod tables;
 mod window;
 
@@ -62,6 +63,7 @@ pub(crate) struct Display<'a, 'gpu> {
     dev: &'a device::Device<device::Bound>,
     cmdq: &'a Cmdq<'gpu>,
     pending_commit: Option<modeset::DisplayCommit<'a, 'gpu>>,
+    streams: KVec<stream::Stream>,
     windows: KVec<window::Window<'a, 'gpu>>,
     core_channel: Option<Channel<'a, 'gpu, Core>>,
     hal: KBox<dyn hal::DisplayHal<'a, 'gpu> + 'a>,
@@ -134,6 +136,7 @@ impl<'a, 'gpu> Display<'a, 'gpu> {
             dev,
             cmdq,
             pending_commit: None,
+            streams: KVec::new(),
             windows,
             core_channel: None,
             hal,
