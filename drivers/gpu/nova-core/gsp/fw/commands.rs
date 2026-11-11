@@ -19,6 +19,8 @@ use crate::{
     gpu::Chipset,
     gsp::{
         commands::{
+            DisplayChannelKind,
+            DisplayCreateChannelReply,
             DisplayGetStaticInfoReply,
             DisplayInitReply,
             GspStaticInfo, //
@@ -499,6 +501,86 @@ impl DisplaySetInstanceMemoryRequest {
             size: size.into(),
             aperture: Self::APERTURE_VRAM.into(),
             cache_attr: Self::CACHE_UNCACHED.into(),
+        }
+    }
+}
+
+nvkv_encode! {
+    pub(crate) struct DisplayCreateChannelRequest {
+        pb_address: Key<u64, { Self::PB_ADDRESS_KEY }>,
+        pb_size: Key<u64, { Self::PB_SIZE_KEY }>,
+        kind: Key<DisplayChannelKind, { Self::KIND_KEY }, u32>,
+        instance: Key<u32, { Self::INSTANCE_KEY }>,
+        aperture: Key<u32, { Self::APERTURE_KEY }>,
+        cache_attr: Key<u32, { Self::CACHE_ATTR_KEY }>,
+        initial_offset: Key<u32, { Self::INITIAL_OFFSET_KEY }>,
+        flags: Key<u32, { Self::FLAGS_KEY }>,
+    }
+}
+
+impl DisplayCreateChannelRequest {
+    const PB_ADDRESS_KEY: KeyId = 0x015e;
+    const PB_SIZE_KEY: KeyId = 0x015f;
+    const KIND_KEY: KeyId = 0x0160;
+    const INSTANCE_KEY: KeyId = 0x0161;
+    const APERTURE_KEY: KeyId = 0x0162;
+    const CACHE_ATTR_KEY: KeyId = 0x0163;
+    const INITIAL_OFFSET_KEY: KeyId = 0x0164;
+    const FLAGS_KEY: KeyId = 0x0165;
+    const APERTURE_VRAM: u32 = 0;
+    const CACHE_UNCACHED: u32 = 0;
+
+    pub(crate) fn new(
+        kind: DisplayChannelKind,
+        instance: u32,
+        pb_address: u64,
+        pb_size: u64,
+    ) -> Self {
+        Self {
+            pb_address: pb_address.into(),
+            pb_size: pb_size.into(),
+            kind: kind.into(),
+            instance: instance.into(),
+            aperture: Self::APERTURE_VRAM.into(),
+            cache_attr: Self::CACHE_UNCACHED.into(),
+            initial_offset: 0.into(),
+            flags: 0.into(),
+        }
+    }
+}
+
+nvkv_decode! {
+    pub(crate) struct DisplayCreateChannelResponseSchema => DisplayCreateChannelReply {
+        channel: Required<Key<u64, { Self::CHANNEL_KEY }>>,
+        class_id: Required<Key<u32, { Self::CLASS_ID_KEY }>>,
+        hardware_index: Required<Key<u32, { Self::HARDWARE_INDEX_KEY }>>,
+        control_offset: Required<Key<u32, { Self::CONTROL_OFFSET_KEY }>>,
+        control_size: Required<Key<u32, { Self::CONTROL_SIZE_KEY }>>,
+        ramht_client_id: Required<Key<u32, { Self::RAMHT_CLIENT_ID_KEY }>>,
+    }
+}
+
+impl DisplayCreateChannelResponseSchema {
+    const CHANNEL_KEY: KeyId = 0x0166;
+    const CLASS_ID_KEY: KeyId = 0x0167;
+    const HARDWARE_INDEX_KEY: KeyId = 0x0168;
+    const CONTROL_OFFSET_KEY: KeyId = 0x0169;
+    const CONTROL_SIZE_KEY: KeyId = 0x016a;
+    const RAMHT_CLIENT_ID_KEY: KeyId = 0x016b;
+}
+
+nvkv_encode! {
+    pub(crate) struct DisplayDestroyChannelRequest {
+        channel: Key<u64, { Self::CHANNEL_KEY }>,
+    }
+}
+
+impl DisplayDestroyChannelRequest {
+    const CHANNEL_KEY: KeyId = 0x0171;
+
+    pub(crate) fn new(channel: u64) -> Self {
+        Self {
+            channel: channel.into(),
         }
     }
 }
