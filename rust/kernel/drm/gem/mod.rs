@@ -39,6 +39,7 @@ mod mapping;
 pub use mapping::{
     Fault,
     FaultResult,
+    IoMapping,
     Mmap, //
 };
 
@@ -162,6 +163,25 @@ pub trait DriverObject: Sync + Send + Sized + 'static {
     fn fault(_obj: &DriverAllocImpl<Self>, _fault: &Fault<'_>) -> FaultResult {
         FaultResult::SIGBUS
     }
+
+    /// Creates an I/O mapping covering the complete GEM object.
+    fn vmap(_obj: &DriverAllocImpl<Self>) -> Result<IoMapping> {
+        Err(EOPNOTSUPP)
+    }
+
+    /// Releases a mapping previously returned by [`Self::vmap`].
+    ///
+    /// # Safety
+    ///
+    /// `mapping` must come from a successful vmap of this same `obj`, with all
+    /// accesses through that mapping finished. Each vmap is released only once.
+    unsafe fn vunmap(_obj: &DriverAllocImpl<Self>, _mapping: IoMapping) {}
+
+    /// Uses the generic shadow-fbdev implementation supporting I/O mappings.
+    ///
+    /// Requires `CONFIG_DRM_TTM_HELPER` when fbdev emulation is enabled. This
+    /// selects the fbdev helper, not a TTM memory-management implementation.
+    const FBDEV_TTM: bool = false;
 
     /// Open a new handle to an existing object, associated with a File.
     fn open(_obj: &DriverAllocImpl<Self>, _file: &DriverFile<Self>) -> Result {
@@ -341,6 +361,8 @@ impl<T: DriverObject, Ctx: DeviceContext> Object<T, Ctx> {
         open: Some(open_callback::<T>),
         close: Some(close_callback::<T>),
         mmap: Some(mapping::mmap_callback::<T>),
+        vmap: Some(mapping::vmap_callback::<T>),
+        vunmap: Some(mapping::vunmap_callback::<T>),
         vm_ops: &mapping::VmaOps::<T>::OPS,
         ..pin_init::zeroed()
     };
@@ -510,7 +532,21 @@ impl<T: DriverObject, Ctx: DeviceContext> AllocImpl for Object<T, Ctx> {
         dumb_create: Some(dumb_create_callback::<T>),
         dumb_map_offset: None,
         #[cfg(CONFIG_RUST_DRM_KMS)]
-        fbdev_probe: None,
+        fbdev_probe: {
+            #[cfg(all(CONFIG_DRM_FBDEV_EMULATION, CONFIG_DRM_TTM_HELPER))]
+            {
+                if T::FBDEV_TTM {
+                    Some(bindings::drm_fbdev_ttm_driver_fbdev_probe)
+                } else {
+                    None
+                }
+            }
+            #[cfg(not(all(CONFIG_DRM_FBDEV_EMULATION, CONFIG_DRM_TTM_HELPER)))]
+            {
+                assert!(!T::FBDEV_TTM || !cfg!(CONFIG_DRM_FBDEV_EMULATION));
+                None
+            }
+        },
     };
 }
 

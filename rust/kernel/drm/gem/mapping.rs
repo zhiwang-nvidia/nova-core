@@ -174,3 +174,62 @@ impl<T: DriverObject> VmaOps<T> {
         T::fault(obj, &fault).0
     }
 }
+
+/// A driver-owned I/O mapping handed to GEM's vmap users.
+///
+/// This is not a Rust reference to device memory. The driver retains the
+/// mapping's resources until the corresponding [`DriverObject::vunmap`].
+pub struct IoMapping {
+    addr: *mut c_void,
+}
+
+impl IoMapping {
+    /// Wraps a driver-managed kernel I/O mapping.
+    ///
+    /// # Safety
+    ///
+    /// `addr` must be non-null and cover the whole GEM object. It must permit
+    /// I/O accesses and remain mapped and accessible from a successful vmap
+    /// until its matching vunmap callback. In particular, device teardown must
+    /// wait for outstanding vmap users before destroying the mapping.
+    pub unsafe fn from_ptr(addr: *mut c_void) -> Self {
+        Self { addr }
+    }
+}
+
+pub(super) extern "C" fn vmap_callback<T: DriverObject>(
+    raw_obj: *mut bindings::drm_gem_object,
+    raw_map: *mut bindings::iosys_map,
+) -> c_int {
+    from_result(|| {
+        // SAFETY: The callback is installed for T's initialized base allocation,
+        // and GEM's caller holds the object reference throughout this call.
+        let obj: &DriverAllocImpl<T> = unsafe { IntoGEMObject::from_raw(raw_obj) };
+        let mapping = T::vmap(obj)?;
+        // SAFETY: GEM supplies exclusive output storage. IoMapping's constructor
+        // guarantees the address remains accessible until the matching vunmap.
+        unsafe {
+            raw_map.write(bindings::iosys_map {
+                __bindgen_anon_1: bindings::iosys_map__bindgen_ty_1 {
+                    vaddr: mapping.addr,
+                },
+                is_iomem: true,
+            });
+        }
+        Ok(0)
+    })
+}
+
+pub(super) extern "C" fn vunmap_callback<T: DriverObject>(
+    raw_obj: *mut bindings::drm_gem_object,
+    raw_map: *mut bindings::iosys_map,
+) {
+    // SAFETY: GEM holds the same object reference used by the successful vmap.
+    let obj: &DriverAllocImpl<T> = unsafe { IntoGEMObject::from_raw(raw_obj) };
+    // SAFETY: GEM returns the I/O mapping produced by our vmap callback. The
+    // driver keeps its resources valid until this matching vunmap callback.
+    let mapping = unsafe { IoMapping::from_ptr((*raw_map).__bindgen_anon_1.vaddr) };
+    // SAFETY: GEM pairs this mapping with the same object's successful vmap,
+    // after its users have finished accessing it, and invokes vunmap once.
+    unsafe { T::vunmap(obj, mapping) };
+}
