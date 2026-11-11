@@ -718,6 +718,7 @@ bounded_enum! {
         DisplayGetStaticInfo = 0x05_0003,
         DisplayGetPortState = 0x05_0004,
         DisplayReadEdid = 0x05_0005,
+        DisplayHdmiSetSinkCapabilities = 0x05_0009,
         DisplayAssignStreamRoute = 0x05_000a,
         DisplaySetInstanceMemory = 0x05_000b,
         DisplayCreateChannel = 0x05_000c,

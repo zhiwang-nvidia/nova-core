@@ -32,6 +32,7 @@ use crate::{
             DisplayGetPortCapsReply,
             DisplayGetPortStateReply,
             DisplayGetStaticInfoReply,
+            DisplayHdmiSetSinkCapabilitiesReply,
             DisplayInitReply,
             DisplayModesetBeginReply,
             DisplayModesetEndMode,
@@ -56,6 +57,8 @@ use crate::{
                 DisplayGetPortCapsResponseSchema,
                 DisplayGetPortStateRequest,
                 DisplayGetPortStateResponseSchema,
+                DisplayHdmiRequest,
+                DisplayHdmiSetSinkCapabilitiesResponseSchema,
                 DisplayInitRequest,
                 DisplayInitResponseSchema,
                 DisplayModesetBeginRequest,
@@ -1064,5 +1067,75 @@ impl GmcReply for DisplayReleaseStreamRouteReply {
         } else {
             Err(EINVAL)
         }
+    }
+}
+
+pub(crate) struct DisplayHdmiSetSinkCapabilities {
+    payload: KVVec<u64>,
+}
+
+impl DisplayHdmiSetSinkCapabilities {
+    #[expect(dead_code)]
+    pub(crate) fn new(stream_id: u64, modeset_id: u64, capabilities: u32) -> Result<Self> {
+        if stream_id == 0 || modeset_id == 0 || capabilities & !7 != 0 {
+            return Err(EINVAL);
+        }
+        let mut encoder = Encoder::new();
+        DisplayHdmiRequest::new(stream_id, modeset_id, capabilities).encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayHdmiSetSinkCapabilities {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayHdmiSetSinkCapabilities;
+    const MAX_REPLY_SIZE: u32 = 4096;
+    type Command = ();
+    type Reply = DisplayHdmiSetSinkCapabilitiesReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayHdmiSetSinkCapabilitiesReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayHdmiSetSinkCapabilities;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        let bytes = payload.flush_into_kvec(GFP_KERNEL)?;
+        if bytes.len() > num::u32_as_usize(DisplayHdmiSetSinkCapabilities::MAX_REPLY_SIZE) {
+            return Err(EINVAL);
+        }
+        let words = nvkv_words(&bytes)?;
+
+        let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
+        let mut schema = KBox::init(
+            DisplayHdmiSetSinkCapabilitiesResponseSchema::init(),
+            GFP_KERNEL,
+        )?;
+        let reply = KBox::try_init(decoder.decode(&mut *schema)?, GFP_KERNEL)?;
+        if reply.sink_snapshot_id == 0 {
+            return Err(EINVAL);
+        }
+        Ok(Self)
     }
 }

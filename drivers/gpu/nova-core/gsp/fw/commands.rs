@@ -926,3 +926,40 @@ impl DisplayReleaseStreamRouteRequest {
         }
     }
 }
+
+nvkv_encode! {
+    pub(crate) struct DisplayHdmiRequest {
+        stream_id: Key<u64, { Self::STREAM_ID_KEY }>,
+        modeset_id: Key<u64, { Self::MODESET_ID_KEY }>,
+        value: Key<u32, { Self::VALUE_KEY }>,
+    }
+}
+
+impl DisplayHdmiRequest {
+    const STREAM_ID_KEY: KeyId = 0x014c;
+    const MODESET_ID_KEY: KeyId = 0x014d;
+    const VALUE_KEY: KeyId = 0x014e;
+
+    pub(crate) fn new(stream_id: u64, modeset_id: u64, value: u32) -> Self {
+        Self {
+            stream_id: stream_id.into(),
+            modeset_id: modeset_id.into(),
+            value: value.into(),
+        }
+    }
+}
+
+nvkv_decode! {
+    pub(crate) struct DisplayHdmiSetSinkCapabilitiesResponseSchema
+        => DisplayHdmiSetSinkCapabilitiesResponse {
+        sink_snapshot_id: Required<Key<u64, { Self::SINK_SNAPSHOT_ID_KEY }>>,
+    }
+}
+
+impl DisplayHdmiSetSinkCapabilitiesResponseSchema {
+    const SINK_SNAPSHOT_ID_KEY: KeyId = 0x801b;
+}
+
+pub(crate) struct DisplayHdmiSetSinkCapabilitiesResponse {
+    pub(crate) sink_snapshot_id: u64,
+}
