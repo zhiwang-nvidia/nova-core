@@ -730,6 +730,7 @@ bounded_enum! {
         DisplayModesetEnd = 0x05_0017,
         DisplayReleaseStreamRoute = 0x05_0019,
         DisplayHdmiSetTmdsProtocol = 0x05_001a,
+        DisplayHdmiSetSourceActive = 0x05_001b,
     }
 }
 
