@@ -5,7 +5,17 @@
 //! C header: [`include/drm/drm_connector.h`](srctree/include/drm/drm_connector.h)
 
 use super::{
-    atomic::*, encoder::*, KmsDriver, ModeConfigGuard, ModeObject, ModeObjectVtable, RcModeObject,
+    atomic::*,
+    crtc::{
+        AsRawCrtc,
+        OpaqueCrtc, //
+    },
+    encoder::*,
+    KmsDriver,
+    ModeConfigGuard,
+    ModeObject,
+    ModeObjectVtable,
+    RcModeObject, //
 };
 use crate::{
     alloc::KBox,
@@ -668,6 +678,18 @@ pub trait RawConnectorState: AsRawConnectorState {
         // SAFETY: This is guaranteed safe by type invariance, and we're guaranteed by DRM that
         // `self.state.connector` points to a valid instance of a `Connector<T>`
         unsafe { Self::Connector::from_raw(self.as_raw().connector) }
+    }
+    /// Return the CRTC selected by this connector state.
+    fn crtc<D>(&self) -> Option<&OpaqueCrtc<D>>
+    where
+        Self::Connector: ModeObject<Driver = D>,
+        D: KmsDriver,
+    {
+        NonNull::new(self.as_raw().crtc).map(|crtc| {
+            // SAFETY: A connector state references a live CRTC from the same
+            // device, and the returned borrow cannot outlive that state.
+            unsafe { OpaqueCrtc::from_raw(crtc.as_ptr()) }
+        })
     }
 }
 impl<T: AsRawConnectorState> RawConnectorState for T {}
