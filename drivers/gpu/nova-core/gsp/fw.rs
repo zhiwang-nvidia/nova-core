@@ -725,6 +725,7 @@ bounded_enum! {
         DisplayDestroyChannel = 0x05_000e,
         DisplayCheckConfiguration = 0x05_000f,
         DisplayModesetBegin = 0x05_0010,
+        DisplaySetMonitorPower = 0x05_0011,
         DisplayGetPortCaps = 0x05_0016,
         DisplayModesetEnd = 0x05_0017,
         DisplayReleaseStreamRoute = 0x05_0019,
