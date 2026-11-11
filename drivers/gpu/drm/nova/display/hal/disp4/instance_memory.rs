@@ -57,9 +57,15 @@ use nova_core::api::{
     VramRegion, //
 };
 
+use super::context_dma::{
+    ContextDmaDescriptorId,
+    ContextDmaPool, //
+};
+
 pub(crate) struct InstanceMemory<'bound> {
     region: VramRegion,
-    _mapping: VramMapping<'bound>,
+    mapping: VramMapping<'bound>,
+    context_dma_pool: ContextDmaPool,
 }
 
 impl<'bound> InstanceMemory<'bound> {
@@ -81,6 +87,7 @@ impl<'bound> InstanceMemory<'bound> {
         }
 
         let region = backing.region(0..backing.size())?;
+        let context_dma_pool = ContextDmaPool::new(region.clone())?;
         let mapping = api.with(|core| core.get_ref().map_vram(region.clone(), true))?;
         for offset in (0..mapping.size()).step_by(size_of::<u32>()) {
             mapping.write32(0, offset)?;
@@ -88,11 +95,28 @@ impl<'bound> InstanceMemory<'bound> {
 
         Ok(Self {
             region,
-            _mapping: mapping,
+            mapping,
+            context_dma_pool,
         })
     }
 
     pub(crate) fn region(&self) -> &VramRegion {
         &self.region
+    }
+
+    #[expect(dead_code)]
+    pub(crate) fn alloc_context_dma(
+        &mut self,
+        target_region: VramRegion,
+        writable: bool,
+        block_linear: bool,
+    ) -> Result<ContextDmaDescriptorId> {
+        self.context_dma_pool
+            .alloc(&self.mapping, target_region, writable, block_linear)
+    }
+
+    #[expect(dead_code)]
+    pub(crate) fn free_context_dma(&mut self, context_dma: ContextDmaDescriptorId) -> Result {
+        self.context_dma_pool.free(context_dma)
     }
 }
