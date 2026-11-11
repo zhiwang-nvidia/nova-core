@@ -6,7 +6,11 @@ use kernel::{
     drm::{
         device::Device,
         kms::{
-            connector::{self, ConnectorGuard, DriverConnectorOps},
+            connector::{
+                self,
+                ConnectorProbeGuard,
+                DriverConnectorOps, //
+            },
             ModeConfigGuard,
         },
     },
@@ -37,7 +41,7 @@ impl connector::DriverConnector for DriverConnector {
     }
 
     fn get_modes(
-        connector: ConnectorGuard<'_, Self>,
+        connector: ConnectorProbeGuard<'_, Self>,
         _guard: &ModeConfigGuard<'_, Self::Driver>,
     ) -> i32 {
         let count = connector.add_modes_noedid(MAX_RES);
