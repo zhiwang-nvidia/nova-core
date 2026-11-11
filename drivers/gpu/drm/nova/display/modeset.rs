@@ -40,11 +40,13 @@ use kernel::prelude::*;
 use nova_core::api::{
     DisplayConfiguration as FirmwareConfiguration,
     DisplayModesetEndMode,
-    DisplayPixelFormat as FirmwarePixelFormat, //
+    DisplayPixelFormat as FirmwarePixelFormat,
+    VramRegion, //
 };
 
 use super::{
     format::DisplayPixelFormat,
+    framebuffer::Framebuffer,
     stream::Stream,
     Display,
     DisplayConfiguration,
@@ -53,6 +55,7 @@ use super::{
 
 /// Resources and scope for one update, prepared before hardware state changes.
 pub(crate) struct DisplayCommit {
+    id: u64,
     configuration: DisplayConfiguration,
     head_index: usize,
     window_index: usize,
@@ -62,10 +65,38 @@ pub(crate) struct DisplayCommit {
     head_to_disable: Option<usize>,
     /// Window indices whose old framebuffers must finish before being unbound.
     window_framebuffers_to_retire: KVec<usize>,
+    framebuffer: Framebuffer,
     stream: Option<Stream>,
 }
 
+/// Resources selected before disabling an output.
+pub(crate) struct DisplayDisableCommit {
+    id: u64,
+    display_id: u32,
+    head_to_disable: Option<usize>,
+    window_framebuffers_to_retire: KVec<usize>,
+}
+
+impl DisplayCommit {
+    pub(super) fn retain_backing(&self) {
+        self.framebuffer.retain_backing();
+    }
+}
+
 impl<'bound> Display<'bound> {
+    fn next_prepared_id(&self) -> Result<u64> {
+        if self.pending_commit.is_some() || self.prepared_commit_id.is_some() {
+            return Err(EBUSY);
+        }
+        self.next_commit_id.checked_add(1).ok_or(EOVERFLOW)
+    }
+
+    /// Reports retained resources from a failed submission or cleanup.
+    #[expect(dead_code)]
+    pub(crate) fn needs_shutdown(&self) -> bool {
+        self.pending_commit.is_some()
+    }
+
     fn select_head_and_window(&self, display_id: u32) -> Result<(usize, usize)> {
         // The current GMC check describes one head/window, not aggregate bandwidth.
         if self.streams.len() > 1 {
@@ -157,15 +188,18 @@ impl<'bound> Display<'bound> {
         Ok((head_index, window_index))
     }
 
-    /// Prepares the output association before changing the current display state.
+    /// Prepares and binds GEM backing before DRM exchanges its software state.
     #[expect(dead_code)]
-    fn prepare_commit(&mut self, configuration: &DisplayConfiguration) -> Result<DisplayCommit> {
-        if self.pending_commit.is_some() {
-            return Err(EBUSY);
-        }
+    fn prepare_commit(
+        &mut self,
+        configuration: &DisplayConfiguration,
+        region: VramRegion,
+    ) -> Result<DisplayCommit> {
+        let id = self.next_prepared_id()?;
         let (head_index, window_index) = self.check_configuration(configuration)?;
         let head = &self.heads[head_index];
         let window = &self.windows[window_index];
+        // Check all participating channels before binding the GEM backing.
         window.channel.as_ref().ok_or(ENODEV)?;
         window.immediate_channel.as_ref().ok_or(ENODEV)?;
         self.core_channel.as_ref().ok_or(ENODEV)?;
@@ -177,30 +211,78 @@ impl<'bound> Display<'bound> {
             } else {
                 (None, None, KVec::new())
             };
+        let framebuffer = Framebuffer::new(configuration, region)?;
         self.streams.reserve(1, GFP_KERNEL)?;
-        Ok(DisplayCommit {
+        let mut commit = DisplayCommit {
+            id,
             configuration: *configuration,
             head_index,
             window_index,
             stream_to_release,
             head_to_disable,
             window_framebuffers_to_retire,
+            framebuffer,
             stream: Some(Stream::new(configuration, head.id)),
-        })
+        };
+        let channel = self.windows[window_index].channel.as_mut().ok_or(ENODEV)?;
+        if let Err(error) = commit.framebuffer.bind(channel, &mut *self.hal) {
+            if let Err(cleanup_error) = commit.framebuffer.unbind(channel, &mut *self.hal) {
+                dev_err!(
+                    self.dev,
+                    "Failed to release prepared framebuffer: {:?}\n",
+                    cleanup_error
+                );
+                self.pending_commit = Some(commit);
+            }
+            return Err(error);
+        }
+        self.next_commit_id = id;
+        self.prepared_commit_id = Some(id);
+        Ok(commit)
+    }
+
+    /// Releases a prepared binding when DRM has not exchanged its state.
+    #[expect(dead_code)]
+    pub(crate) fn abort_commit(&mut self, mut commit: DisplayCommit) -> Result {
+        if self.prepared_commit_id != Some(commit.id) {
+            return Err(EINVAL);
+        }
+        let result = (|| {
+            let window = self.windows.get_mut(commit.window_index).ok_or(ENODEV)?;
+            let channel = window.channel.as_mut().ok_or(ENODEV)?;
+            commit.framebuffer.unbind(channel, &mut *self.hal)
+        })();
+        self.prepared_commit_id = None;
+        if let Err(error) = result {
+            self.pending_commit = Some(commit);
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Retains all referenced resources on failure; the caller must shut down display.
     #[expect(dead_code)]
     fn commit(&mut self, commit: DisplayCommit) -> Result {
-        if self.pending_commit.is_some() {
-            return Err(EBUSY);
+        if self.pending_commit.is_some() || self.prepared_commit_id != Some(commit.id) {
+            return Err(EINVAL);
         }
+        self.prepared_commit_id = None;
         let head_index = commit.head_index;
         let window_index = commit.window_index;
         let stream_to_release = commit.stream_to_release;
         self.pending_commit = Some(commit);
 
         self.program_modeset()?;
+        let pending = self.pending_commit.as_ref().ok_or(EIO)?;
+        for &index in &pending.window_framebuffers_to_retire {
+            let window = &mut self.windows[index];
+            let channel = window.channel.as_mut().ok_or(ENODEV)?;
+            window
+                .framebuffer
+                .as_mut()
+                .ok_or(EIO)?
+                .unbind(channel, &mut *self.hal)?;
+        }
         // Record the new Window -> Head -> Output association after success.
         if let Some(display_id) = stream_to_release {
             let index = self
@@ -211,20 +293,23 @@ impl<'bound> Display<'bound> {
             self.streams.remove(index).map_err(|_| EIO)?;
         }
         if let Some(stream) = self.pending_commit.as_mut().ok_or(EIO)?.stream.take() {
-            // Capacity was reserved before changing hardware.
+            // Capacity was reserved before changing hardware. The pending framebuffer
+            // remains owned even if publishing the stream unexpectedly fails.
             self.streams.push(stream, GFP_KERNEL)?;
         }
         let pending = self.pending_commit.as_ref().ok_or(EIO)?;
         for &index in &pending.window_framebuffers_to_retire {
             if index != window_index {
                 let window = &mut self.windows[index];
+                window.framebuffer = None;
                 window.head = None;
             }
         }
         let head = self.heads.get_mut(head_index).ok_or(EIO)?;
         let window = self.windows.get_mut(window_index).ok_or(EIO)?;
-        self.pending_commit.take().ok_or(EIO)?;
+        let pending = self.pending_commit.take().ok_or(EIO)?;
         window.head = Some(head.id);
+        window.framebuffer = Some(pending.framebuffer);
         Ok(())
     }
 
@@ -289,26 +374,68 @@ impl<'bound> Display<'bound> {
         Ok(())
     }
 
-    /// Disables the specified output while preserving resources used by other routes.
-    #[expect(dead_code)]
-    fn disable_output(&mut self, display_id: u32) -> Result {
+    /// Selects the resources that an output disable will retire before the state exchange.
+    pub(crate) fn prepare_disable_output(
+        &mut self,
+        display_id: u32,
+    ) -> Result<Option<DisplayDisableCommit>> {
+        let id = self.next_prepared_id()?;
         if !self
             .streams
             .iter()
             .any(|stream| stream.display_id == display_id)
         {
-            return Ok(());
+            return Ok(None);
         }
         let (head_to_disable, window_framebuffers_to_retire) =
             self.prepare_output_disable(display_id)?;
+        self.next_commit_id = id;
+        self.prepared_commit_id = Some(id);
+        Ok(Some(DisplayDisableCommit {
+            id,
+            display_id,
+            head_to_disable,
+            window_framebuffers_to_retire,
+        }))
+    }
+
+    #[expect(dead_code)]
+    pub(crate) fn abort_disable_output(&mut self, commit: DisplayDisableCommit) -> Result {
+        if self.prepared_commit_id != Some(commit.id) {
+            return Err(EINVAL);
+        }
+        self.prepared_commit_id = None;
+        Ok(())
+    }
+
+    pub(crate) fn commit_disable_output(&mut self, commit: DisplayDisableCommit) -> Result {
+        if self.pending_commit.is_some() || self.prepared_commit_id != Some(commit.id) {
+            return Err(EINVAL);
+        }
+        let DisplayDisableCommit {
+            display_id,
+            head_to_disable,
+            window_framebuffers_to_retire,
+            ..
+        } = commit;
         let bracket = self
             .api
             .with(|core| core.display_modeset_begin(display_id, 0))?;
         self.program_disable_output(display_id, head_to_disable, bracket)?;
         self.api
             .with(|core| core.display_modeset_end(bracket, DisplayModesetEndMode::Commit))?;
+        for &index in &window_framebuffers_to_retire {
+            let window = &mut self.windows[index];
+            let channel = window.channel.as_mut().ok_or(ENODEV)?;
+            window
+                .framebuffer
+                .as_mut()
+                .ok_or(EIO)?
+                .unbind(channel, &mut *self.hal)?;
+        }
         for index in window_framebuffers_to_retire {
             let window = &mut self.windows[index];
+            window.framebuffer = None;
             window.head = None;
         }
         let index = self
@@ -317,6 +444,15 @@ impl<'bound> Display<'bound> {
             .position(|stream| stream.display_id == display_id)
             .ok_or(EIO)?;
         self.streams.remove(index).map_err(|_| EIO)?;
+        self.prepared_commit_id = None;
         Ok(())
+    }
+
+    #[expect(dead_code)]
+    fn disable_output(&mut self, display_id: u32) -> Result {
+        let Some(commit) = self.prepare_disable_output(display_id)? else {
+            return Ok(());
+        };
+        self.commit_disable_output(commit)
     }
 }

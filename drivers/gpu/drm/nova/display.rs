@@ -4,7 +4,6 @@
 
 mod channel;
 mod format;
-#[expect(dead_code)]
 mod framebuffer;
 mod hal;
 mod head;
@@ -51,6 +50,8 @@ pub(crate) struct Display<'bound> {
     dev: &'bound device::Device<Bound>,
     api: NovaCoreApiHandle<'bound>,
     pending_commit: Option<modeset::DisplayCommit>,
+    prepared_commit_id: Option<u64>,
+    next_commit_id: u64,
     streams: KVec<stream::Stream>,
     core_channel: Option<Channel<'bound, Core>>,
     hal: KBox<dyn hal::DisplayHal<'bound> + 'bound>,
@@ -119,6 +120,8 @@ impl<'bound> Display<'bound> {
             dev: adev.as_ref(),
             api,
             pending_commit: None,
+            prepared_commit_id: None,
+            next_commit_id: 0,
             streams: KVec::new(),
             core_channel: None,
             hal,
@@ -221,6 +224,14 @@ impl Drop for Display<'_> {
             dev_err!(self.dev, "Failed to shut down display: {:?}\n", error);
             // GSP-RM may still reference the physical backing; the CPU mapping can be dropped.
             core::mem::forget(self.hal.instance_memory().clone());
+            if let Some(pending) = self.pending_commit.as_ref() {
+                pending.retain_backing();
+            }
+            for window in &self.windows {
+                if let Some(framebuffer) = window.framebuffer.as_ref() {
+                    framebuffer.retain_backing();
+                }
+            }
             for channel in self
                 .windows
                 .iter()

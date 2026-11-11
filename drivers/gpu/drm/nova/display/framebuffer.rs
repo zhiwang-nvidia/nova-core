@@ -81,6 +81,10 @@ impl Framebuffer {
         })
     }
 
+    pub(super) fn retain_backing(&self) {
+        core::mem::forget(self.region.clone());
+    }
+
     /// Binds the framebuffer before any methods can refer to its descriptor.
     pub(super) fn bind<'bound>(
         &mut self,

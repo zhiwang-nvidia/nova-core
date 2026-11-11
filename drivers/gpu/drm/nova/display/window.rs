@@ -16,6 +16,7 @@ use super::{
         WindowImmediate, //
     },
     format::DisplayPixelFormat,
+    framebuffer::Framebuffer,
     hal::DisplayMethodHal,
     methods::{
         core,
@@ -31,6 +32,7 @@ pub(super) struct Window<'bound> {
     pub(super) channel: Option<Channel<'bound, WindowDma>>,
     pub(super) immediate_channel: Option<Channel<'bound, WindowImmediate>>,
     pub(super) head: Option<u32>,
+    pub(super) framebuffer: Option<Framebuffer>,
 }
 
 impl Window<'_> {
@@ -40,6 +42,7 @@ impl Window<'_> {
             channel: None,
             immediate_channel: None,
             head: None,
+            framebuffer: None,
         }
     }
 
