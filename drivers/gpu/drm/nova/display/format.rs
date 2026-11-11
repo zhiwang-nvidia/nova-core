@@ -6,7 +6,6 @@
 ///
 /// The current implementation supports XRGB8888 framebuffers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[expect(dead_code)]
 pub(crate) enum DisplayPixelFormat {
     /// Eight bits each of red, green and blue, with eight unused bits.
     Xrgb8888,

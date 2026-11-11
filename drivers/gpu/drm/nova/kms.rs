@@ -5,6 +5,8 @@
 #[expect(dead_code)]
 mod connector;
 #[expect(dead_code)]
+mod crtc;
+#[expect(dead_code)]
 mod encoder;
 #[expect(dead_code)]
 mod plane;
@@ -14,6 +16,7 @@ use kernel::{
     drm::{
         fourcc,
         kms::{
+            atomic::AtomicStateComposer,
             KmsDriver,
             ModeConfigInfo,
             UnregisteredKmsDevice, //
@@ -43,5 +46,9 @@ impl KmsDriver for NovaDriver {
 
     fn create_objects(_dev: &UnregisteredKmsDevice<'_, Self>) -> Result {
         Ok(())
+    }
+
+    fn atomic_check(state: &mut AtomicStateComposer<Self>) -> Result {
+        crtc::check(state)
     }
 }
