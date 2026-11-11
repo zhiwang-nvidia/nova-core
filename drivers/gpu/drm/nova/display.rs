@@ -2,6 +2,7 @@
 
 //! Display support.
 
+mod channel;
 mod hal;
 mod window;
 
