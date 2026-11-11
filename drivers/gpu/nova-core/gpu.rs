@@ -42,6 +42,7 @@ use crate::{
         cmdq::Cmdq,
         commands::{
             gmc::{
+                DisplayCheckConfiguration,
                 DisplayCreateChannel,
                 DisplayDestroyChannel,
                 DisplayGetPortCaps,
@@ -55,6 +56,7 @@ use crate::{
                 DisplayShutdown, //
             },
             DisplayChannelKind,
+            DisplayConfiguration,
             DisplayCreateChannelReply,
             DisplayGetPortCapsReply,
             DisplayGetPortStateReply,
@@ -702,6 +704,19 @@ impl<'gpu> Gpu<'gpu> {
             .cmdq
             .send_gmc_command(command, |_| Ok(()))?;
         Ok(reply.edid)
+    }
+
+    pub(crate) fn display_check_configuration(
+        &self,
+        configuration: &DisplayConfiguration,
+    ) -> Result<bool> {
+        let command = DisplayCheckConfiguration::new(configuration)?;
+        let reply = self
+            .gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
+        Ok(reply.possible != 0)
     }
 
     pub(crate) fn display_modeset_begin(

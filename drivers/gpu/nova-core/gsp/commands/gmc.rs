@@ -739,7 +739,6 @@ pub(crate) struct DisplayCheckConfiguration {
 }
 
 impl DisplayCheckConfiguration {
-    #[expect(dead_code)]
     pub(crate) fn new(configuration: &DisplayConfiguration) -> Result<Self> {
         if !configuration.display_id.is_power_of_two() {
             return Err(EINVAL);

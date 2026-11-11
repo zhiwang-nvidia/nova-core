@@ -96,6 +96,17 @@ impl NovaCoreApi<'_> {
         self.gpu.display_read_edid(display_id)
     }
 
+    /// Checks display bandwidth without changing the current display state.
+    ///
+    /// Returns whether GSP-RM accepts the configuration. Malformed or incomplete
+    /// replies are errors; callers apply mode and framebuffer policy separately.
+    pub fn display_check_configuration(
+        &self,
+        configuration: &DisplayConfiguration,
+    ) -> Result<bool> {
+        self.gpu.display_check_configuration(&configuration.into())
+    }
+
     /// Sets GSP-RM's display instance memory to a VRAM region.
     ///
     /// Keep the region alive until display shutdown succeeds, including when this call fails.
@@ -328,6 +339,71 @@ impl From<DisplayGetPortCapsReply> for DisplayPortCaps {
                 ResourceType::Unknown(value) => DisplayOutputResourceType::Unknown(value),
             },
             internal_panel: reply.is_internal_panel(),
+        }
+    }
+}
+
+/// Framebuffer format supplied to GSP-RM's display configuration check.
+#[derive(Clone, Copy)]
+pub enum DisplayPixelFormat {
+    /// Eight-bit RGB components in a 32-bit pixel, with an unused high byte.
+    Xrgb8888,
+}
+
+/// Timing, framebuffer and output parameters for GSP-RM's bandwidth check.
+///
+/// These are protocol query inputs. The display driver owns mode selection,
+/// format policy and the resources used to apply a configuration.
+pub struct DisplayConfiguration {
+    /// Hardware head ID.
+    pub head: u32,
+    /// Hardware window ID.
+    pub window: u32,
+    /// Single-bit GSP-RM display identifier.
+    pub display_id: u32,
+    /// Pixel clock in kHz.
+    pub clock_khz: u32,
+    /// Total horizontal pixels, including blanking.
+    pub htotal: u32,
+    /// Total vertical lines, including blanking.
+    pub vtotal: u32,
+    /// Horizontal blanking start measured from sync start.
+    pub hblank_start: u32,
+    /// Horizontal blanking end measured from sync start.
+    pub hblank_end: u32,
+    /// Vertical blanking start measured from sync start.
+    pub vblank_start: u32,
+    /// Vertical blanking end measured from sync start.
+    pub vblank_end: u32,
+    /// Framebuffer width in pixels.
+    pub width: u32,
+    /// Framebuffer height in lines.
+    pub height: u32,
+    /// Framebuffer row stride in bytes.
+    pub pitch: u32,
+    /// Framebuffer pixel format.
+    pub format: DisplayPixelFormat,
+}
+
+impl From<&DisplayConfiguration> for crate::gsp::commands::DisplayConfiguration {
+    fn from(configuration: &DisplayConfiguration) -> Self {
+        Self {
+            head: configuration.head,
+            window: configuration.window,
+            display_id: configuration.display_id,
+            clock_khz: configuration.clock_khz,
+            htotal: configuration.htotal,
+            vtotal: configuration.vtotal,
+            hblank_start: configuration.hblank_start,
+            hblank_end: configuration.hblank_end,
+            vblank_start: configuration.vblank_start,
+            vblank_end: configuration.vblank_end,
+            width: configuration.width,
+            height: configuration.height,
+            pitch: configuration.pitch,
+            format: match configuration.format {
+                DisplayPixelFormat::Xrgb8888 => crate::gsp::commands::DisplayPixelFormat::Xrgb8888,
+            },
         }
     }
 }

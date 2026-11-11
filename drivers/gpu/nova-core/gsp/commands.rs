@@ -218,7 +218,6 @@ impl DisplayGetPortCapsReply {
 /// Framebuffer format accepted by the GMC display configuration check.
 #[derive(Clone, Copy)]
 pub(crate) enum DisplayPixelFormat {
-    #[expect(dead_code)]
     Xrgb8888,
 }
 
