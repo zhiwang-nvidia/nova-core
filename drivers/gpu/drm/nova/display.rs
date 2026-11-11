@@ -192,6 +192,14 @@ impl<'bound> Display<'bound> {
 
         Ok(display)
     }
+
+    /// Disables owned output paths before normal display teardown.
+    #[expect(dead_code)]
+    pub(crate) fn shutdown(mut self) {
+        if let Err(error) = self.disable_all() {
+            dev_err!(self.dev, "Failed to disable display: {:?}\n", error);
+        }
+    }
 }
 
 impl Drop for Display<'_> {

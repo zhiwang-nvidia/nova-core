@@ -198,7 +198,7 @@ impl<'bound> Display<'bound> {
 
     /// Prepares and binds GEM backing before DRM exchanges its software state.
     #[expect(dead_code)]
-    fn prepare_commit(
+    pub(crate) fn prepare_commit(
         &mut self,
         configuration: &DisplayConfiguration,
         region: VramRegion,
@@ -294,7 +294,7 @@ impl<'bound> Display<'bound> {
 
     /// Retains all referenced resources on failure; the caller must shut down display.
     #[expect(dead_code)]
-    fn commit(&mut self, commit: DisplayCommit) -> Result {
+    pub(crate) fn commit(&mut self, commit: DisplayCommit) -> Result {
         if self.pending_commit.is_some() || self.prepared_commit_id != Some(commit.id) {
             return Err(EINVAL);
         }
@@ -648,11 +648,18 @@ impl<'bound> Display<'bound> {
         Ok(())
     }
 
-    #[expect(dead_code)]
-    fn disable_output(&mut self, display_id: u32) -> Result {
+    pub(crate) fn disable_output(&mut self, display_id: u32) -> Result {
         let Some(commit) = self.prepare_disable_output(display_id)? else {
             return Ok(());
         };
         self.commit_disable_output(commit)
+    }
+
+    /// Stops all owned output paths during driver shutdown.
+    pub(super) fn disable_all(&mut self) -> Result {
+        while let Some(stream) = self.streams.first() {
+            self.disable_output(stream.display_id)?;
+        }
+        Ok(())
     }
 }
