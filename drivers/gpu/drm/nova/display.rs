@@ -2,6 +2,7 @@
 
 //! Display support.
 
+mod hal;
 mod window;
 
 use kernel::{
@@ -24,6 +25,8 @@ use nova_core::api::{
 pub(crate) struct Display<'bound> {
     dev: &'bound device::Device<Bound>,
     api: NovaCoreApiHandle<'bound>,
+    #[expect(dead_code)]
+    hal: KBox<dyn hal::DisplayHal>,
     #[expect(dead_code)]
     caps: DisplayCaps,
     #[expect(dead_code)]
@@ -66,11 +69,22 @@ impl<'bound> Display<'bound> {
             }
         }
 
+        let hal =
+            hal::display_hal(caps.display_ip_version, &hw_static_info).inspect_err(|error| {
+                dev_err!(
+                    adev,
+                    "Failed to initialize display HAL (IP {:#010x}): {:?}\n",
+                    caps.display_ip_version,
+                    error
+                );
+            })?;
+
         cleanup.dismiss();
 
         Ok(Self {
             dev: adev.as_ref(),
             api,
+            hal,
             caps,
             hw_static_info,
             windows,
