@@ -697,6 +697,23 @@ impl<'gpu> Gpu<'gpu> {
         Ok(())
     }
 
+    pub(crate) fn display_core_channel_is_idle(&self) -> Result<bool> {
+        const STATE_IDLE: u32 = 0x0b;
+        const STATE_SHUTDOWN2: u32 = 0x0e;
+
+        // DISP 4.x and 5.x share the core channel state register layout and idle encoding.
+        let state = self
+            .gsp_resources
+            .bar
+            .read(display_regs::NV_PDISP_FE_CHNSTATUS_CORE)
+            .state()
+            .get();
+        if state > STATE_SHUTDOWN2 {
+            return Err(EIO);
+        }
+        Ok(state == STATE_IDLE)
+    }
+
     pub(crate) fn display_channel_bar(&self) -> Bar0<'_> {
         self.gsp_resources.bar
     }

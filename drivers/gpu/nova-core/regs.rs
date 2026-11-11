@@ -39,6 +39,16 @@ register! {
     pub(crate) NV_PBUS_SW_SCRATCH(u32)[64] @ 0x00001400 {}
 }
 
+// Display core channel state shared by DISP 4.x and 5.x discrete GPUs.
+
+register! {
+    base: NovaRegisters;
+
+    pub(crate) NV_PDISP_FE_CHNSTATUS_CORE(u32) @ 0x00610630 {
+        20:16   state;
+    }
+}
+
 // Display capability registers shared by DISP 4.x and 5.x discrete GPUs.
 
 register! {

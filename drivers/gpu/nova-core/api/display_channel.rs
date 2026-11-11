@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Display channel firmware operations and user-register access.
+//! Display channel operations.
 
 use kernel::{
     device::Bound,
@@ -46,6 +46,11 @@ impl From<DisplayChannelKind> for commands::DisplayChannelKind {
 }
 
 impl NovaCoreApi<'_> {
+    /// Reports whether the display core channel's hardware state is idle.
+    pub fn display_core_channel_is_idle(&self) -> Result<bool> {
+        self.gpu.display_core_channel_is_idle()
+    }
+
     /// Creates a display channel using a VRAM pushbuffer belonging to this GPU.
     ///
     /// Keep the pushbuffer alive until channel destruction or display shutdown
