@@ -385,6 +385,23 @@ impl<'bound> Channel<'bound, Core> {
         )?;
         hal.init_core_channel(self, info.head_mask)
     }
+
+    /// Waits for this core channel's hardware state to become idle.
+    #[expect(dead_code)]
+    pub(super) fn wait_idle(&mut self) -> Result {
+        if !self.is_created() {
+            return Err(ENODEV);
+        }
+
+        // NVKMS's 100 ms wait before reading the core armed state cache.
+        read_poll_timeout(
+            || self.api.with(|core| core.display_core_channel_is_idle()),
+            |idle| *idle,
+            Delta::from_micros(100),
+            Delta::from_millis(100),
+        )
+        .map(|_| ())
+    }
 }
 
 impl<'bound> Channel<'bound, WindowDma> {
