@@ -313,17 +313,37 @@ impl<'bound> Display<'bound> {
         Ok(())
     }
 
+    /// Disables initial head auxiliary accesses and detaches heads from SORs.
+    ///
+    /// Called inside the first modeset bracket, before assigning a stream route.
+    fn detach_initial_heads_from_sors(&mut self) -> Result {
+        let core = self.core_channel.as_mut().ok_or(ENODEV)?;
+        core.wait_idle()?;
+        self.hal
+            .emit_disable_heads_and_detach_sors(core, self.hw_static_info.head_mask)?;
+        core.update(&*self.hal)?;
+        core.wait_idle()?;
+        self.initial_detach_pending = false;
+        Ok(())
+    }
+
     fn program_modeset(&mut self) -> Result {
         let pending = self.pending_commit.as_ref().ok_or(EIO)?;
         let configuration = pending.configuration;
         let stream_to_release = pending.stream_to_release;
         let head_to_disable = pending.head_to_disable;
-        let affected_outputs = stream_to_release.unwrap_or(0) | configuration.display_id;
+        let affected_outputs = if self.initial_detach_pending {
+            self.hw_static_info.display_mask
+        } else {
+            stream_to_release.unwrap_or(0) | configuration.display_id
+        };
         let bracket = self
             .api
             .with(|core| core.display_modeset_begin(affected_outputs, configuration.display_id))?;
 
-        if let Some(display_id) = stream_to_release {
+        if self.initial_detach_pending {
+            self.detach_initial_heads_from_sors()?;
+        } else if let Some(display_id) = stream_to_release {
             self.program_disable_output(display_id, head_to_disable, bracket)?;
         }
 

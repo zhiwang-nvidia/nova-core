@@ -509,7 +509,6 @@ impl<'bound> Channel<'bound, Core> {
     }
 
     /// Submits a core-only update and waits for it to finish.
-    #[expect(dead_code)]
     pub(super) fn update(&mut self, hal: &dyn DisplayHal<'bound>) -> Result {
         let descriptor = self.prepare_notifier()?;
         hal.emit_core_notifier_methods(self, Some(descriptor))?;
@@ -525,7 +524,6 @@ impl<'bound> Channel<'bound, Core> {
     }
 
     /// Waits for this core channel's hardware state to become idle.
-    #[expect(dead_code)]
     pub(super) fn wait_idle(&mut self) -> Result {
         if !self.is_created() {
             return Err(ENODEV);

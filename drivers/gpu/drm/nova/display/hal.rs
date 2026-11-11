@@ -141,7 +141,6 @@ pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
     /// display IDs are unset. All SOR head owner masks are cleared, regardless of
     /// `head_mask`.
     /// Call this only before driver-owned routes exist, then submit a core UPDATE.
-    #[expect(dead_code)]
     fn emit_disable_heads_and_detach_sors(
         &self,
         core: &mut Channel<'bound, Core>,
