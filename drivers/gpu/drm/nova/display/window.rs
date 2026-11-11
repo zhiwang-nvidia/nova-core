@@ -47,7 +47,6 @@ impl Window<'_> {
     }
 
     /// Queues this window's head assignment for a separate core UPDATE.
-    #[expect(dead_code)]
     pub(super) fn emit_owner_methods(
         &self,
         hal: &dyn DisplayMethodHal,
@@ -66,7 +65,6 @@ impl Window<'_> {
     }
 
     /// Clears the window's allowed pixel formats.
-    #[expect(dead_code)]
     pub(super) fn emit_clear_format_usage_bounds_methods(
         &self,
         hal: &dyn DisplayMethodHal,

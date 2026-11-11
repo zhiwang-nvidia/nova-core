@@ -304,9 +304,9 @@ pub(super) struct WindowImmediate {
 }
 
 /// Completion required for an interlocked window update.
-#[expect(dead_code)]
 pub(super) enum Update {
     /// Waits for new framebuffer state to become active and keeps its notifier pending.
+    #[expect(dead_code)]
     WaitForActive,
     /// Waits for the current submission to retire and allows its notifier to be reused.
     WaitForRetire,
@@ -593,7 +593,6 @@ impl<'bound> Channel<'bound, WindowDma> {
     /// unchanged until retirement succeeds and pass no immediate channel.
     /// Failed updates leave notifier records pending; retain framebuffer backing until the
     /// channels are quiesced.
-    #[expect(dead_code)]
     pub(super) fn update(
         &mut self,
         hal: &dyn DisplayHal<'bound>,
