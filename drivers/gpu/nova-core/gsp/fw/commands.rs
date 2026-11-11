@@ -20,6 +20,7 @@ use crate::{
     gsp::{
         commands::{
             DisplayChannelKind,
+            DisplayConfiguration,
             DisplayCreateChannelReply,
             DisplayGetPortCapsReply,
             DisplayGetPortStateReply,
@@ -27,6 +28,7 @@ use crate::{
             DisplayInitReply,
             DisplayModesetBeginReply,
             DisplayModesetEndMode,
+            DisplayPixelFormat,
             GspStaticInfo, //
         },
         nvkv::{
@@ -715,6 +717,96 @@ pub(crate) struct DisplayReadEdidResponse {
 
 impl DisplayReadEdidResponse {
     const MAX_BYTES: usize = 2048;
+}
+
+nvkv_encode! {
+    pub(crate) struct DisplayCheckConfigurationRequest {
+        head: Key<u32, { Self::HEAD_KEY }>,
+        window: Key<u32, { Self::WINDOW_KEY }>,
+        display_id: Key<u32, { Self::DISPLAY_ID_KEY }>,
+        clock_khz: Key<u32, { Self::CLOCK_KHZ_KEY }>,
+        htotal: Key<u32, { Self::HTOTAL_KEY }>,
+        vtotal: Key<u32, { Self::VTOTAL_KEY }>,
+        hblank_start: Key<u32, { Self::HBLANK_START_KEY }>,
+        hblank_end: Key<u32, { Self::HBLANK_END_KEY }>,
+        vblank_start: Key<u32, { Self::VBLANK_START_KEY }>,
+        vblank_end: Key<u32, { Self::VBLANK_END_KEY }>,
+        width: Key<u32, { Self::WIDTH_KEY }>,
+        height: Key<u32, { Self::HEIGHT_KEY }>,
+        pitch: Key<u32, { Self::PITCH_KEY }>,
+        format: Key<DisplayPixelFormat, { Self::FORMAT_KEY }, u32>,
+        required_domains: Key<u32, { Self::REQUIRED_DOMAINS_KEY }>,
+    }
+}
+
+impl DisplayCheckConfigurationRequest {
+    const HEAD_KEY: KeyId = 0x0173;
+    const WINDOW_KEY: KeyId = 0x0174;
+    const DISPLAY_ID_KEY: KeyId = 0x0175;
+    const CLOCK_KHZ_KEY: KeyId = 0x0176;
+    const HTOTAL_KEY: KeyId = 0x0177;
+    const VTOTAL_KEY: KeyId = 0x0178;
+    const HBLANK_START_KEY: KeyId = 0x0179;
+    const HBLANK_END_KEY: KeyId = 0x017a;
+    const VBLANK_START_KEY: KeyId = 0x017b;
+    const VBLANK_END_KEY: KeyId = 0x017c;
+    const WIDTH_KEY: KeyId = 0x017d;
+    const HEIGHT_KEY: KeyId = 0x017e;
+    const PITCH_KEY: KeyId = 0x017f;
+    const FORMAT_KEY: KeyId = 0x0180;
+    const REQUIRED_DOMAINS_KEY: KeyId = 0x01ed;
+
+    pub(crate) fn new(configuration: &DisplayConfiguration) -> Self {
+        Self {
+            head: configuration.head.into(),
+            window: configuration.window.into(),
+            display_id: configuration.display_id.into(),
+            clock_khz: configuration.clock_khz.into(),
+            htotal: configuration.htotal.into(),
+            vtotal: configuration.vtotal.into(),
+            hblank_start: configuration.hblank_start.into(),
+            hblank_end: configuration.hblank_end.into(),
+            vblank_start: configuration.vblank_start.into(),
+            vblank_end: configuration.vblank_end.into(),
+            width: configuration.width.into(),
+            height: configuration.height.into(),
+            pitch: configuration.pitch.into(),
+            format: configuration.format.into(),
+            required_domains: 1.into(),
+        }
+    }
+}
+
+nvkv_decode! {
+    pub(crate) struct DisplayCheckConfigurationResponseSchema => DisplayCheckConfigurationResponse {
+        possible: Required<Key<u32, { Self::POSSIBLE_KEY }>>,
+        min_pstate: Required<Key<u32, { Self::MIN_PSTATE_KEY }>>,
+        min_imp_vpstate: Required<Key<u32, { Self::MIN_IMP_VPSTATE_KEY }>>,
+        display_clock_khz: Required<Key<u32, { Self::DISPLAY_CLOCK_KHZ_KEY }>>,
+        worst_case_margin: Required<Key<u32, { Self::WORST_CASE_MARGIN_KEY }>>,
+        num_tiles: Required<Key<u32, { Self::NUM_TILES_KEY }>>,
+        checked_domains: Required<Key<u32, { Self::CHECKED_DOMAINS_KEY }>>,
+    }
+}
+
+impl DisplayCheckConfigurationResponseSchema {
+    const POSSIBLE_KEY: KeyId = 0x0181;
+    const MIN_PSTATE_KEY: KeyId = 0x0182;
+    const MIN_IMP_VPSTATE_KEY: KeyId = 0x0183;
+    const DISPLAY_CLOCK_KHZ_KEY: KeyId = 0x0184;
+    const WORST_CASE_MARGIN_KEY: KeyId = 0x0185;
+    const NUM_TILES_KEY: KeyId = 0x0186;
+    const CHECKED_DOMAINS_KEY: KeyId = 0x01ee;
+}
+
+pub(crate) struct DisplayCheckConfigurationResponse {
+    pub(crate) possible: u32,
+    min_pstate: u32,
+    min_imp_vpstate: u32,
+    display_clock_khz: u32,
+    worst_case_margin: u32,
+    num_tiles: u32,
+    pub(crate) checked_domains: u32,
 }
 
 nvkv_encode! {

@@ -24,6 +24,8 @@ use crate::{
         },
         commands::{
             DisplayChannelKind,
+            DisplayCheckConfigurationReply,
+            DisplayConfiguration,
             DisplayCreateChannelReply,
             DisplayDestroyChannelReply,
             DisplayGetPortCapsReply,
@@ -41,6 +43,8 @@ use crate::{
         fw::{
             self,
             commands::{
+                DisplayCheckConfigurationRequest,
+                DisplayCheckConfigurationResponseSchema,
                 DisplayCreateChannelRequest,
                 DisplayCreateChannelResponseSchema,
                 DisplayDestroyChannelRequest,
@@ -727,6 +731,76 @@ impl GmcReply for DisplayReadEdidReply {
         let mut edid = KVec::with_capacity(prefix.len(), GFP_KERNEL)?;
         edid.extend_from_slice(prefix, GFP_KERNEL)?;
         Ok(Self { edid })
+    }
+}
+
+pub(crate) struct DisplayCheckConfiguration {
+    payload: KVVec<u64>,
+}
+
+impl DisplayCheckConfiguration {
+    #[expect(dead_code)]
+    pub(crate) fn new(configuration: &DisplayConfiguration) -> Result<Self> {
+        if !configuration.display_id.is_power_of_two() {
+            return Err(EINVAL);
+        }
+        let mut encoder = Encoder::new();
+        DisplayCheckConfigurationRequest::new(configuration).encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayCheckConfiguration {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayCheckConfiguration;
+    const MAX_REPLY_SIZE: u32 = 4096;
+    type Command = ();
+    type Reply = DisplayCheckConfigurationReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayCheckConfigurationReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayCheckConfiguration;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        let bytes = payload.flush_into_kvec(GFP_KERNEL)?;
+        if bytes.len() > num::u32_as_usize(DisplayCheckConfiguration::MAX_REPLY_SIZE) {
+            return Err(EINVAL);
+        }
+        let words = nvkv_words(&bytes)?;
+
+        let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
+        let mut schema = KBox::init(DisplayCheckConfigurationResponseSchema::init(), GFP_KERNEL)?;
+        let reply = KBox::try_init(decoder.decode(&mut *schema)?, GFP_KERNEL)?;
+        if reply.possible > 1 || reply.checked_domains != 1 {
+            return Err(EINVAL);
+        }
+        Ok(Self {
+            possible: reply.possible,
+            checked_domains: reply.checked_domains,
+        })
     }
 }
 
