@@ -198,6 +198,17 @@ impl NovaCoreApi<'_> {
             .display_set_monitor_power(stream_id, modeset_id, on)
     }
 
+    /// Sets HDMI source activity for a stream in a modeset bracket.
+    pub fn display_hdmi_set_source_active(
+        &self,
+        stream_id: u64,
+        modeset_id: u64,
+        active: bool,
+    ) -> Result {
+        self.gpu
+            .display_hdmi_set_source_active(stream_id, modeset_id, active)
+    }
+
     /// Returns the GPU [`GspStaticInfo`].
     pub fn gsp_static_info(&self) -> &GspStaticInfo {
         self.gpu.gsp_static_info()

@@ -50,6 +50,7 @@ use crate::{
                 DisplayGetPortState,
                 DisplayGetStaticInfo,
                 DisplayHdmiSetSinkCapabilities,
+                DisplayHdmiSetSourceActive,
                 DisplayHdmiSetTmdsProtocol,
                 DisplayInit,
                 DisplayModesetBegin,
@@ -823,6 +824,20 @@ impl<'gpu> Gpu<'gpu> {
         if reply.accepted_state != u32::from(on) {
             return Err(EIO);
         }
+        Ok(())
+    }
+
+    pub(crate) fn display_hdmi_set_source_active(
+        &self,
+        stream_id: u64,
+        modeset_id: u64,
+        active: bool,
+    ) -> Result {
+        let command = DisplayHdmiSetSourceActive::new(stream_id, modeset_id, active)?;
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
         Ok(())
     }
 

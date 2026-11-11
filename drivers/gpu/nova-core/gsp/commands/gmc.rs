@@ -1274,7 +1274,6 @@ pub(crate) struct DisplayHdmiSetSourceActive {
 }
 
 impl DisplayHdmiSetSourceActive {
-    #[expect(dead_code)]
     pub(crate) fn new(stream_id: u64, modeset_id: u64, active: bool) -> Result<Self> {
         if stream_id == 0 || modeset_id == 0 {
             return Err(EINVAL);
