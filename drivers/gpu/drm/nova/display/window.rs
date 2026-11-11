@@ -8,6 +8,8 @@
 
 use kernel::prelude::*;
 
+use nova_core::api::NovaCoreApiHandle;
+
 use super::{
     channel::{
         Channel,
@@ -36,6 +38,14 @@ pub(super) struct Window<'bound> {
 }
 
 impl Window<'_> {
+    /// Reads this window's armed head assignment after the caller has waited for core idle.
+    ///
+    /// The caller prevents further core submissions while reading the armed state.
+    #[expect(dead_code)]
+    pub(super) fn read_armed_owner(&self, api: &NovaCoreApiHandle<'_>) -> Result<Option<u32>> {
+        api.with(|core| core.display_window_armed_owner(self.id as usize))
+    }
+
     pub(super) fn new(id: u32) -> Self {
         Self {
             id,
