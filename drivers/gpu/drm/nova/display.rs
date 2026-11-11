@@ -4,6 +4,7 @@
 
 mod channel;
 mod hal;
+mod methods;
 mod window;
 
 use kernel::{

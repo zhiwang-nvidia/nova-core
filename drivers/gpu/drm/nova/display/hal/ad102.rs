@@ -8,8 +8,15 @@ use nova_core::api::{
     VramRegion, //
 };
 
+use crate::display::channel::{
+    Channel,
+    Core,
+    WindowDma, //
+};
+
 use super::{
     disp4::{
+        self,
         instance_memory::InstanceMemory,
         methods, //
     },
@@ -59,6 +66,36 @@ impl<'bound> Ad102<'bound> {
 // TODO: Factor out a common DISP 4.x HAL when adding support for more
 // DISP 4.x GPUs.
 impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
+    fn emit_core_notifier_methods(
+        &self,
+        channel: &mut Channel<'bound, Core>,
+        descriptor: Option<SurfaceDescriptor>,
+    ) -> Result {
+        disp4::notifier::emit_core_notifier_methods(self, channel, descriptor)
+    }
+
+    fn emit_window_notifier_methods(
+        &self,
+        channel: &mut Channel<'bound, WindowDma>,
+        descriptor: Option<SurfaceDescriptor>,
+    ) -> Result {
+        disp4::notifier::emit_window_notifier_methods(self, channel, descriptor)
+    }
+
+    fn init_core_channel(&self, channel: &mut Channel<'bound, Core>, _head_mask: u32) -> Result {
+        self.emit_core_notifier_methods(channel, None)?;
+        channel.advance()
+    }
+
+    fn init_window_channel(
+        &self,
+        channel: &mut Channel<'bound, WindowDma>,
+        _head_mask: u32,
+    ) -> Result {
+        self.emit_window_notifier_methods(channel, None)?;
+        channel.advance()
+    }
+
     fn instance_memory(&self) -> &VramRegion {
         self.instance_memory.region()
     }

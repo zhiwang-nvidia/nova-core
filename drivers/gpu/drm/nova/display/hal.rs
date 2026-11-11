@@ -8,6 +8,12 @@ use nova_core::api::{
     VramRegion, //
 };
 
+use super::channel::{
+    Channel,
+    Core,
+    WindowDma, //
+};
+
 mod ad102;
 mod disp4;
 
@@ -60,6 +66,28 @@ pub(super) trait DisplayMethodHal {
 }
 
 pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
+    fn init_core_channel(&self, channel: &mut Channel<'bound, Core>, head_mask: u32) -> Result;
+
+    fn init_window_channel(
+        &self,
+        channel: &mut Channel<'bound, WindowDma>,
+        head_mask: u32,
+    ) -> Result;
+
+    /// Emits core notifier methods using the generation's handle or address methods.
+    fn emit_core_notifier_methods(
+        &self,
+        channel: &mut Channel<'bound, Core>,
+        descriptor: Option<SurfaceDescriptor>,
+    ) -> Result;
+
+    /// Emits window notifier methods using the generation's handle or address methods.
+    fn emit_window_notifier_methods(
+        &self,
+        channel: &mut Channel<'bound, WindowDma>,
+        descriptor: Option<SurfaceDescriptor>,
+    ) -> Result;
+
     fn instance_memory(&self) -> &VramRegion;
 
     /// Allocate a surface descriptor that associates with a VRAM region.

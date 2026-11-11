@@ -267,7 +267,6 @@ impl<'bound, T> Channel<'bound, T> {
         hal.unbind_surface_descriptor(descriptor, info.ramht_client_id(), info.hardware_index())
     }
 
-    #[expect(dead_code)]
     pub(super) fn emit(
         &mut self,
         hal: &dyn DisplayMethodHal,
@@ -282,7 +281,6 @@ impl<'bound, T> Channel<'bound, T> {
         self.pushbuffer.emit(info, header, params)
     }
 
-    #[expect(dead_code)]
     pub(super) fn advance(&mut self) -> Result {
         if !self.is_created() {
             return Err(ENODEV);
@@ -384,7 +382,8 @@ impl<'bound> Channel<'bound, Core> {
             info.core_class,
             info.num_channels,
             hal,
-        )
+        )?;
+        hal.init_core_channel(self, info.head_mask)
     }
 }
 
@@ -411,7 +410,8 @@ impl<'bound> Channel<'bound, WindowDma> {
             info.window_class,
             info.num_channels,
             hal,
-        )
+        )?;
+        hal.init_window_channel(self, info.head_mask)
     }
 }
 
