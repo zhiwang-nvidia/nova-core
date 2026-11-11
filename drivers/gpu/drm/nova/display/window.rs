@@ -2,12 +2,17 @@
 
 //! Display window component.
 
+use kernel::prelude::*;
+
 use super::{
     channel::{
         Channel,
+        Core,
         WindowDma,
         WindowImmediate, //
     },
+    hal::DisplayMethodHal,
+    methods::core,
     Display, //
 };
 
@@ -25,6 +30,25 @@ impl Window<'_> {
             channel: None,
             immediate_channel: None,
         }
+    }
+
+    /// Queues this window's head assignment for a separate core UPDATE.
+    #[expect(dead_code)]
+    pub(super) fn emit_owner_methods(
+        &self,
+        hal: &dyn DisplayMethodHal,
+        channel: &mut Channel<'_, Core>,
+        head: Option<u32>,
+    ) -> Result {
+        if self.id >= core::WINDOW_COUNT || head.is_some_and(|head| head >= core::HEAD_COUNT) {
+            return Err(EINVAL);
+        }
+        let offset = self.id * core::WINDOW_STRIDE;
+        channel.emit(
+            hal,
+            core::WINDOW_SET_CONTROL + offset,
+            &[head.unwrap_or(core::WINDOW_SET_CONTROL_OWNER_NONE)],
+        )
     }
 }
 
