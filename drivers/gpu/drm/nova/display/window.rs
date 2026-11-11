@@ -30,6 +30,7 @@ pub(super) struct Window<'bound> {
     pub(super) id: u32,
     pub(super) channel: Option<Channel<'bound, WindowDma>>,
     pub(super) immediate_channel: Option<Channel<'bound, WindowImmediate>>,
+    pub(super) head: Option<u32>,
 }
 
 impl Window<'_> {
@@ -38,6 +39,7 @@ impl Window<'_> {
             id,
             channel: None,
             immediate_channel: None,
+            head: None,
         }
     }
 

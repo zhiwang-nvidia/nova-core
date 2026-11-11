@@ -13,6 +13,7 @@ mod modeset;
 mod output;
 mod scaler;
 mod sor;
+mod stream;
 mod tables;
 mod window;
 
@@ -49,6 +50,7 @@ pub(crate) struct Display<'bound> {
     dev: &'bound device::Device<Bound>,
     api: NovaCoreApiHandle<'bound>,
     pending_commit: Option<modeset::DisplayCommit>,
+    streams: KVec<stream::Stream>,
     core_channel: Option<Channel<'bound, Core>>,
     hal: KBox<dyn hal::DisplayHal<'bound> + 'bound>,
     caps: DisplayCaps,
@@ -116,6 +118,7 @@ impl<'bound> Display<'bound> {
             dev: adev.as_ref(),
             api,
             pending_commit: None,
+            streams: KVec::new(),
             core_channel: None,
             hal,
             caps,
