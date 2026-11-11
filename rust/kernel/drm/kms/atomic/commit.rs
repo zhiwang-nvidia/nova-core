@@ -37,6 +37,10 @@ use super::{
 /// then swap and submit. Dropping this object before submission calls the
 /// driver's abort callback and undoes successful plane preparation.
 ///
+/// After unplug, queued work stops waiting for producer fences but still runs
+/// the tail to complete cleanup. Driver callbacks must guard hardware access
+/// with a device entry or registration guard.
+///
 /// # Invariants
 ///
 /// The borrowed DRM commit remains live, validated and unswapped until submission.
@@ -114,6 +118,8 @@ impl<T: KmsDriver> AtomicCommit<'_, T> {
     }
 
     /// Wait interruptibly for blocking commits; defer nonblocking waits to the tail.
+    ///
+    /// Producer-fence waits return `ENODEV` if the device is unplugged.
     pub fn wait_for_fences(&mut self) -> Result {
         if !self.planes_prepared {
             return Err(EINVAL);
@@ -121,7 +127,7 @@ impl<T: KmsDriver> AtomicCommit<'_, T> {
         if !self.nonblock {
             // SAFETY: The planes are prepared and the state is still unswapped.
             to_result(unsafe {
-                bindings::drm_atomic_helper_wait_for_fences(
+                bindings::drm_atomic_wait_for_fences_or_unplug(
                     self.state.drm_dev().as_raw(),
                     self.state.as_raw(),
                     true,
@@ -213,14 +219,16 @@ impl<T: KmsDriver> WorkItem for CommitWork<T> {
 
     fn run(this: Self::Pointer) {
         let raw = this.state.as_raw();
-        // SAFETY: This owner retains the swapped commit. Producer fences and
-        // earlier commits must finish before the driver touches hardware.
+        // SAFETY: This owner retains the swapped commit. An unplugged device
+        // still needs its tail to retire state; callbacks guard hardware access.
+        // Earlier commit dependencies must be drained even after cancellation.
         unsafe {
-            bindings::drm_atomic_helper_wait_for_fences(this.dev.as_raw(), raw, false);
+            bindings::drm_atomic_wait_for_fences_or_unplug(this.dev.as_raw(), raw, false);
             bindings::drm_atomic_helper_wait_for_dependencies(raw);
         }
         // SAFETY: This is the exclusive tail phase established by swap_state
-        // and the dependency waits. Either tail marks hw_done and cleans planes.
+        // and the dependency waits. Either tail marks hw_done and cleans planes,
+        // including when unplug has canceled a producer-fence wait.
         unsafe {
             if T::HAS_ATOMIC_COMMIT_TAIL {
                 commit_tail_callback::<T>(raw);
