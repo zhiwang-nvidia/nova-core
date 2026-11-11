@@ -167,6 +167,17 @@ impl NovaCoreApi<'_> {
         self.gpu.display_release_stream_route(stream_id, modeset_id)
     }
 
+    /// Sets HDMI sink capability flags for a stream in a modeset bracket.
+    pub fn display_hdmi_set_sink_capabilities(
+        &self,
+        stream_id: u64,
+        modeset_id: u64,
+        capabilities: u32,
+    ) -> Result {
+        self.gpu
+            .display_hdmi_set_sink_capabilities(stream_id, modeset_id, capabilities)
+    }
+
     /// Returns the GPU [`GspStaticInfo`].
     pub fn gsp_static_info(&self) -> &GspStaticInfo {
         self.gpu.gsp_static_info()

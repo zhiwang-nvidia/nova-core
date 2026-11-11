@@ -49,6 +49,7 @@ use crate::{
                 DisplayGetPortCaps,
                 DisplayGetPortState,
                 DisplayGetStaticInfo,
+                DisplayHdmiSetSinkCapabilities,
                 DisplayInit,
                 DisplayModesetBegin,
                 DisplayModesetEnd,
@@ -769,6 +770,20 @@ impl<'gpu> Gpu<'gpu> {
 
     pub(crate) fn display_release_stream_route(&self, stream_id: u64, modeset_id: u64) -> Result {
         let command = DisplayReleaseStreamRoute::new(stream_id, modeset_id)?;
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
+        Ok(())
+    }
+
+    pub(crate) fn display_hdmi_set_sink_capabilities(
+        &self,
+        stream_id: u64,
+        modeset_id: u64,
+        capabilities: u32,
+    ) -> Result {
+        let command = DisplayHdmiSetSinkCapabilities::new(stream_id, modeset_id, capabilities)?;
         self.gsp_resources
             .gsp
             .cmdq

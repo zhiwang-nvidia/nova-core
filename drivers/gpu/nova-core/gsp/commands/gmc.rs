@@ -1075,7 +1075,6 @@ pub(crate) struct DisplayHdmiSetSinkCapabilities {
 }
 
 impl DisplayHdmiSetSinkCapabilities {
-    #[expect(dead_code)]
     pub(crate) fn new(stream_id: u64, modeset_id: u64, capabilities: u32) -> Result<Self> {
         if stream_id == 0 || modeset_id == 0 || capabilities & !7 != 0 {
             return Err(EINVAL);
