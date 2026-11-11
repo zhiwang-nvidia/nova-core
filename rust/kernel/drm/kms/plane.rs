@@ -602,6 +602,33 @@ pub trait FromRawPlaneState: AsRawPlaneState {
 /// This is implemented internally by DRM, and provides many of the basic methods for working with
 /// the atomic state of [`Plane`]s.
 pub trait RawPlaneState: AsRawPlaneState {
+    /// Return source coordinates in unsigned 16.16 fixed-point units.
+    fn source(&self) -> SourceRect {
+        let state = self.as_raw();
+        SourceRect {
+            x: state.src_x,
+            y: state.src_y,
+            width: state.src_w,
+            height: state.src_h,
+        }
+    }
+
+    /// Return destination coordinates in CRTC pixels.
+    fn destination(&self) -> DestinationRect {
+        let state = self.as_raw();
+        DestinationRect {
+            x: state.crtc_x,
+            y: state.crtc_y,
+            width: state.crtc_w,
+            height: state.crtc_h,
+        }
+    }
+
+    /// Return the DRM rotation and reflection property bits.
+    fn rotation(&self) -> u32 {
+        self.as_raw().rotation
+    }
+
     /// Return the plane that this plane state belongs to.
     fn plane(&self) -> &Self::Plane {
         // SAFETY: The index is initialized by the time we expose Plane objects to users, and is
@@ -663,6 +690,32 @@ pub trait RawPlaneState: AsRawPlaneState {
     }
 }
 impl<T: AsRawPlaneState + ?Sized> RawPlaneState for T {}
+
+/// A plane's source rectangle, in unsigned 16.16 fixed-point units.
+#[derive(Clone, Copy, Debug)]
+pub struct SourceRect {
+    /// Left coordinate.
+    pub x: u32,
+    /// Top coordinate.
+    pub y: u32,
+    /// Width.
+    pub width: u32,
+    /// Height.
+    pub height: u32,
+}
+
+/// A plane's destination rectangle, in CRTC pixels.
+#[derive(Clone, Copy, Debug)]
+pub struct DestinationRect {
+    /// Left coordinate.
+    pub x: i32,
+    /// Top coordinate.
+    pub y: i32,
+    /// Width.
+    pub width: u32,
+    /// Height.
+    pub height: u32,
+}
 
 /// The main interface for a [`struct drm_plane_state`].
 ///
