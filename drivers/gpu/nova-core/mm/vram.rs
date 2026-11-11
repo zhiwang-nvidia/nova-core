@@ -8,6 +8,7 @@ use core::ops::Range;
 use kernel::{
     gpu::buddy::{
         AllocatedBlocks,
+        GpuBuddyAllocFlag,
         GpuBuddyAllocFlags,
         GpuBuddyAllocMode, //
     },
@@ -94,14 +95,20 @@ impl VramRegion {
 
 impl GpuMm<'_> {
     pub(crate) fn alloc_vram(&self, size: Alignment) -> Result<VramBlock> {
+        self.alloc_vram_aligned(size.as_usize().into_safe_cast(), size)
+    }
+
+    /// Allocates contiguous VRAM with independent size and physical alignment.
+    /// The size must be a nonzero multiple of the alignment.
+    pub(crate) fn alloc_vram_aligned(&self, size: u64, alignment: Alignment) -> Result<VramBlock> {
         let buddy = self.buddy();
-        if size < buddy.chunk_size() {
+        let align_bytes: u64 = alignment.as_usize().into_safe_cast();
+        if alignment < buddy.chunk_size() || size == 0 || !size.is_multiple_of(align_bytes) {
             return Err(EINVAL);
         }
 
-        let size_bytes: u64 = size.as_usize().into_safe_cast();
         let base = buddy.base_offset();
-        if !base.is_multiple_of(size_bytes) {
+        if !base.is_multiple_of(align_bytes) {
             return Err(EINVAL);
         }
         base.checked_add(buddy.size()).ok_or(EOVERFLOW)?;
@@ -109,9 +116,9 @@ impl GpuMm<'_> {
         let blocks = KBox::pin_init(
             buddy.alloc_blocks(
                 GpuBuddyAllocMode::Simple,
-                size_bytes,
                 size,
-                GpuBuddyAllocFlags::default(),
+                alignment,
+                GpuBuddyAllocFlag::Contiguous,
             ),
             GFP_KERNEL,
         )?;
@@ -123,7 +130,7 @@ impl GpuMm<'_> {
         Ok(VramBlock {
             _blocks: blocks,
             address,
-            size: size_bytes,
+            size,
         })
     }
 
