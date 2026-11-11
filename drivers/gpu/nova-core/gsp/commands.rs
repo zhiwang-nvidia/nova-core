@@ -117,6 +117,59 @@ pub(crate) struct DisplayGetStaticInfoReply {
     pub(crate) max_pb_bytes: u32,
 }
 
+/// Connector types reported by RM.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DisplayConnectorType {
+    HdmiA,
+    /// Connector type not currently handled, preserving the RM encoding.
+    Unknown(u32),
+}
+
+/// Connection state and connector information for one RM display ID.
+pub(crate) struct DisplayGetPortStateReply {
+    /// RM display identifier echoed from the request, with exactly one bit set.
+    pub(crate) display_id: u32,
+    /// One if a monitor was detected on this output, zero otherwise.
+    pub(super) connected: u32,
+    /// Index of the physical connector on the board.
+    ///
+    /// Separate RM display IDs can share this index, for example the DisplayPort
+    /// and HDMI/DVI paths of a dual-mode connector. DisplayPort Multi-Stream
+    /// Transport (MST) also allows multiple displays to share one physical connector.
+    pub(crate) connector_index: u32,
+    /// Raw RM connector type.
+    pub(super) connector_type: u32,
+    /// RM location code describing the connector's relative position on the board.
+    pub(crate) location: u32,
+    /// Mask of RM display IDs sharing this output's Display Data Channel (DDC) line.
+    pub(crate) ddcp_partners: u32,
+    /// Firmware's usable head mask, with bit N identifying hardware head N.
+    pub(crate) head_mask: u32,
+    /// RM connector-data flags, including whether connector data is present.
+    pub(crate) flags: u32,
+    /// RM detection status (`NV_STATUS`); zero means success.
+    pub(crate) status: u32,
+    /// Delay in milliseconds before retrying detection when RM requests a retry.
+    pub(crate) retry_ms: u32,
+}
+
+impl DisplayGetPortStateReply {
+    /// Returns whether connection detection found an attached display.
+    #[expect(dead_code)]
+    pub(crate) fn is_connected(&self) -> bool {
+        self.connected != 0
+    }
+
+    /// Returns the connector type reported by RM.
+    #[expect(dead_code)]
+    pub(crate) fn connector_type(&self) -> DisplayConnectorType {
+        match self.connector_type {
+            0x61 => DisplayConnectorType::HdmiA,
+            value => DisplayConnectorType::Unknown(value),
+        }
+    }
+}
+
 /// The static GPU configuration, which GSP-RM reports in reply to [`GspInit`](gmc::GspInit).
 pub struct GspStaticInfo {
     gpu_name: [u8; Self::MAX_GPU_NAME_LEN],

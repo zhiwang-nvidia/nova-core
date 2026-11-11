@@ -21,6 +21,7 @@ use crate::{
         commands::{
             DisplayChannelKind,
             DisplayCreateChannelReply,
+            DisplayGetPortStateReply,
             DisplayGetStaticInfoReply,
             DisplayInitReply,
             GspStaticInfo, //
@@ -476,6 +477,53 @@ impl DisplayStaticInfoResponseSchema {
     const MAX_EDID_BYTES_KEY: KeyId = 0x0110;
     const MAX_MESSAGE_BYTES_KEY: KeyId = 0x0111;
     const MAX_PB_BYTES_KEY: KeyId = 0x0112;
+}
+
+nvkv_encode! {
+    pub(crate) struct DisplayGetPortStateRequest {
+        display_id: Key<u32, { Self::DISPLAY_ID_KEY }>,
+        report_status: Key<u32, { Self::REPORT_STATUS_KEY }>,
+    }
+}
+
+impl DisplayGetPortStateRequest {
+    const DISPLAY_ID_KEY: KeyId = 0x011b;
+    const REPORT_STATUS_KEY: KeyId = 0x8059;
+
+    pub(crate) fn new(display_id: u32) -> Self {
+        Self {
+            display_id: display_id.into(),
+            report_status: 0.into(),
+        }
+    }
+}
+
+nvkv_decode! {
+    pub(crate) struct DisplayGetPortStateResponseSchema => DisplayGetPortStateReply {
+        display_id: Required<Key<u32, { Self::DISPLAY_ID_KEY }>>,
+        connected: Required<Key<u32, { Self::CONNECTED_KEY }>>,
+        connector_index: Required<Key<u32, { Self::CONNECTOR_INDEX_KEY }>>,
+        connector_type: Required<Key<u32, { Self::CONNECTOR_TYPE_KEY }>>,
+        location: Required<Key<u32, { Self::LOCATION_KEY }>>,
+        ddcp_partners: Required<Key<u32, { Self::DDCP_PARTNERS_KEY }>>,
+        head_mask: Required<Key<u32, { Self::HEAD_MASK_KEY }>>,
+        flags: Required<Key<u32, { Self::FLAGS_KEY }>>,
+        status: Required<Key<u32, { Self::STATUS_KEY }>>,
+        retry_ms: Required<Key<u32, { Self::RETRY_MS_KEY }>>,
+    }
+}
+
+impl DisplayGetPortStateResponseSchema {
+    const DISPLAY_ID_KEY: KeyId = 0x011c;
+    const CONNECTED_KEY: KeyId = 0x011d;
+    const CONNECTOR_INDEX_KEY: KeyId = 0x011e;
+    const CONNECTOR_TYPE_KEY: KeyId = 0x011f;
+    const LOCATION_KEY: KeyId = 0x0120;
+    const DDCP_PARTNERS_KEY: KeyId = 0x0121;
+    const HEAD_MASK_KEY: KeyId = 0x0122;
+    const FLAGS_KEY: KeyId = 0x0123;
+    const STATUS_KEY: KeyId = 0x805a;
+    const RETRY_MS_KEY: KeyId = 0x805b;
 }
 
 nvkv_encode! {
