@@ -53,10 +53,16 @@ use nova_core::api::{
     VramRegion, //
 };
 
-use super::hal::{
-    DisplayHal,
-    DisplayMethodHal,
-    SurfaceDescriptor, //
+use super::{
+    hal::{
+        DisplayHal,
+        DisplayMethodHal,
+        SurfaceDescriptor, //
+    },
+    methods::{
+        core as core_methods,
+        window as window_methods, //
+    }, //
 };
 
 fn alloc_channel_buffer<'bound>(
@@ -386,6 +392,31 @@ impl<'bound> Channel<'bound, Core> {
         hal.init_core_channel(self, info.head_mask)
     }
 
+    /// Emits core interlock methods for the participating window mask.
+    #[expect(dead_code)]
+    pub(super) fn emit_interlock_methods(
+        &mut self,
+        hal: &dyn DisplayMethodHal,
+        window_mask: u32,
+    ) -> Result {
+        self.emit(hal, core_methods::SET_INTERLOCK_FLAGS, &[0])?;
+        self.emit(
+            hal,
+            core_methods::SET_WINDOW_INTERLOCK_FLAGS,
+            &[window_mask],
+        )
+    }
+
+    /// Emits the core UPDATE method.
+    #[expect(dead_code)]
+    pub(super) fn emit_update_methods(&mut self, hal: &dyn DisplayMethodHal) -> Result {
+        self.emit(
+            hal,
+            core_methods::UPDATE,
+            &[core_methods::UPDATE_RELEASE_ELV],
+        )
+    }
+
     /// Waits for this core channel's hardware state to become idle.
     #[expect(dead_code)]
     pub(super) fn wait_idle(&mut self) -> Result {
@@ -429,6 +460,26 @@ impl<'bound> Channel<'bound, WindowDma> {
             hal,
         )?;
         hal.init_window_channel(self, info.head_mask)
+    }
+
+    /// Emits window interlock methods to participate in a core update.
+    #[expect(dead_code)]
+    pub(super) fn emit_interlock_methods(
+        &mut self,
+        hal: &dyn DisplayMethodHal,
+        window_mask: u32,
+    ) -> Result {
+        self.emit(
+            hal,
+            window_methods::SET_INTERLOCK_FLAGS,
+            &[window_methods::SET_INTERLOCK_FLAGS_INTERLOCK_WITH_CORE],
+        )?;
+        // NVKMS includes this window itself in the participating window mask.
+        self.emit(
+            hal,
+            window_methods::SET_WINDOW_INTERLOCK_FLAGS,
+            &[window_mask],
+        )
     }
 }
 

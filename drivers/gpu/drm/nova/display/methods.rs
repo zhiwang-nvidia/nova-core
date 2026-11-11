@@ -3,10 +3,14 @@
 //! Channel method definitions shared by DISP 4.x and DISP 5.x.
 
 pub(crate) mod core {
-    //! Shared core notifier-control fields.
+    //! Shared core UPDATE, interlock and notifier-control fields.
 
+    pub(crate) const UPDATE: u32 = 0x0200;
+    pub(crate) const UPDATE_RELEASE_ELV: u32 = 1;
     pub(crate) const SET_NOTIFIER_CONTROL: u32 = 0x020c;
     pub(crate) const SET_NOTIFIER_CONTROL_NOTIFY_ENABLE: u32 = 1 << 12;
+    pub(crate) const SET_INTERLOCK_FLAGS: u32 = 0x0218;
+    pub(crate) const SET_WINDOW_INTERLOCK_FLAGS: u32 = 0x021c;
     // SOR control addresses and the TMDS protocol encodings match DISP 4.x and 5.x.
     pub(crate) const SOR_SET_CONTROL: u32 = 0x0300;
     pub(crate) const SOR_STRIDE: u32 = 0x0020;
@@ -29,10 +33,16 @@ pub(crate) mod core {
 }
 
 pub(crate) mod window {
-    //! Shared window notifier-control fields.
+    //! Shared window UPDATE, interlock and notifier-control fields.
 
+    pub(crate) const UPDATE: u32 = 0x0200;
+    pub(crate) const UPDATE_RELEASE_ELV: u32 = 1;
+    pub(crate) const UPDATE_INTERLOCK_WITH_WIN_IMM: u32 = 1 << 12;
     pub(crate) const SET_NOTIFIER_CONTROL: u32 = 0x0220;
     pub(crate) const SET_NOTIFIER_CONTROL_MODE_WRITE: u32 = 0;
+    pub(crate) const SET_INTERLOCK_FLAGS: u32 = 0x0370;
+    pub(crate) const SET_INTERLOCK_FLAGS_INTERLOCK_WITH_CORE: u32 = 1;
+    pub(crate) const SET_WINDOW_INTERLOCK_FLAGS: u32 = 0x0374;
 }
 
 pub(crate) mod window_immediate {

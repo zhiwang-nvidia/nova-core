@@ -12,7 +12,8 @@ use super::{
     channel::{
         Channel,
         Core,
-        WindowDma, //
+        WindowDma,
+        WindowImmediate, //
     },
     framebuffer::FramebufferLayout,
     mode::DisplayMode, //
@@ -90,6 +91,21 @@ pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
         &self,
         channel: &mut Channel<'bound, WindowDma>,
         descriptor: Option<SurfaceDescriptor>,
+    ) -> Result;
+
+    /// Emits the window UPDATE sequence, including any class-specific transition methods.
+    #[expect(dead_code)]
+    fn emit_window_update(
+        &self,
+        window: &mut Channel<'bound, WindowDma>,
+        interlock_immediate: bool,
+    ) -> Result;
+
+    /// Emits an immediate UPDATE with the flags supported by its class.
+    #[expect(dead_code)]
+    fn emit_window_immediate_update(
+        &self,
+        immediate: &mut Channel<'bound, WindowImmediate>,
     ) -> Result;
 
     fn instance_memory(&self) -> &VramRegion;

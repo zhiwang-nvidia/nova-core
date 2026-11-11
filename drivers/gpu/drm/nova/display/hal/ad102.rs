@@ -14,10 +14,12 @@ use crate::display::{
     channel::{
         Channel,
         Core,
-        WindowDma, //
+        WindowDma,
+        WindowImmediate, //
     },
     format::DisplayPixelFormat,
     framebuffer::FramebufferLayout,
+    methods as common_methods,
     mode::DisplayMode,
     scaler,
     sor, //
@@ -29,6 +31,7 @@ use super::{
         instance_memory::InstanceMemory,
         methods::{
             self,
+            c67b,
             c67e,
             c77d,
             core as core_methods,
@@ -139,6 +142,31 @@ impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
         descriptor: Option<SurfaceDescriptor>,
     ) -> Result {
         disp4::notifier::emit_window_notifier_methods(self, channel, descriptor)
+    }
+
+    fn emit_window_update(
+        &self,
+        window: &mut Channel<'bound, WindowDma>,
+        interlock_immediate: bool,
+    ) -> Result {
+        // C67E needs no NULL-image transition workaround; C57E requires additional methods.
+        let mut data = common_methods::window::UPDATE_RELEASE_ELV;
+        if interlock_immediate {
+            data |= common_methods::window::UPDATE_INTERLOCK_WITH_WIN_IMM;
+        }
+        window.emit(self, common_methods::window::UPDATE, &[data])
+    }
+
+    fn emit_window_immediate_update(
+        &self,
+        immediate: &mut Channel<'bound, WindowImmediate>,
+    ) -> Result {
+        // C57B/C67B define RELEASE_ELV; C87B/C97B omit it.
+        immediate.emit(
+            self,
+            c67b::UPDATE,
+            &[c67b::UPDATE_RELEASE_ELV | c67b::UPDATE_INTERLOCK_WITH_WINDOW],
+        )
     }
 
     fn init_core_channel(&self, channel: &mut Channel<'bound, Core>, head_mask: u32) -> Result {
