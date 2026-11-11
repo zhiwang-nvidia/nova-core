@@ -433,7 +433,6 @@ impl DisplayInitResponseSchema {
 }
 
 nvkv_decode! {
-    #[allow(dead_code)]
     pub(crate) struct DisplayStaticInfoResponseSchema => DisplayGetStaticInfoReply {
         num_heads: Required<Key<u32, { Self::NUM_HEADS_KEY }>>,
         head_mask: Required<Key<u32, { Self::HEAD_MASK_KEY }>>,

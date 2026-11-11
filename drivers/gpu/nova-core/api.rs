@@ -20,6 +20,7 @@ use crate::{
     driver,
     gpu::Gpu,
     gsp::commands::{
+        DisplayGetStaticInfoReply,
         DisplayInitReply,
         GspStaticInfo, //
     }, //
@@ -46,6 +47,11 @@ impl NovaCoreApi<'_> {
     /// Shuts down the GMC display context.
     pub fn display_shutdown(&self) -> Result {
         self.gpu.display_shutdown()
+    }
+
+    /// Queries GSP-RM's static display information.
+    pub fn display_static_info(&self) -> Result<DisplayStaticInfo> {
+        self.gpu.display_static_info().map(DisplayStaticInfo::from)
     }
 
     /// Returns the GPU [`GspStaticInfo`].
@@ -111,6 +117,74 @@ impl From<DisplayInitReply> for DisplayCaps {
             common_caps: reply.common_caps,
             display_caps: reply.display_caps,
             hdmi_gpu_caps: reply.hdmi_gpu_caps,
+        }
+    }
+}
+
+/// Static display information available to nova-drm.
+///
+/// TODO: Expose only the information nova-drm uses. For now, forward all
+/// fields returned by GSP-RM.
+pub struct DisplayStaticInfo {
+    /// Number of physical heads; not necessarily the number of usable heads.
+    pub num_heads: u32,
+    /// Usable heads, with bit N identifying hardware head N.
+    pub head_mask: u32,
+    /// Present windows, with bit N identifying hardware window N.
+    pub window_mask: u32,
+    /// Admitted static HDMI outputs, with each set bit's value identifying a GSP-RM display ID.
+    pub display_mask: u32,
+    /// Number of hardware display channels, not a limit on simultaneous outputs.
+    pub num_channels: u32,
+    /// Raw `NV_PDISP_FE_HW_SYS_CAP` value for native HAL interpretation.
+    pub fe_hw_sys_cap: u32,
+    /// Native display-parent class.
+    pub display_class: u32,
+    /// Native Core DMA channel class.
+    pub core_class: u32,
+    /// Native Window DMA channel class.
+    pub window_class: u32,
+    /// Native Window Immediate DMA channel class.
+    pub immediate_class: u32,
+    /// Native Cursor PIO channel class.
+    pub cursor_class: u32,
+    /// Maximum number of active heads admitted by the adapter.
+    pub max_active_heads: u32,
+    /// Maximum number of concurrently retained routes.
+    pub max_streams: u32,
+    /// Maximum number of display channels.
+    pub max_channels: u32,
+    /// Maximum AUX payload size in bytes; zero when AUX is unavailable.
+    pub max_aux_bytes: u32,
+    /// Maximum EDID reply size in bytes.
+    pub max_edid_bytes: u32,
+    /// Maximum NVKV payload size in bytes, excluding transport headers.
+    pub max_message_bytes: u32,
+    /// Maximum DMA pushbuffer size in bytes.
+    pub max_pb_bytes: u32,
+}
+
+impl From<DisplayGetStaticInfoReply> for DisplayStaticInfo {
+    fn from(reply: DisplayGetStaticInfoReply) -> Self {
+        Self {
+            num_heads: reply.num_heads,
+            head_mask: reply.head_mask,
+            window_mask: reply.window_mask,
+            display_mask: reply.display_mask,
+            num_channels: reply.num_channels,
+            fe_hw_sys_cap: reply.fe_hw_sys_cap,
+            display_class: reply.display_class,
+            core_class: reply.core_class,
+            window_class: reply.window_class,
+            immediate_class: reply.immediate_class,
+            cursor_class: reply.cursor_class,
+            max_active_heads: reply.max_active_heads,
+            max_streams: reply.max_streams,
+            max_channels: reply.max_channels,
+            max_aux_bytes: reply.max_aux_bytes,
+            max_edid_bytes: reply.max_edid_bytes,
+            max_message_bytes: reply.max_message_bytes,
+            max_pb_bytes: reply.max_pb_bytes,
         }
     }
 }

@@ -37,9 +37,11 @@ use crate::{
         cmdq::Cmdq,
         commands::{
             gmc::{
+                DisplayGetStaticInfo,
                 DisplayInit,
                 DisplayShutdown, //
             },
+            DisplayGetStaticInfoReply,
             DisplayInitReply, //
         },
         Gsp,
@@ -617,6 +619,13 @@ impl<'gpu> Gpu<'gpu> {
             .cmdq
             .send_gmc_command(DisplayShutdown, |_| Ok(()))?;
         Ok(())
+    }
+
+    pub(crate) fn display_static_info(&self) -> Result<DisplayGetStaticInfoReply> {
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(DisplayGetStaticInfo, |_| Ok(()))
     }
 
     /// Returns the static GPU configuration that GSP-RM reported at boot.
