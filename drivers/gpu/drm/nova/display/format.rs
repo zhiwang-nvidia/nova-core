@@ -14,7 +14,6 @@ pub(crate) enum DisplayPixelFormat {
 
 impl DisplayPixelFormat {
     /// Returns the number of bytes occupied by one pixel.
-    #[expect(dead_code)]
     pub(crate) const fn bytes_per_pixel(self) -> u32 {
         match self {
             Self::Xrgb8888 => 4,

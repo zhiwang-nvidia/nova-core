@@ -7,6 +7,7 @@ pub(super) mod csc;
 pub(super) mod head;
 pub(super) mod instance_memory;
 pub(crate) mod methods;
+pub(super) mod modeset;
 pub(super) mod notifier;
 mod ramht;
 pub(super) mod scaler;

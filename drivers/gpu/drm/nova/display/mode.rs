@@ -8,6 +8,8 @@
 
 use kernel::prelude::*;
 
+use super::framebuffer::FramebufferLayout;
+
 /// Active-first raster coordinates, with the pixel clock in kHz.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DisplayMode {
@@ -36,6 +38,18 @@ pub(crate) struct DisplayMode {
 }
 
 impl DisplayMode {
+    /// Checks that the framebuffer can supply the visible mode.
+    ///
+    /// Generation-specific timing and pitch limits are checked by the HAL.
+    pub(crate) fn validate_framebuffer(&self, framebuffer: &FramebufferLayout) -> Result {
+        self.validate()?;
+        framebuffer.validate()?;
+        if framebuffer.width < self.hdisplay || framebuffer.height < self.vdisplay {
+            return Err(EINVAL);
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate(&self) -> Result {
         // The current clock path converts kHz to the 31-bit HERTZ field of
         // HEAD_SET_PIXEL_CLOCK_FREQUENCY. Bit 31 controls ADJ1000DIV1001, so

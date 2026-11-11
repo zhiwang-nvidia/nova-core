@@ -15,6 +15,9 @@ use crate::display::{
         Core,
         WindowDma, //
     },
+    format::DisplayPixelFormat,
+    framebuffer::FramebufferLayout,
+    mode::DisplayMode,
     scaler, //
 };
 
@@ -25,8 +28,10 @@ use super::{
         methods::{
             self,
             c67e,
-            core as core_methods, //
+            core as core_methods,
+            window as window_methods, //
         },
+        modeset,
         window, //
     },
     DisplayHal,
@@ -187,6 +192,65 @@ impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result {
         self.instance_memory
             .free_context_dma(descriptor.context_dma_descriptor_id)
+    }
+
+    fn validate_mode(&self, mode: &DisplayMode) -> Result {
+        modeset::validate_mode(mode)?;
+        // Ada limits each head viewport dimension to 8192 pixels.
+        // The current path uses the visible mode for both input and output.
+        if mode.hdisplay > 8192 || mode.vdisplay > 8192 {
+            return Err(ERANGE);
+        }
+        Ok(())
+    }
+
+    /// Emits methods to configure a pitch-linear framebuffer with composition bypass.
+    fn emit_window_framebuffer_configuration(
+        &self,
+        window: &mut Channel<'bound, WindowDma>,
+        mode: &DisplayMode,
+        framebuffer: &FramebufferLayout,
+        descriptor: SurfaceDescriptor,
+    ) -> Result {
+        const PITCH_ALIGNMENT: u32 = 256;
+
+        mode.validate_framebuffer(framebuffer)?;
+        self.validate_mode(mode)?;
+        let pitch = framebuffer.pitch;
+        let encoded_pitch = pitch >> window_methods::SET_PLANAR_STORAGE_PITCH_BYTE_SHIFT;
+        if !pitch.is_multiple_of(PITCH_ALIGNMENT)
+            || encoded_pitch > window_methods::SET_PLANAR_STORAGE_PITCH_MASK
+            || descriptor.context_dma_descriptor_id.handle == 0
+        {
+            return Err(EINVAL);
+        }
+        let caps = self
+            .api
+            .with(|core| core.display_precomp_caps(window.kind.index as usize))?;
+        window::emit_window_geometry_methods(self, window, mode, framebuffer, &caps)?;
+        window::emit_window_color_methods(self, window, &caps)?;
+        let format = match framebuffer.format {
+            DisplayPixelFormat::Xrgb8888 => c67e::SET_PARAMS_FORMAT_X8R8G8B8,
+        };
+        // C57E has a MEMORY_LAYOUT field here; C67E uses its Context DMA descriptor.
+        window.emit(
+            self,
+            c67e::SET_STORAGE,
+            &[c67e::SET_STORAGE_BLOCK_HEIGHT_ONE_GOB],
+        )?;
+        window.emit(self, c67e::SET_PARAMS, &[format])?;
+        // SET_SCAN_DIRECTION is available in C67E/C87E, but not C57E.
+        window.emit(
+            self,
+            c67e::SET_SCAN_DIRECTION,
+            &[c67e::SET_SCAN_DIRECTION_FROM_TOP_LEFT],
+        )?;
+        self.emit_disable_window_methods(window, caps)?;
+        window.emit(
+            self,
+            window_methods::SET_CONTEXT_DMA_ISO,
+            &[descriptor.context_dma_descriptor_id.handle],
+        )
     }
 
     fn emit_disable_window(&self, window: &mut Channel<'bound, WindowDma>) -> Result {

@@ -4,6 +4,7 @@
 
 mod channel;
 mod format;
+mod framebuffer;
 mod hal;
 mod methods;
 mod mode;

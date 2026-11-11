@@ -8,10 +8,14 @@ use nova_core::api::{
     VramRegion, //
 };
 
-use super::channel::{
-    Channel,
-    Core,
-    WindowDma, //
+use super::{
+    channel::{
+        Channel,
+        Core,
+        WindowDma, //
+    },
+    framebuffer::FramebufferLayout,
+    mode::DisplayMode, //
 };
 
 mod ad102;
@@ -116,6 +120,19 @@ pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
 
     /// Free a surface descriptor. It must be unbound.
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result;
+
+    /// Checks whether the hardware can represent the mode timings.
+    fn validate_mode(&self, mode: &DisplayMode) -> Result;
+
+    /// Emits methods to configure a pitch-linear framebuffer with composition bypass.
+    #[expect(dead_code)]
+    fn emit_window_framebuffer_configuration(
+        &self,
+        window: &mut Channel<'bound, WindowDma>,
+        mode: &DisplayMode,
+        framebuffer: &FramebufferLayout,
+        descriptor: SurfaceDescriptor,
+    ) -> Result;
 
     /// Queues methods to disable framebuffer/LUT and semaphore accesses.
     #[expect(dead_code)]
