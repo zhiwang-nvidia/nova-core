@@ -81,4 +81,13 @@ impl Stream {
     pub(super) fn set_tmds_protocol(&self, api: &NovaCoreApiHandle<'_>, bracket: u64) -> Result {
         api.with(|core| core.display_hdmi_set_tmds_protocol(self.stream_id, bracket, true))
     }
+
+    pub(super) fn set_monitor_power(
+        &self,
+        api: &NovaCoreApiHandle<'_>,
+        bracket: u64,
+        enabled: bool,
+    ) -> Result {
+        api.with(|core| core.display_set_monitor_power(self.stream_id, bracket, enabled))
+    }
 }

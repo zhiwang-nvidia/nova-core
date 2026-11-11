@@ -419,6 +419,9 @@ impl<'bound> Display<'bound> {
 
         self.apply_head_and_window_state()?;
 
+        let pending = self.pending_commit.as_ref().ok_or(EIO)?;
+        let stream = pending.stream.as_ref().ok_or(EIO)?;
+        stream.set_monitor_power(&self.api, bracket, true)?;
         self.api
             .with(|core| core.display_modeset_end(bracket, DisplayModesetEndMode::Commit))?;
         Ok(())
@@ -482,6 +485,7 @@ impl<'bound> Display<'bound> {
             .filter(|other| other.display_id != display_id && other.sor == stream.sor)
             .fold(0, |mask, other| mask | (1 << other.head));
         let core = self.core_channel.as_mut().ok_or(ENODEV)?;
+        stream.set_monitor_power(&self.api, bracket, false)?;
         if let Some(head) = head {
             self.hal.emit_disable_head(core, head)?;
         }
