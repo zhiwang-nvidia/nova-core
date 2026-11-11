@@ -728,6 +728,7 @@ bounded_enum! {
         DisplayGetPortCaps = 0x05_0016,
         DisplayModesetEnd = 0x05_0017,
         DisplayReleaseStreamRoute = 0x05_0019,
+        DisplayHdmiSetTmdsProtocol = 0x05_001a,
     }
 }
 
