@@ -716,6 +716,7 @@ bounded_enum! {
         DisplayInit = 0x05_0001,
         DisplayShutdown = 0x05_0002,
         DisplayGetStaticInfo = 0x05_0003,
+        DisplaySetInstanceMemory = 0x05_000b,
     }
 }
 

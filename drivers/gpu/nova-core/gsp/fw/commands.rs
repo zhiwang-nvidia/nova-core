@@ -475,3 +475,30 @@ impl DisplayStaticInfoResponseSchema {
     const MAX_MESSAGE_BYTES_KEY: KeyId = 0x0111;
     const MAX_PB_BYTES_KEY: KeyId = 0x0112;
 }
+
+nvkv_encode! {
+    pub(crate) struct DisplaySetInstanceMemoryRequest {
+        address: Key<u64, { Self::ADDRESS_KEY }>,
+        size: Key<u64, { Self::SIZE_KEY }>,
+        aperture: Key<u32, { Self::APERTURE_KEY }>,
+        cache_attr: Key<u32, { Self::CACHE_ATTR_KEY }>,
+    }
+}
+
+impl DisplaySetInstanceMemoryRequest {
+    const ADDRESS_KEY: KeyId = 0x0159;
+    const SIZE_KEY: KeyId = 0x015a;
+    const APERTURE_KEY: KeyId = 0x015b;
+    const CACHE_ATTR_KEY: KeyId = 0x015c;
+    const APERTURE_VRAM: u32 = 0;
+    const CACHE_UNCACHED: u32 = 0;
+
+    pub(crate) fn new(address: u64, size: u64) -> Self {
+        Self {
+            address: address.into(),
+            size: size.into(),
+            aperture: Self::APERTURE_VRAM.into(),
+            cache_attr: Self::CACHE_UNCACHED.into(),
+        }
+    }
+}

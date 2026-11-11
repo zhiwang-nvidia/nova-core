@@ -38,6 +38,9 @@ impl DisplayInitReply {
 /// No NVKV fields are returned in DISPLAY_SHUTDOWN.
 pub(crate) struct DisplayShutdownReply;
 
+/// No NVKV fields are returned in `SET_INSTANCE_MEMORY`.
+pub(crate) struct DisplaySetInstanceMemoryReply;
+
 /// Static display information returned by GET_STATIC_INFO.
 pub(crate) struct DisplayGetStaticInfoReply {
     /// Number of physical heads; not necessarily the number of usable heads.
