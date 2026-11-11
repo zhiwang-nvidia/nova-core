@@ -2,9 +2,16 @@
 
 use kernel::prelude::*;
 
-use nova_core::api::DisplayStaticInfo;
+use nova_core::api::{
+    DisplayStaticInfo,
+    NovaCoreApiHandle,
+    VramRegion, //
+};
 
-use super::DisplayHal;
+use super::{
+    disp4::instance_memory::InstanceMemory,
+    DisplayHal, //
+};
 
 pub(super) const IP_VERSION: u32 = 0x0404_0000;
 
@@ -14,15 +21,25 @@ const NVC67E_WINDOW_CHANNEL_DMA: u32 = 0xc67e;
 const NVC67B_WINDOW_IMM_CHANNEL_DMA: u32 = 0xc67b;
 const NVC67A_CURSOR_IMM_CHANNEL_PIO: u32 = 0xc67a;
 
-pub(super) struct Ad102;
+pub(super) struct Ad102<'bound> {
+    instance_memory: InstanceMemory<'bound>,
+}
 
-impl Ad102 {
-    pub(super) fn new(info: &DisplayStaticInfo) -> Result<KBox<Self>> {
+impl<'bound> Ad102<'bound> {
+    pub(super) fn new(
+        api: &NovaCoreApiHandle<'bound>,
+        info: &DisplayStaticInfo,
+    ) -> Result<KBox<Self>> {
         if !Self::supports_classes(info) {
             return Err(EOPNOTSUPP);
         }
 
-        Ok(KBox::new(Self, GFP_KERNEL)?)
+        Ok(KBox::new(
+            Self {
+                instance_memory: InstanceMemory::new(api)?,
+            },
+            GFP_KERNEL,
+        )?)
     }
 
     fn supports_classes(info: &DisplayStaticInfo) -> bool {
@@ -34,4 +51,8 @@ impl Ad102 {
     }
 }
 
-impl DisplayHal for Ad102 {}
+impl DisplayHal for Ad102<'_> {
+    fn instance_memory(&self) -> &VramRegion {
+        self.instance_memory.region()
+    }
+}

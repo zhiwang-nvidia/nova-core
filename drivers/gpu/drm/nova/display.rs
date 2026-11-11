@@ -25,8 +25,7 @@ use nova_core::api::{
 pub(crate) struct Display<'bound> {
     dev: &'bound device::Device<Bound>,
     api: NovaCoreApiHandle<'bound>,
-    #[expect(dead_code)]
-    hal: KBox<dyn hal::DisplayHal>,
+    hal: KBox<dyn hal::DisplayHal + 'bound>,
     #[expect(dead_code)]
     caps: DisplayCaps,
     #[expect(dead_code)]
@@ -69,26 +68,37 @@ impl<'bound> Display<'bound> {
             }
         }
 
-        let hal =
-            hal::display_hal(caps.display_ip_version, &hw_static_info).inspect_err(|error| {
+        let hal = hal::display_hal(&api, caps.display_ip_version, &hw_static_info).inspect_err(
+            |error| {
                 dev_err!(
                     adev,
                     "Failed to initialize display HAL (IP {:#010x}): {:?}\n",
                     caps.display_ip_version,
                     error
                 );
-            })?;
+            },
+        )?;
 
         cleanup.dismiss();
 
-        Ok(Self {
+        let display = Self {
             dev: adev.as_ref(),
             api,
             hal,
             caps,
             hw_static_info,
             windows,
-        })
+        };
+
+        // Own the backing before GSP-RM can start using it, even if its reply fails.
+        display
+            .api
+            .with(|core| core.display_set_instance_memory(display.hal.instance_memory()))
+            .inspect_err(|error| {
+                dev_err!(adev, "Failed to set display instance memory: {:?}\n", error);
+            })?;
+
+        Ok(display)
     }
 }
 
@@ -96,6 +106,8 @@ impl Drop for Display<'_> {
     fn drop(&mut self) {
         if let Err(error) = self.api.with(|core| core.display_shutdown()) {
             dev_err!(self.dev, "Failed to shut down display: {:?}\n", error);
+            // GSP-RM may still reference the physical backing; the CPU mapping can be dropped.
+            core::mem::forget(self.hal.instance_memory().clone());
         }
     }
 }
