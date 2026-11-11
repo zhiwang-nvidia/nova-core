@@ -30,6 +30,9 @@ use crate::{
             DisplayGetPortStateReply,
             DisplayGetStaticInfoReply,
             DisplayInitReply,
+            DisplayModesetBeginReply,
+            DisplayModesetEndMode,
+            DisplayModesetEndReply,
             DisplayReadEdidReply,
             DisplaySetInstanceMemoryReply,
             DisplayShutdownReply,
@@ -47,6 +50,9 @@ use crate::{
                 DisplayGetPortStateResponseSchema,
                 DisplayInitRequest,
                 DisplayInitResponseSchema,
+                DisplayModesetBeginRequest,
+                DisplayModesetBeginResponseSchema,
+                DisplayModesetEndRequest,
                 DisplayReadEdidRequest,
                 DisplayReadEdidResponseSchema,
                 DisplaySetInstanceMemoryRequest,
@@ -721,5 +727,130 @@ impl GmcReply for DisplayReadEdidReply {
         let mut edid = KVec::with_capacity(prefix.len(), GFP_KERNEL)?;
         edid.extend_from_slice(prefix, GFP_KERNEL)?;
         Ok(Self { edid })
+    }
+}
+
+pub(crate) struct DisplayModesetBegin {
+    payload: KVVec<u64>,
+}
+
+impl DisplayModesetBegin {
+    #[expect(dead_code)]
+    pub(crate) fn new(display_mask: u32, target_display_mask: u32) -> Result<Self> {
+        if display_mask == 0 {
+            return Err(EINVAL);
+        }
+        let mut encoder = Encoder::new();
+        DisplayModesetBeginRequest::new(display_mask, target_display_mask).encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayModesetBegin {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayModesetBegin;
+    const MAX_REPLY_SIZE: u32 = 4096;
+    type Command = ();
+    type Reply = DisplayModesetBeginReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayModesetBeginReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayModesetBegin;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        let bytes = payload.flush_into_kvec(GFP_KERNEL)?;
+        if bytes.len() > num::u32_as_usize(DisplayModesetBegin::MAX_REPLY_SIZE) {
+            return Err(EINVAL);
+        }
+        let words = nvkv_words(&bytes)?;
+
+        let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
+        let mut schema = KBox::init(DisplayModesetBeginResponseSchema::init(), GFP_KERNEL)?;
+        let reply = KBox::try_init(decoder.decode(&mut *schema)?, GFP_KERNEL)?;
+        if reply.modeset_id == 0 {
+            return Err(EINVAL);
+        }
+        Ok(KBox::into_inner(reply))
+    }
+}
+
+pub(crate) struct DisplayModesetEnd {
+    payload: KVVec<u64>,
+}
+
+impl DisplayModesetEnd {
+    #[expect(dead_code)]
+    pub(crate) fn new(modeset_id: u64, end_mode: DisplayModesetEndMode) -> Result<Self> {
+        if modeset_id == 0 {
+            return Err(EINVAL);
+        }
+        let mut encoder = Encoder::new();
+        DisplayModesetEndRequest::new(modeset_id, end_mode).encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayModesetEnd {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayModesetEnd;
+    type Command = ();
+    type Reply = DisplayModesetEndReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayModesetEndReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayModesetEnd;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        if payload.is_empty() {
+            Ok(Self)
+        } else {
+            Err(EINVAL)
+        }
     }
 }

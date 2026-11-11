@@ -25,6 +25,8 @@ use crate::{
             DisplayGetPortStateReply,
             DisplayGetStaticInfoReply,
             DisplayInitReply,
+            DisplayModesetBeginReply,
+            DisplayModesetEndMode,
             GspStaticInfo, //
         },
         nvkv::{
@@ -713,4 +715,55 @@ pub(crate) struct DisplayReadEdidResponse {
 
 impl DisplayReadEdidResponse {
     const MAX_BYTES: usize = 2048;
+}
+
+nvkv_encode! {
+    pub(crate) struct DisplayModesetBeginRequest {
+        display_mask: Key<u32, { Self::DISPLAY_MASK_KEY }>,
+        target_valid: Key<u32, { Self::TARGET_VALID_KEY }>,
+        target_display_mask: Key<u32, { Self::TARGET_DISPLAY_MASK_KEY }>,
+    }
+}
+
+impl DisplayModesetBeginRequest {
+    const DISPLAY_MASK_KEY: KeyId = 0x0188;
+    const TARGET_VALID_KEY: KeyId = 0x8054;
+    const TARGET_DISPLAY_MASK_KEY: KeyId = 0x8055;
+
+    pub(crate) fn new(display_mask: u32, target_display_mask: u32) -> Self {
+        Self {
+            display_mask: display_mask.into(),
+            target_valid: 1.into(),
+            target_display_mask: target_display_mask.into(),
+        }
+    }
+}
+
+nvkv_decode! {
+    pub(crate) struct DisplayModesetBeginResponseSchema => DisplayModesetBeginReply {
+        modeset_id: Required<Key<u64, { Self::MODESET_ID_KEY }>>,
+    }
+}
+
+impl DisplayModesetBeginResponseSchema {
+    const MODESET_ID_KEY: KeyId = 0x0189;
+}
+
+nvkv_encode! {
+    pub(crate) struct DisplayModesetEndRequest {
+        modeset_id: Key<u64, { Self::MODESET_ID_KEY }>,
+        end_mode: Key<DisplayModesetEndMode, { Self::END_MODE_KEY }, u32>,
+    }
+}
+
+impl DisplayModesetEndRequest {
+    const MODESET_ID_KEY: KeyId = 0x018b;
+    const END_MODE_KEY: KeyId = 0x018c;
+
+    pub(crate) fn new(modeset_id: u64, end_mode: DisplayModesetEndMode) -> Self {
+        Self {
+            modeset_id: modeset_id.into(),
+            end_mode: end_mode.into(),
+        }
+    }
 }
