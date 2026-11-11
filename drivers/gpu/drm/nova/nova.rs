@@ -6,6 +6,8 @@ mod display;
 mod driver;
 mod file;
 mod gem;
+#[cfg(CONFIG_RUST_DRM_KMS)]
+mod kms;
 
 use crate::driver::NovaDriver;
 

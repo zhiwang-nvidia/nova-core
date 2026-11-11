@@ -17,6 +17,7 @@ mod stream;
 mod tables;
 mod window;
 
+pub(crate) use framebuffer::FramebufferLayout;
 pub(crate) use mode::{
     DisplayConfiguration,
     DisplayMode, //
