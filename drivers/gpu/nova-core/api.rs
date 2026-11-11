@@ -178,6 +178,17 @@ impl NovaCoreApi<'_> {
             .display_hdmi_set_sink_capabilities(stream_id, modeset_id, capabilities)
     }
 
+    /// Selects HDMI (`true`) or DVI (`false`) signaling for a stream in a modeset bracket.
+    pub fn display_hdmi_set_tmds_protocol(
+        &self,
+        stream_id: u64,
+        modeset_id: u64,
+        hdmi: bool,
+    ) -> Result {
+        self.gpu
+            .display_hdmi_set_tmds_protocol(stream_id, modeset_id, hdmi)
+    }
+
     /// Returns the GPU [`GspStaticInfo`].
     pub fn gsp_static_info(&self) -> &GspStaticInfo {
         self.gpu.gsp_static_info()

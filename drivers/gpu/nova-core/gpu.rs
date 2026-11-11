@@ -50,6 +50,7 @@ use crate::{
                 DisplayGetPortState,
                 DisplayGetStaticInfo,
                 DisplayHdmiSetSinkCapabilities,
+                DisplayHdmiSetTmdsProtocol,
                 DisplayInit,
                 DisplayModesetBegin,
                 DisplayModesetEnd,
@@ -784,6 +785,20 @@ impl<'gpu> Gpu<'gpu> {
         capabilities: u32,
     ) -> Result {
         let command = DisplayHdmiSetSinkCapabilities::new(stream_id, modeset_id, capabilities)?;
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
+        Ok(())
+    }
+
+    pub(crate) fn display_hdmi_set_tmds_protocol(
+        &self,
+        stream_id: u64,
+        modeset_id: u64,
+        hdmi: bool,
+    ) -> Result {
+        let command = DisplayHdmiSetTmdsProtocol::new(stream_id, modeset_id, hdmi)?;
         self.gsp_resources
             .gsp
             .cmdq
