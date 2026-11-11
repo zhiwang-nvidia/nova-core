@@ -25,7 +25,7 @@ use nova_core::api::{
 pub(crate) struct Display<'bound> {
     dev: &'bound device::Device<Bound>,
     api: NovaCoreApiHandle<'bound>,
-    hal: KBox<dyn hal::DisplayHal + 'bound>,
+    hal: KBox<dyn hal::DisplayHal<'bound> + 'bound>,
     #[expect(dead_code)]
     caps: DisplayCaps,
     #[expect(dead_code)]
