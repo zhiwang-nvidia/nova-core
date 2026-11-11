@@ -128,6 +128,19 @@ pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
     #[expect(dead_code)]
     fn emit_disable_head(&self, core: &mut Channel<'bound, Core>, head: u32) -> Result;
 
+    /// Queues a SOR's head owner mask and output protocol.
+    ///
+    /// The caller preserves any remaining owners. An empty mask detaches the SOR
+    /// and ignores `rm_protocol`. Submit a core UPDATE with the corresponding head changes.
+    #[expect(dead_code)]
+    fn emit_sor_control(
+        &self,
+        core: &mut Channel<'bound, Core>,
+        sor: u32,
+        rm_protocol: u32,
+        head_mask: u32,
+    ) -> Result;
+
     /// Checks whether the hardware can represent the mode timings.
     fn validate_mode(&self, mode: &DisplayMode) -> Result;
 
