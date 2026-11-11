@@ -41,7 +41,6 @@ impl Window<'_> {
     /// Reads this window's armed head assignment after the caller has waited for core idle.
     ///
     /// The caller prevents further core submissions while reading the armed state.
-    #[expect(dead_code)]
     pub(super) fn read_armed_owner(&self, api: &NovaCoreApiHandle<'_>) -> Result<Option<u32>> {
         api.with(|core| core.display_window_armed_owner(self.id as usize))
     }
@@ -92,7 +91,6 @@ impl Window<'_> {
     }
 
     /// Queues usage bounds for an unscaled window framebuffer.
-    #[expect(dead_code)]
     pub(super) fn emit_usage_methods(
         &self,
         hal: &dyn DisplayMethodHal,
@@ -138,7 +136,6 @@ impl Window<'_> {
     ///
     /// SET_POINT_OUT is shared by DISP 4.x and 5.x. UPDATE emission is separate
     /// because its encoding differs between classes.
-    #[expect(dead_code)]
     pub(super) fn emit_set_window_position(
         &mut self,
         hal: &dyn DisplayMethodHal,

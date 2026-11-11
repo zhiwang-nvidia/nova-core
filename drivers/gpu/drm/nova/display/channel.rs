@@ -306,7 +306,6 @@ pub(super) struct WindowImmediate {
 /// Completion required for an interlocked window update.
 pub(super) enum Update {
     /// Waits for new framebuffer state to become active and keeps its notifier pending.
-    #[expect(dead_code)]
     WaitForActive,
     /// Waits for the current submission to retire and allows its notifier to be reused.
     WaitForRetire,

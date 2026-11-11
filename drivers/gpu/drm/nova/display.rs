@@ -93,7 +93,14 @@ impl<'bound> Display<'bound> {
         let mut heads = KVec::new();
         for id in 0..u32::BITS {
             if hw_static_info.head_mask & (1 << id) != 0 {
-                heads.push(head::Head { id }, GFP_KERNEL)?;
+                heads.push(
+                    head::Head {
+                        id,
+                        mode: None,
+                        limited_range: false,
+                    },
+                    GFP_KERNEL,
+                )?;
             }
         }
 

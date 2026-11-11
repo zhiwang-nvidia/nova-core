@@ -169,7 +169,6 @@ pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
     fn validate_mode(&self, mode: &DisplayMode) -> Result;
 
     /// Emits methods to configure head timing, viewport and output color.
-    #[expect(dead_code)]
     fn emit_head_configuration(
         &self,
         core: &mut Channel<'bound, Core>,
@@ -179,7 +178,6 @@ pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
     ) -> Result;
 
     /// Queues a head's GSP-RM display ID; zero unsets the association.
-    #[expect(dead_code)]
     fn emit_head_display_id(
         &self,
         core: &mut Channel<'bound, Core>,
@@ -188,7 +186,6 @@ pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
     ) -> Result;
 
     /// Emits methods to configure a pitch-linear framebuffer with composition bypass.
-    #[expect(dead_code)]
     fn emit_window_framebuffer_configuration(
         &self,
         window: &mut Channel<'bound, WindowDma>,

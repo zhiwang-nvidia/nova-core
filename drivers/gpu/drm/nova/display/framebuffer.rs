@@ -104,7 +104,6 @@ impl Framebuffer {
         Ok(())
     }
 
-    #[expect(dead_code)]
     pub(super) fn descriptor(&self) -> Result<SurfaceDescriptor> {
         if !self.bound {
             return Err(ENODEV);
