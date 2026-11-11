@@ -7,6 +7,10 @@ use kernel::{
         Io,
         Mmio, //
     },
+    prelude::{
+        FromBytes,
+        IntoBytes, //
+    },
     sizes::SizeConstants,
     time, //
 };
@@ -74,6 +78,76 @@ register! {
         22:22   csc10_present => bool;
         23:23   csc1lut_present => bool;
         24:24   csc11_present => bool;
+    }
+}
+
+/// One head's SF_USER bank in the common DISP4/DISP5 BAR0 aperture.
+/// Individual packet offsets and slot counts can differ by class.
+#[repr(align(4))]
+#[derive(FromBytes, IntoBytes)]
+pub(crate) struct SfUserHeadRegisters([u8; 0x400]);
+
+register! {
+    base: NovaRegisters;
+
+    /// DISP4 audio gate; DISP5 moves it to SF_HDMI_INFOFRAME_CTRL.
+    pub(crate) NV_PDISP_SF_HDMI_CTRL(u32)[8, stride = 2048] @ 0x006165c0 {
+        24:24   audio => bool;
+    }
+
+    /// DISP4/DISP5 SF_USER aperture; class packet offsets are relative to this base.
+    pub(crate) NV_PDISP_SF_USER: [SfUserHeadRegisters; 8] @ 0x006f0000;
+}
+
+register! {
+    base: SfUserHeadRegisters;
+
+    /// DISP4 9171/C771 slots: AVI, generic, ACR, GCP and vendor-specific packets.
+    /// C871/C971 retain AVI at slot 0 but use three slots with GCP at slot 1.
+    pub(crate) NV_PDISP_SF_HDMI_INFO_CTRL(u32)[5, stride = 64] @ 0x000 {
+        0:0     enable => bool;
+    }
+
+    pub(crate) NV_PDISP_SF_HDMI_AVI_INFOFRAME_HEADER(u32) @ 0x008 {
+        7:0     hb0;
+        15:8    hb1;
+        23:16   hb2;
+    }
+
+    pub(crate) NV_PDISP_SF_HDMI_AVI_INFOFRAME_SUBPACK0_LOW(u32) @ 0x00c {}
+
+    pub(crate) NV_PDISP_SF_HDMI_AVI_INFOFRAME_SUBPACK0_HIGH(u32) @ 0x010 {
+        7:0     pb4;
+        15:8    pb5;
+        23:16   pb6;
+    }
+
+    pub(crate) NV_PDISP_SF_HDMI_AVI_INFOFRAME_SUBPACK1_LOW(u32) @ 0x014 {}
+
+    pub(crate) NV_PDISP_SF_HDMI_AVI_INFOFRAME_SUBPACK1_HIGH(u32) @ 0x018 {
+        7:0     pb11;
+        15:8    pb12;
+        23:16   pb13;
+    }
+
+    pub(crate) NV_PDISP_SF_HDMI_AVI_INFOFRAME_SUBPACK2_LOW(u32) @ 0x01c {}
+
+    pub(crate) NV_PDISP_SF_HDMI_ACR_CTRL(u32) @ 0x080 {
+        0:0     packet_enable => bool;
+        16:16   freqs_enable => bool;
+    }
+
+    /// DISP4 9171/C771 GCP payload; C871/C971 place it at 0x04c.
+    pub(crate) NV_PDISP_SF_HDMI_GCP_SUBPACK(u32) @ 0x0cc {
+        7:0     sb0;
+        15:8    sb1;
+        23:16   sb2;
+        24:24   sb1_hw => bool;
+    }
+
+    /// C771 shared slots; this layout is not common to all DISP4 classes.
+    pub(crate) NV_PDISP_SF_SHARED_GENERIC_CTRL(u32)[6, stride = 40] @ 0x200 {
+        0:0     enable => bool;
     }
 }
 

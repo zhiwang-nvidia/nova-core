@@ -99,6 +99,7 @@ use crate::{
 };
 
 mod hal;
+mod hdmi;
 mod regs;
 
 macro_rules! define_chipset {
