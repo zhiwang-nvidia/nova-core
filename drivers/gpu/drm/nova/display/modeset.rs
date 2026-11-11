@@ -350,6 +350,7 @@ impl<'bound> Display<'bound> {
         let pending = self.pending_commit.as_mut().ok_or(EIO)?;
         let stream = pending.stream.as_mut().ok_or(EIO)?;
         stream.assign(&self.api, bracket)?;
+        stream.set_sink_capabilities(&self.api, bracket)?;
 
         self.api
             .with(|core| core.display_modeset_end(bracket, DisplayModesetEndMode::Commit))?;

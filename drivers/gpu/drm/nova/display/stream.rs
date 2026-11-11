@@ -18,6 +18,7 @@ pub(super) struct Stream {
     pub(super) stream_id: u64,
     pub(super) sor: u32,
     pub(super) protocol: u32,
+    hdmi_sink_caps: u32,
 }
 
 impl Stream {
@@ -28,6 +29,7 @@ impl Stream {
             stream_id: 0,
             sor: 0,
             protocol: 0,
+            hdmi_sink_caps: configuration.hdmi_sink_caps,
         }
     }
 
@@ -64,5 +66,15 @@ impl Stream {
 
     pub(super) fn release(&self, api: &NovaCoreApiHandle<'_>, bracket: u64) -> Result {
         api.with(|core| core.display_release_stream_route(self.stream_id, bracket))
+    }
+
+    pub(super) fn set_sink_capabilities(
+        &self,
+        api: &NovaCoreApiHandle<'_>,
+        bracket: u64,
+    ) -> Result {
+        api.with(|core| {
+            core.display_hdmi_set_sink_capabilities(self.stream_id, bracket, self.hdmi_sink_caps)
+        })
     }
 }
