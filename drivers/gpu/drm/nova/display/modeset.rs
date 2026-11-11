@@ -425,6 +425,7 @@ impl<'bound> Display<'bound> {
         stream.set_monitor_power(&self.api, bracket, true)?;
         self.hal
             .configure_hdmi_packets(head, &configuration.avi_infoframe)?;
+        stream.set_source_active(&self.api, bracket, true)?;
         self.hal.set_hdmi_avmute(head, false)?;
         self.api
             .with(|core| core.display_modeset_end(bracket, DisplayModesetEndMode::Commit))?;
@@ -492,6 +493,7 @@ impl<'bound> Display<'bound> {
         if let Some(head) = head {
             self.hal.set_hdmi_avmute(head, true)?;
         }
+        stream.set_source_active(&self.api, bracket, false)?;
         if let Some(head) = head {
             self.hal.disable_hdmi_packets(head)?;
         }

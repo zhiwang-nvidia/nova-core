@@ -90,4 +90,13 @@ impl Stream {
     ) -> Result {
         api.with(|core| core.display_set_monitor_power(self.stream_id, bracket, enabled))
     }
+
+    pub(super) fn set_source_active(
+        &self,
+        api: &NovaCoreApiHandle<'_>,
+        bracket: u64,
+        active: bool,
+    ) -> Result {
+        api.with(|core| core.display_hdmi_set_source_active(self.stream_id, bracket, active))
+    }
 }
