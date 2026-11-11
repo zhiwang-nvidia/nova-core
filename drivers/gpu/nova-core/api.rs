@@ -27,7 +27,13 @@ use crate::{
     }, //
 };
 
+mod display_channel;
 mod vram;
+
+pub use display_channel::{
+    DisplayChannelInfo,
+    DisplayChannelKind, //
+};
 pub use vram::{
     VramBlock,
     VramMapping,
@@ -95,6 +101,7 @@ impl NovaCoreApi<'_> {
 }
 
 /// Expose a handle to nova-core API
+#[derive(Clone)]
 pub struct NovaCoreApiHandle<'a> {
     adev: &'a auxiliary::Device<Bound>,
 }

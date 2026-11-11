@@ -39,11 +39,15 @@ use crate::{
         cmdq::Cmdq,
         commands::{
             gmc::{
+                DisplayCreateChannel,
+                DisplayDestroyChannel,
                 DisplayGetStaticInfo,
                 DisplayInit,
                 DisplaySetInstanceMemory,
                 DisplayShutdown, //
             },
+            DisplayChannelKind,
+            DisplayCreateChannelReply,
             DisplayGetStaticInfoReply,
             DisplayInitReply, //
         },
@@ -664,6 +668,33 @@ impl<'gpu> Gpu<'gpu> {
             .cmdq
             .send_gmc_command(command, |_| Ok(()))?;
         Ok(())
+    }
+
+    pub(crate) fn display_create_channel(
+        &self,
+        kind: DisplayChannelKind,
+        instance: u32,
+        pb_address: u64,
+        pb_size: u64,
+    ) -> Result<DisplayCreateChannelReply> {
+        let command = DisplayCreateChannel::new(kind, instance, pb_address, pb_size)?;
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))
+    }
+
+    pub(crate) fn display_destroy_channel(&self, channel: u64) -> Result {
+        let command = DisplayDestroyChannel::new(channel)?;
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
+        Ok(())
+    }
+
+    pub(crate) fn display_channel_bar(&self) -> Bar0<'_> {
+        self.gsp_resources.bar
     }
 
     /// Returns the static GPU configuration that GSP-RM reported at boot.

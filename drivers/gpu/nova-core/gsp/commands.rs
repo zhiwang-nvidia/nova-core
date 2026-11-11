@@ -42,7 +42,6 @@ pub(crate) struct DisplayShutdownReply;
 pub(crate) struct DisplaySetInstanceMemoryReply;
 
 #[derive(Clone, Copy)]
-#[expect(dead_code)]
 pub(crate) enum DisplayChannelKind {
     Core,
     Window,
