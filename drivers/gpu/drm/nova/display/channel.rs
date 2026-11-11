@@ -122,6 +122,36 @@ pub(super) struct Channel<'bound, T> {
 }
 
 impl<'bound, T> Channel<'bound, T> {
+    pub(super) fn is_created(&self) -> bool {
+        self.created
+    }
+
+    #[expect(dead_code)]
+    pub(super) fn bind_surface_descriptor(
+        &mut self,
+        hal: &mut dyn DisplayHal<'bound>,
+        descriptor: SurfaceDescriptor,
+    ) -> Result {
+        if !self.is_created() {
+            return Err(ENODEV);
+        }
+        let info = self.info.as_ref().ok_or(ENODEV)?;
+        hal.bind_surface_descriptor(descriptor, info.ramht_client_id(), info.hardware_index())
+    }
+
+    #[expect(dead_code)]
+    pub(super) fn unbind_surface_descriptor(
+        &mut self,
+        hal: &mut dyn DisplayHal<'bound>,
+        descriptor: SurfaceDescriptor,
+    ) -> Result {
+        if !self.is_created() {
+            return Err(ENODEV);
+        }
+        let info = self.info.as_ref().ok_or(ENODEV)?;
+        hal.unbind_surface_descriptor(descriptor, info.ramht_client_id(), info.hardware_index())
+    }
+
     #[expect(dead_code)]
     fn alloc_channel_buffers(
         api: &NovaCoreApiHandle<'bound>,
