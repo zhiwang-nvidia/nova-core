@@ -169,6 +169,11 @@ impl DisplayGetPortStateReply {
     }
 }
 
+pub(crate) struct DisplayReadEdidReply {
+    #[expect(dead_code)]
+    pub(crate) edid: KVec<u8>,
+}
+
 /// Hardware resource type used by a GSP-RM display output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DisplayOutputResourceType {

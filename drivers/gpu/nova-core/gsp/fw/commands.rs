@@ -671,3 +671,46 @@ impl DisplayDestroyChannelRequest {
         }
     }
 }
+
+nvkv_encode! {
+    pub(crate) struct DisplayReadEdidRequest {
+        display_id: Key<u32, { Self::DISPLAY_ID_KEY }>,
+        flags: Key<u32, { Self::FLAGS_KEY }>,
+    }
+}
+
+impl DisplayReadEdidRequest {
+    const DISPLAY_ID_KEY: KeyId = 0x0125;
+    const FLAGS_KEY: KeyId = 0x0126;
+
+    pub(crate) fn new(display_id: u32) -> Self {
+        Self {
+            display_id: display_id.into(),
+            flags: 0.into(),
+        }
+    }
+}
+
+nvkv_decode! {
+    pub(crate) struct DisplayReadEdidResponseSchema => DisplayReadEdidResponse {
+        size: Required<Key<u32, { Self::SIZE_KEY }>>,
+        flags: Required<Key<u32, { Self::FLAGS_KEY }>>,
+        edid: Required<Array<u8, { DisplayReadEdidResponse::MAX_BYTES }, { Self::EDID_KEY }>>,
+    }
+}
+
+impl DisplayReadEdidResponseSchema {
+    const SIZE_KEY: KeyId = 0x0127;
+    const FLAGS_KEY: KeyId = 0x0128;
+    const EDID_KEY: KeyId = 0x0129;
+}
+
+pub(crate) struct DisplayReadEdidResponse {
+    pub(crate) size: u32,
+    pub(crate) flags: u32,
+    pub(crate) edid: ArrayVec<u8, { Self::MAX_BYTES }>,
+}
+
+impl DisplayReadEdidResponse {
+    const MAX_BYTES: usize = 2048;
+}
