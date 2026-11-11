@@ -8,6 +8,7 @@ mod framebuffer;
 mod hal;
 mod methods;
 mod mode;
+mod modeset;
 mod output;
 mod scaler;
 mod sor;
@@ -41,6 +42,7 @@ use channel::{
 pub(crate) struct Display<'bound> {
     dev: &'bound device::Device<Bound>,
     api: NovaCoreApiHandle<'bound>,
+    pending_commit: Option<modeset::DisplayCommit>,
     core_channel: Option<Channel<'bound, Core>>,
     hal: KBox<dyn hal::DisplayHal<'bound> + 'bound>,
     #[expect(dead_code)]
@@ -100,6 +102,7 @@ impl<'bound> Display<'bound> {
         let mut display = Self {
             dev: adev.as_ref(),
             api,
+            pending_commit: None,
             core_channel: None,
             hal,
             caps,
