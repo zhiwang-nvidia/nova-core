@@ -189,6 +189,14 @@ impl NovaCoreApi<'_> {
             .display_hdmi_set_tmds_protocol(stream_id, modeset_id, hdmi)
     }
 
+    /// Sets monitor power for a stream in a modeset bracket.
+    ///
+    /// Returns `EIO` if GSP-RM accepts a different power state.
+    pub fn display_set_monitor_power(&self, stream_id: u64, modeset_id: u64, on: bool) -> Result {
+        self.gpu
+            .display_set_monitor_power(stream_id, modeset_id, on)
+    }
+
     /// Returns the GPU [`GspStaticInfo`].
     pub fn gsp_static_info(&self) -> &GspStaticInfo {
         self.gpu.gsp_static_info()

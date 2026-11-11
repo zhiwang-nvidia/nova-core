@@ -57,6 +57,7 @@ use crate::{
                 DisplayReadEdid,
                 DisplayReleaseStreamRoute,
                 DisplaySetInstanceMemory,
+                DisplaySetMonitorPower,
                 DisplayShutdown, //
             },
             DisplayAssignStreamRouteReply,
@@ -803,6 +804,24 @@ impl<'gpu> Gpu<'gpu> {
             .gsp
             .cmdq
             .send_gmc_command(command, |_| Ok(()))?;
+        Ok(())
+    }
+
+    pub(crate) fn display_set_monitor_power(
+        &self,
+        stream_id: u64,
+        modeset_id: u64,
+        on: bool,
+    ) -> Result {
+        let command = DisplaySetMonitorPower::new(stream_id, modeset_id, on)?;
+        let reply = self
+            .gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
+        if reply.accepted_state != u32::from(on) {
+            return Err(EIO);
+        }
         Ok(())
     }
 

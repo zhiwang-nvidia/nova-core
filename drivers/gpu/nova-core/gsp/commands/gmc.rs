@@ -1205,7 +1205,6 @@ pub(crate) struct DisplaySetMonitorPower {
 }
 
 impl DisplaySetMonitorPower {
-    #[expect(dead_code)]
     pub(crate) fn new(stream_id: u64, modeset_id: u64, on: bool) -> Result<Self> {
         if stream_id == 0 || modeset_id == 0 {
             return Err(EINVAL);
