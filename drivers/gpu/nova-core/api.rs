@@ -21,6 +21,7 @@ use crate::{
     driver,
     gpu::Gpu,
     gsp::commands::{
+        DisplayAssignStreamRouteReply,
         DisplayGetPortCapsReply,
         DisplayGetPortStateReply,
         DisplayGetStaticInfoReply,
@@ -141,6 +142,31 @@ impl NovaCoreApi<'_> {
         self.gpu.display_modeset_end(modeset_id, end_mode.into())
     }
 
+    /// Assigns a head to an output within the specified modeset bracket.
+    ///
+    /// Retain the returned stream token before validating its SOR assignment.
+    /// An error may leave firmware resources allocated; retain display resources
+    /// through successful display shutdown before retrying.
+    pub fn display_assign_stream_route(
+        &self,
+        modeset_id: u64,
+        display_id: u32,
+        head: u32,
+        exclude_mask: u32,
+    ) -> Result<DisplayStreamRoute> {
+        self.gpu
+            .display_assign_stream_route(modeset_id, display_id, head, exclude_mask)
+            .map(DisplayStreamRoute::from)
+    }
+
+    /// Releases a stream after its output activity and head association are stopped.
+    ///
+    /// Keep the stream token if release fails. Release does not establish
+    /// framebuffer retirement; wait for the display channels separately.
+    pub fn display_release_stream_route(&self, stream_id: u64, modeset_id: u64) -> Result {
+        self.gpu.display_release_stream_route(stream_id, modeset_id)
+    }
+
     /// Returns the GPU [`GspStaticInfo`].
     pub fn gsp_static_info(&self) -> &GspStaticInfo {
         self.gpu.gsp_static_info()
@@ -177,6 +203,23 @@ impl<'a> NovaCoreApiHandle<'a> {
         self.adev
             .registration_data_with::<ForLt!(NovaCoreApi<'_>), R>(f)
             .expect("TypeId was validated in NovaCoreApiHandle::of()")
+    }
+}
+
+/// Output resources assigned by GSP-RM to a display stream.
+pub struct DisplayStreamRoute {
+    /// Opaque stream token used by subsequent route and HDMI operations.
+    pub stream_id: u64,
+    /// Display ID mask for each serial output resource (SOR), indexed by SOR number.
+    pub assigned: ArrayVec<u32, 4>,
+}
+
+impl From<DisplayAssignStreamRouteReply> for DisplayStreamRoute {
+    fn from(reply: DisplayAssignStreamRouteReply) -> Self {
+        Self {
+            stream_id: reply.stream_id,
+            assigned: reply.assigned,
+        }
     }
 }
 
@@ -321,8 +364,12 @@ pub enum DisplayOutputResourceType {
     Unknown(u32),
 }
 
-/// Hardware resource capabilities needed to enumerate display outputs.
+/// Hardware resources used by one GSP-RM display output.
 pub struct DisplayPortCaps {
+    /// Index within the hardware output resource type.
+    pub index: u32,
+    /// GSP-RM protocol encoding for this output resource.
+    pub protocol: u32,
     /// Hardware output resource type.
     pub resource_type: DisplayOutputResourceType,
     /// Whether this output connects to an internal panel.
@@ -334,6 +381,8 @@ impl From<DisplayGetPortCapsReply> for DisplayPortCaps {
         use crate::gsp::commands::DisplayOutputResourceType as ResourceType;
 
         Self {
+            index: reply.index,
+            protocol: reply.protocol,
             resource_type: match reply.resource_type() {
                 ResourceType::Sor => DisplayOutputResourceType::Sor,
                 ResourceType::Unknown(value) => DisplayOutputResourceType::Unknown(value),

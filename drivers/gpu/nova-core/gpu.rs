@@ -42,6 +42,7 @@ use crate::{
         cmdq::Cmdq,
         commands::{
             gmc::{
+                DisplayAssignStreamRoute,
                 DisplayCheckConfiguration,
                 DisplayCreateChannel,
                 DisplayDestroyChannel,
@@ -52,9 +53,11 @@ use crate::{
                 DisplayModesetBegin,
                 DisplayModesetEnd,
                 DisplayReadEdid,
+                DisplayReleaseStreamRoute,
                 DisplaySetInstanceMemory,
                 DisplayShutdown, //
             },
+            DisplayAssignStreamRouteReply,
             DisplayChannelKind,
             DisplayConfiguration,
             DisplayCreateChannelReply,
@@ -743,6 +746,29 @@ impl<'gpu> Gpu<'gpu> {
         end_mode: DisplayModesetEndMode,
     ) -> Result {
         let command = DisplayModesetEnd::new(modeset_id, end_mode)?;
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
+        Ok(())
+    }
+
+    pub(crate) fn display_assign_stream_route(
+        &self,
+        modeset_id: u64,
+        display_id: u32,
+        head: u32,
+        exclude_mask: u32,
+    ) -> Result<DisplayAssignStreamRouteReply> {
+        let command = DisplayAssignStreamRoute::new(modeset_id, display_id, head, exclude_mask)?;
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))
+    }
+
+    pub(crate) fn display_release_stream_route(&self, stream_id: u64, modeset_id: u64) -> Result {
+        let command = DisplayReleaseStreamRoute::new(stream_id, modeset_id)?;
         self.gsp_resources
             .gsp
             .cmdq

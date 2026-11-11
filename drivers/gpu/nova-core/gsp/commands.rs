@@ -273,7 +273,6 @@ impl From<DisplayModesetEndMode> for u32 {
 
 pub(crate) struct DisplayModesetEndReply;
 
-#[expect(dead_code)]
 pub(crate) struct DisplayAssignStreamRouteReply {
     pub(crate) stream_id: u64,
     pub(crate) assigned: ArrayVec<u32, { Self::NUM_SORS }>,
