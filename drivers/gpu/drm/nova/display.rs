@@ -6,6 +6,7 @@ mod channel;
 mod format;
 mod framebuffer;
 mod hal;
+mod head;
 mod methods;
 mod mode;
 mod modeset;
@@ -48,6 +49,7 @@ pub(crate) struct Display<'bound> {
     #[expect(dead_code)]
     caps: DisplayCaps,
     hw_static_info: DisplayStaticInfo,
+    heads: KVec<head::Head>,
     windows: KVec<window::Window<'bound>>,
 }
 
@@ -79,6 +81,13 @@ impl<'bound> Display<'bound> {
                 );
             })?;
 
+        let mut heads = KVec::new();
+        for id in 0..u32::BITS {
+            if hw_static_info.head_mask & (1 << id) != 0 {
+                heads.push(head::Head { id }, GFP_KERNEL)?;
+            }
+        }
+
         let mut windows = KVec::new();
         for id in 0..u32::BITS {
             if hw_static_info.window_mask & (1 << id) != 0 {
@@ -107,6 +116,7 @@ impl<'bound> Display<'bound> {
             hal,
             caps,
             hw_static_info,
+            heads,
             windows,
         };
 
