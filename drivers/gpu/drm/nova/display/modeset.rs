@@ -351,6 +351,7 @@ impl<'bound> Display<'bound> {
         let stream = pending.stream.as_mut().ok_or(EIO)?;
         stream.assign(&self.api, bracket)?;
         stream.set_sink_capabilities(&self.api, bracket)?;
+        stream.set_tmds_protocol(&self.api, bracket)?;
 
         self.api
             .with(|core| core.display_modeset_end(bracket, DisplayModesetEndMode::Commit))?;

@@ -77,4 +77,8 @@ impl Stream {
             core.display_hdmi_set_sink_capabilities(self.stream_id, bracket, self.hdmi_sink_caps)
         })
     }
+
+    pub(super) fn set_tmds_protocol(&self, api: &NovaCoreApiHandle<'_>, bracket: u64) -> Result {
+        api.with(|core| core.display_hdmi_set_tmds_protocol(self.stream_id, bracket, true))
+    }
 }
