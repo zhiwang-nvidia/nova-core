@@ -45,14 +45,20 @@ register! {
     base: NovaRegisters;
 
     pub(crate) NV_PDISP_FE_SW_POSTCOMP_HEAD_HDR_CAPA(u32)[8, stride = 32] @ 0x00640680 {
+        16:16   ocsc0_present => bool;
+        17:17   ocsc1_present => bool;
         18:18   sclr_present => bool;
     }
 
     pub(crate) NV_PDISP_FE_SW_PRECOMP_WIN_PIPE_HDR_CAPA(u32)[32, stride = 32] @ 0x00640780 {
+        16:16   csc00_present => bool;
         17:17   csc0lut_present => bool;
+        18:18   csc01_present => bool;
         19:19   sclr_present => bool;
         20:20   tmo_present => bool;
+        22:22   csc10_present => bool;
         23:23   csc1lut_present => bool;
+        24:24   csc11_present => bool;
     }
 }
 

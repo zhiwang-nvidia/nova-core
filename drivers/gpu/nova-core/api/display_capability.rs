@@ -13,8 +13,16 @@ use super::NovaCoreApi;
 pub struct DisplayPrecompCaps {
     /// Whether an input scaler is present.
     pub scaler: bool,
+    /// Whether the CSC00 color space conversion matrix is present.
+    pub csc00: bool,
+    /// Whether the CSC01 color space conversion matrix is present.
+    pub csc01: bool,
     /// Whether the first color space conversion lookup table is present.
     pub csc0_lut: bool,
+    /// Whether the CSC10 color space conversion matrix is present.
+    pub csc10: bool,
+    /// Whether the CSC11 color space conversion matrix is present.
+    pub csc11: bool,
     /// Whether the second color space conversion lookup table is present.
     pub csc1_lut: bool,
     /// Whether a tone-mapping lookup table is present.
@@ -25,6 +33,10 @@ pub struct DisplayPrecompCaps {
 pub struct DisplayPostcompCaps {
     /// Whether an output scaler is present.
     pub scaler: bool,
+    /// Whether output color space conversion matrix 0 is present.
+    pub ocsc0: bool,
+    /// Whether output color space conversion matrix 1 is present.
+    pub ocsc1: bool,
 }
 
 impl NovaCoreApi<'_> {
@@ -35,7 +47,11 @@ impl NovaCoreApi<'_> {
         let caps = self.gpu.display_precomp_caps(index)?;
         Ok(DisplayPrecompCaps {
             scaler: caps.sclr_present(),
+            csc00: caps.csc00_present(),
+            csc01: caps.csc01_present(),
             csc0_lut: caps.csc0lut_present(),
+            csc10: caps.csc10_present(),
+            csc11: caps.csc11_present(),
             csc1_lut: caps.csc1lut_present(),
             tmo_lut: caps.tmo_present(),
         })
@@ -48,6 +64,8 @@ impl NovaCoreApi<'_> {
         let caps = self.gpu.display_postcomp_caps(index)?;
         Ok(DisplayPostcompCaps {
             scaler: caps.sclr_present(),
+            ocsc0: caps.ocsc0_present(),
+            ocsc1: caps.ocsc1_present(),
         })
     }
 }
