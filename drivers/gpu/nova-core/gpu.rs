@@ -855,6 +855,25 @@ impl<'gpu> Gpu<'gpu> {
         Ok(state == STATE_IDLE)
     }
 
+    pub(crate) fn display_window_armed_owner(&self, window: usize) -> Result<Option<u32>> {
+        const OWNER_HEAD_COUNT: u32 = 8;
+        const OWNER_NONE: u32 = 0x0f;
+
+        // DISP 4.x and 5.x share this core armed register layout and owner encoding.
+        let register = display_regs::NV_UDISP_FE_CHN_ARMED_CORE_WINDOW_SET_CONTROL::try_at(window)
+            .ok_or(EINVAL)?;
+        let control = self.gsp_resources.bar.read(register);
+        // An all-ones bus response is not the valid OWNER_NONE method value.
+        if control.into_raw() == u32::MAX {
+            return Err(EIO);
+        }
+        match control.owner().get() {
+            OWNER_NONE => Ok(None),
+            head if head < OWNER_HEAD_COUNT => Ok(Some(head)),
+            _ => Err(EIO),
+        }
+    }
+
     pub(crate) fn display_channel_bar(&self) -> Bar0<'_> {
         self.gsp_resources.bar
     }

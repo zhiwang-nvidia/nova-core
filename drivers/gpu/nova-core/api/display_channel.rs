@@ -51,6 +51,13 @@ impl NovaCoreApi<'_> {
         self.gpu.display_core_channel_is_idle()
     }
 
+    /// Reads a window's armed head assignment, or `None` when unassigned.
+    ///
+    /// Wait for core idle and prevent further core submissions while reading this state.
+    pub fn display_window_armed_owner(&self, window: usize) -> Result<Option<u32>> {
+        self.gpu.display_window_armed_owner(window)
+    }
+
     /// Creates a display channel using a VRAM pushbuffer belonging to this GPU.
     ///
     /// Keep the pushbuffer alive until channel destruction or display shutdown

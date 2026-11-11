@@ -47,6 +47,11 @@ register! {
     pub(crate) NV_PDISP_FE_CHNSTATUS_CORE(u32) @ 0x00610630 {
         20:16   state;
     }
+
+    /// Core armed aperture (0x688000) plus WINDOW_SET_CONTROL (0x1000).
+    pub(crate) NV_UDISP_FE_CHN_ARMED_CORE_WINDOW_SET_CONTROL(u32)[32, stride = 128] @ 0x00689000 {
+        3:0     owner;
+    }
 }
 
 // Display capability registers shared by DISP 4.x and 5.x discrete GPUs.
