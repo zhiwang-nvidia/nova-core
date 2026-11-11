@@ -18,7 +18,10 @@ use super::{
     disp4::{
         self,
         instance_memory::InstanceMemory,
-        methods, //
+        methods::{
+            self,
+            core as core_methods, //
+        },
     },
     DisplayHal,
     DisplayMethodHal,
@@ -82,8 +85,12 @@ impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
         disp4::notifier::emit_window_notifier_methods(self, channel, descriptor)
     }
 
-    fn init_core_channel(&self, channel: &mut Channel<'bound, Core>, _head_mask: u32) -> Result {
+    fn init_core_channel(&self, channel: &mut Channel<'bound, Core>, head_mask: u32) -> Result {
         self.emit_core_notifier_methods(channel, None)?;
+        if head_mask == 0 || head_mask >> core_methods::HEAD_COUNT != 0 {
+            return Err(EINVAL);
+        }
+        disp4::head::emit_desktop_color_methods(self, channel, head_mask)?;
         channel.advance()
     }
 
