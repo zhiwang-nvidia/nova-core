@@ -8,7 +8,6 @@ use kernel::{
     },
     drm::{
         self,
-        gem,
         ioctl, //
     },
     prelude::*,
@@ -22,7 +21,7 @@ use kernel::{
 use crate::{
     display::Display,
     file::File,
-    gem::NovaObject, //
+    gem::Object, //
 };
 
 use nova_core::api::{
@@ -113,7 +112,7 @@ impl drm::Driver for NovaDriver {
     type Data = ();
     type RegistrationData<'a> = DrmRegData<'a>;
     type File = File;
-    type Object = gem::Object<NovaObject>;
+    type Object = Object;
     #[cfg(CONFIG_RUST_DRM_KMS)]
     type Kms = core::marker::PhantomData<Self>;
     type ParentDevice<Ctx: DeviceContext> = auxiliary::Device<Ctx>;
