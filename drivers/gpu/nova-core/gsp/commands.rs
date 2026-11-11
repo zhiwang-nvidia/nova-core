@@ -155,7 +155,6 @@ pub(crate) struct DisplayGetPortStateReply {
 
 impl DisplayGetPortStateReply {
     /// Returns whether connection detection found an attached display.
-    #[expect(dead_code)]
     pub(crate) fn is_connected(&self) -> bool {
         self.connected != 0
     }
@@ -199,13 +198,11 @@ pub(crate) struct DisplayGetPortCapsReply {
 
 impl DisplayGetPortCapsReply {
     /// Returns whether firmware identifies this output as an internal panel.
-    #[expect(dead_code)]
     pub(crate) fn is_internal_panel(&self) -> bool {
         self.internal_panel != 0
     }
 
     /// Returns the output hardware resource type.
-    #[expect(dead_code)]
     pub(crate) fn resource_type(&self) -> DisplayOutputResourceType {
         match self.resource_type {
             2 => DisplayOutputResourceType::Sor,

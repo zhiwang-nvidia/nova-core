@@ -352,7 +352,6 @@ pub(crate) struct DisplayGetPortState {
     payload: KVVec<u64>,
 }
 
-#[expect(dead_code)]
 impl DisplayGetPortState {
     pub(crate) fn new(display_id: u32) -> Result<Self> {
         if !display_id.is_power_of_two() {
@@ -419,7 +418,6 @@ pub(crate) struct DisplayGetPortCaps {
     payload: KVVec<u64>,
 }
 
-#[expect(dead_code)]
 impl DisplayGetPortCaps {
     pub(crate) fn new(display_id: u32) -> Result<Self> {
         if !display_id.is_power_of_two() {

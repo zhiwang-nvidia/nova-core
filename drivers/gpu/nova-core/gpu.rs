@@ -44,6 +44,8 @@ use crate::{
             gmc::{
                 DisplayCreateChannel,
                 DisplayDestroyChannel,
+                DisplayGetPortCaps,
+                DisplayGetPortState,
                 DisplayGetStaticInfo,
                 DisplayInit,
                 DisplaySetInstanceMemory,
@@ -51,6 +53,8 @@ use crate::{
             },
             DisplayChannelKind,
             DisplayCreateChannelReply,
+            DisplayGetPortCapsReply,
+            DisplayGetPortStateReply,
             DisplayGetStaticInfoReply,
             DisplayInitReply, //
         },
@@ -663,6 +667,27 @@ impl<'gpu> Gpu<'gpu> {
             .gsp
             .cmdq
             .send_gmc_command(DisplayGetStaticInfo, |_| Ok(()))
+    }
+
+    pub(crate) fn display_port_state(&self, display_id: u32) -> Result<DisplayGetPortStateReply> {
+        let command = DisplayGetPortState::new(display_id)?;
+        let reply = self
+            .gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
+        if reply.display_id != display_id || reply.status != 0 {
+            return Err(EIO);
+        }
+        Ok(reply)
+    }
+
+    pub(crate) fn display_port_caps(&self, display_id: u32) -> Result<DisplayGetPortCapsReply> {
+        let command = DisplayGetPortCaps::new(display_id)?;
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))
     }
 
     pub(crate) fn display_set_instance_memory(&self, address: u64, size: u64) -> Result {

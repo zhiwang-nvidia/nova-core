@@ -21,6 +21,8 @@ use crate::{
     driver,
     gpu::Gpu,
     gsp::commands::{
+        DisplayGetPortCapsReply,
+        DisplayGetPortStateReply,
         DisplayGetStaticInfoReply,
         DisplayInitReply,
         GspStaticInfo, //
@@ -73,6 +75,20 @@ impl NovaCoreApi<'_> {
     /// Queries GSP-RM's static display information.
     pub fn display_static_info(&self) -> Result<DisplayStaticInfo> {
         self.gpu.display_static_info().map(DisplayStaticInfo::from)
+    }
+
+    /// Queries one GSP-RM output's connection and connector state.
+    pub fn display_port_state(&self, display_id: u32) -> Result<DisplayPortState> {
+        self.gpu
+            .display_port_state(display_id)
+            .map(DisplayPortState::from)
+    }
+
+    /// Queries the hardware resource used by one GSP-RM display output.
+    pub fn display_port_caps(&self, display_id: u32) -> Result<DisplayPortCaps> {
+        self.gpu
+            .display_port_caps(display_id)
+            .map(DisplayPortCaps::from)
     }
 
     /// Sets GSP-RM's display instance memory to a VRAM region.
@@ -218,6 +234,57 @@ impl From<DisplayGetStaticInfoReply> for DisplayStaticInfo {
             max_edid_bytes: reply.max_edid_bytes,
             max_message_bytes: reply.max_message_bytes,
             max_pb_bytes: reply.max_pb_bytes,
+        }
+    }
+}
+
+/// Connection and connector state for one GSP-RM display output.
+pub struct DisplayPortState {
+    /// Whether detection found a connected monitor.
+    pub connected: bool,
+    /// Physical connector index reported by GSP-RM.
+    pub connector_index: u32,
+    /// Usable heads, with bit N identifying hardware head N.
+    pub head_mask: u32,
+}
+
+impl From<DisplayGetPortStateReply> for DisplayPortState {
+    fn from(reply: DisplayGetPortStateReply) -> Self {
+        Self {
+            connected: reply.is_connected(),
+            connector_index: reply.connector_index,
+            head_mask: reply.head_mask,
+        }
+    }
+}
+
+/// Hardware resource type used by a GSP-RM display output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayOutputResourceType {
+    /// Serial output resource for digital display links.
+    Sor,
+    /// Resource type not currently handled, preserving the GSP-RM encoding.
+    Unknown(u32),
+}
+
+/// Hardware resource capabilities needed to enumerate display outputs.
+pub struct DisplayPortCaps {
+    /// Hardware output resource type.
+    pub resource_type: DisplayOutputResourceType,
+    /// Whether this output connects to an internal panel.
+    pub internal_panel: bool,
+}
+
+impl From<DisplayGetPortCapsReply> for DisplayPortCaps {
+    fn from(reply: DisplayGetPortCapsReply) -> Self {
+        use crate::gsp::commands::DisplayOutputResourceType as ResourceType;
+
+        Self {
+            resource_type: match reply.resource_type() {
+                ResourceType::Sor => DisplayOutputResourceType::Sor,
+                ResourceType::Unknown(value) => DisplayOutputResourceType::Unknown(value),
+            },
+            internal_panel: reply.is_internal_panel(),
         }
     }
 }
