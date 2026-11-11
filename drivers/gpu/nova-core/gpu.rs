@@ -7,7 +7,10 @@ use kernel::{
     dma::Device,
     fmt,
     gpu::buddy::GpuBuddyParams,
-    io::Io,
+    io::{
+        register::Array,
+        Io, //
+    },
     new_mutex,
     num::Bounded,
     pci,
@@ -75,6 +78,7 @@ use crate::{
         GpuMm,
         VramAddress, //
     },
+    regs as display_regs,
     vgpu::VgpuManager, //
 };
 
@@ -695,6 +699,32 @@ impl<'gpu> Gpu<'gpu> {
 
     pub(crate) fn display_channel_bar(&self) -> Bar0<'_> {
         self.gsp_resources.bar
+    }
+
+    pub(crate) fn display_precomp_caps(
+        &self,
+        index: usize,
+    ) -> Result<display_regs::NV_PDISP_FE_SW_PRECOMP_WIN_PIPE_HDR_CAPA> {
+        let register =
+            display_regs::NV_PDISP_FE_SW_PRECOMP_WIN_PIPE_HDR_CAPA::try_at(index).ok_or(EINVAL)?;
+        let caps = self.gsp_resources.bar.read(register);
+        if caps.into_raw() == u32::MAX {
+            return Err(EIO);
+        }
+        Ok(caps)
+    }
+
+    pub(crate) fn display_postcomp_caps(
+        &self,
+        index: usize,
+    ) -> Result<display_regs::NV_PDISP_FE_SW_POSTCOMP_HEAD_HDR_CAPA> {
+        let register =
+            display_regs::NV_PDISP_FE_SW_POSTCOMP_HEAD_HDR_CAPA::try_at(index).ok_or(EINVAL)?;
+        let caps = self.gsp_resources.bar.read(register);
+        if caps.into_raw() == u32::MAX {
+            return Err(EIO);
+        }
+        Ok(caps)
     }
 
     /// Returns the static GPU configuration that GSP-RM reported at boot.

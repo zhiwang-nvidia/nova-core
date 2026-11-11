@@ -39,6 +39,23 @@ register! {
     pub(crate) NV_PBUS_SW_SCRATCH(u32)[64] @ 0x00001400 {}
 }
 
+// Display capability registers shared by DISP 4.x and 5.x discrete GPUs.
+
+register! {
+    base: NovaRegisters;
+
+    pub(crate) NV_PDISP_FE_SW_POSTCOMP_HEAD_HDR_CAPA(u32)[8, stride = 32] @ 0x00640680 {
+        18:18   sclr_present => bool;
+    }
+
+    pub(crate) NV_PDISP_FE_SW_PRECOMP_WIN_PIPE_HDR_CAPA(u32)[32, stride = 32] @ 0x00640780 {
+        17:17   csc0lut_present => bool;
+        19:19   sclr_present => bool;
+        20:20   tmo_present => bool;
+        23:23   csc1lut_present => bool;
+    }
+}
+
 // PGC6 register space.
 //
 // `GC6` is a GPU low-power state where VRAM is in self-refresh and the GPU is powered down (except

@@ -27,9 +27,14 @@ use crate::{
     }, //
 };
 
+mod display_capability;
 mod display_channel;
 mod vram;
 
+pub use display_capability::{
+    DisplayPostcompCaps,
+    DisplayPrecompCaps, //
+};
 pub use display_channel::{
     DisplayChannelInfo,
     DisplayChannelKind, //
