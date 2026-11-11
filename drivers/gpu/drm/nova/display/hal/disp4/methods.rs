@@ -69,22 +69,68 @@ pub(crate) mod core {
     //! These definitions match the C57D, C67D, C77D and C87D class interfaces.
 
     pub(crate) const SET_CONTEXT_DMA_NOTIFIER: u32 = 0x0208;
+    pub(crate) const SET_CONTROL: u32 = 0x0210;
+
+    pub(crate) const HEAD_SET_PROCAMP: u32 = 0x2000;
+    pub(crate) const HEAD_SET_PROCAMP_DYNAMIC_RANGE_CEA: u32 = 1 << 28;
+    pub(crate) const HEAD_SET_CONTROL_OUTPUT_RESOURCE: u32 = 0x2004;
+    pub(crate) const HEAD_OUTPUT_CRC_COMPLETE_RASTER: u32 = 1;
+    pub(crate) const HEAD_OUTPUT_HSYNC_NEGATIVE: u32 = 1 << 2;
+    pub(crate) const HEAD_OUTPUT_VSYNC_NEGATIVE: u32 = 1 << 3;
+    pub(crate) const HEAD_OUTPUT_PIXEL_DEPTH_BPP_24_444: u32 = 4 << 4;
+    pub(crate) const HEAD_OUTPUT_EXT_PACKET_WIN_NONE: u32 = 0x3f << 26;
+    pub(crate) const HEAD_SET_CONTROL: u32 = 0x2008;
+    pub(crate) const HEAD_SET_HEAD_USAGE_BOUNDS: u32 = 0x2030;
+    pub(crate) const HEAD_USAGE_OUTPUT_SCALER_TAPS_2: u32 = 1 << 12;
+    pub(crate) const HEAD_SET_STALL_LOCK: u32 = 0x2034;
+    pub(crate) const HEAD_SET_DSC_CONTROL: u32 = 0x22d4;
 
     pub(crate) const HEAD_STRIDE: u32 = 0x0400;
     pub(crate) const COORDINATE_MAX: u32 = 0x7fff;
+    pub(crate) const COORDINATE_Y_SHIFT: u32 = 16;
+    pub(crate) const SCALE_FACTOR_1X: u32 = 1024;
+    pub(crate) const HEAD_SET_PIXEL_CLOCK_FREQUENCY: u32 = 0x200c;
+    pub(crate) const HEAD_SET_CONTROL_OUTPUT_SCALER: u32 = 0x2014;
+    pub(crate) const HEAD_OUTPUT_SCALER_TAPS_2: u32 = 1 | (1 << 4);
+    pub(crate) const HEAD_SET_DITHER_CONTROL: u32 = 0x2018;
+    pub(crate) const HEAD_SET_PIXEL_CLOCK_CONFIGURATION: u32 = 0x201c;
     pub(crate) const HEAD_SET_DISPLAY_ID: u32 = 0x2020;
+    pub(crate) const HEAD_SET_PIXEL_CLOCK_FREQUENCY_MAX: u32 = 0x2028;
+    pub(crate) const HEAD_SET_MAX_OUTPUT_SCALE_FACTOR: u32 = 0x202c;
+    pub(crate) const HEAD_SET_LOCK_CHAIN: u32 = 0x2044;
+    pub(crate) const HEAD_SET_VIEWPORT_POINT_IN: u32 = 0x2048;
+    pub(crate) const HEAD_SET_VIEWPORT_SIZE_IN: u32 = 0x204c;
+    pub(crate) const HEAD_SET_VIEWPORT_SIZE_OUT: u32 = 0x2058;
+    pub(crate) const HEAD_SET_VIEWPORT_POINT_OUT_ADJUST: u32 = 0x205c;
+    pub(crate) const HEAD_SET_RASTER_SIZE: u32 = 0x2064;
+    pub(crate) const HEAD_SET_RASTER_SYNC_END: u32 = 0x2068;
+    pub(crate) const HEAD_SET_RASTER_BLANK_END: u32 = 0x206c;
+    pub(crate) const HEAD_SET_RASTER_BLANK_START: u32 = 0x2070;
+    pub(crate) const HEAD_SET_OVERSCAN_COLOR: u32 = 0x2078;
+    pub(crate) const HEAD_SET_FRAME_PACKED_VACTIVE_COLOR: u32 = 0x207c;
+    pub(crate) const HEAD_SET_HDMI_CTRL: u32 = 0x2080;
     pub(crate) const HEAD_SET_CONTEXT_DMA_CURSOR: u32 = 0x2088;
     pub(crate) const HEAD_SET_OFFSET_CURSOR: u32 = 0x2090;
     pub(crate) const HEAD_SET_CONTROL_CURSOR: u32 = 0x209c;
     pub(crate) const HEAD_CURSOR_FORMAT_A8R8G8B8: u32 = 0xcf;
     pub(crate) const HEAD_SET_CONTEXT_DMA_CRC: u32 = 0x2180;
     pub(crate) const HEAD_SET_CRC_CONTROL: u32 = 0x2184;
+    pub(crate) const HEAD_SET_DISPLAY_RATE: u32 = 0x21a8;
     pub(crate) const HEAD_SET_OUTPUT_SCALER_COEFF_VALUE: u32 = 0x2214;
+    pub(crate) const HEAD_SET_MIN_FRAME_IDLE: u32 = 0x2218;
     pub(crate) const HEAD_SET_DESKTOP_COLOR_ALPHA_RED: u32 = 0x2220;
     pub(crate) const HEAD_SET_DESKTOP_COLOR_GREEN_BLUE: u32 = 0x2224;
+    pub(crate) const HEAD_SET_CLAMP_RANGE_GREEN: u32 = 0x2238;
+    pub(crate) const HEAD_SET_CLAMP_RANGE_RED_BLUE: u32 = 0x223c;
     pub(crate) const HEAD_SET_OCSC0CONTROL: u32 = 0x2240;
     pub(crate) const HEAD_SET_CONTEXT_DMA_OLUT: u32 = 0x2288;
     pub(crate) const HEAD_SET_OFFSET_OLUT: u32 = 0x228c;
+    pub(crate) const HEAD_SET_OCSC1CONTROL: u32 = 0x229c;
+    pub(crate) const HEAD_OCSC1CONTROL_ENABLE: u32 = 1;
+    pub(crate) const HEAD_SET_OCSC1COEFFICIENT_C00: u32 = 0x22a0;
+    pub(crate) const HEAD_SET_TILE_POSITION: u32 = 0x22d0;
+    pub(crate) const HEAD_SET_DSC_PPS_CONTROL: u32 = 0x22d8;
+    pub(crate) const HEAD_SET_RG_MERGE: u32 = 0x2360;
     pub(crate) use crate::display::methods::core::HEAD_COUNT;
 }
 

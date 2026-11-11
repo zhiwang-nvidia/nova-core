@@ -238,6 +238,45 @@ impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
         Ok(())
     }
 
+    /// Emits methods to configure head timing, viewport and output color.
+    fn emit_head_configuration(
+        &self,
+        core: &mut Channel<'bound, Core>,
+        head: u32,
+        mode: &DisplayMode,
+        limited_range: bool,
+    ) -> Result {
+        self.validate_mode(mode)?;
+        if head >= core_methods::HEAD_COUNT {
+            return Err(EINVAL);
+        }
+        let caps = self
+            .api
+            .with(|core| core.display_postcomp_caps(head as usize))?;
+        if limited_range && !caps.ocsc1 {
+            return Err(EOPNOTSUPP);
+        }
+
+        self.emit_disable_head_methods(core, head, &caps)?;
+        disp4::head::emit_head_configuration_methods(self, core, head, mode, limited_range, &caps)?;
+        let offset = head * core_methods::HEAD_STRIDE;
+        // C87D omits LOCK_OFFSET; C57D has no RASTER_HBLANK_DELAY method.
+        core.emit(self, c77d::HEAD_SET_LOCK_OFFSET + offset, &[0])?;
+        core.emit(self, c77d::HEAD_SET_RASTER_HBLANK_DELAY + offset, &[0])
+    }
+
+    fn emit_head_display_id(
+        &self,
+        core: &mut Channel<'bound, Core>,
+        head: u32,
+        display_id: u32,
+    ) -> Result {
+        if head >= core_methods::HEAD_COUNT || (display_id != 0 && !display_id.is_power_of_two()) {
+            return Err(EINVAL);
+        }
+        disp4::head::emit_head_display_id_methods(self, core, head, display_id)
+    }
+
     /// Emits methods to configure a pitch-linear framebuffer with composition bypass.
     fn emit_window_framebuffer_configuration(
         &self,
