@@ -347,6 +347,10 @@ impl<'bound> Display<'bound> {
             self.program_disable_output(display_id, head_to_disable, bracket)?;
         }
 
+        let pending = self.pending_commit.as_mut().ok_or(EIO)?;
+        let stream = pending.stream.as_mut().ok_or(EIO)?;
+        stream.assign(&self.api, bracket)?;
+
         self.api
             .with(|core| core.display_modeset_end(bracket, DisplayModesetEndMode::Commit))?;
         Ok(())
@@ -385,13 +389,14 @@ impl<'bound> Display<'bound> {
         &mut self,
         display_id: u32,
         _head_to_disable: Option<usize>,
-        _bracket: u64,
+        bracket: u64,
     ) -> Result {
-        self.streams
+        let stream = self
+            .streams
             .iter()
             .find(|stream| stream.display_id == display_id)
             .ok_or(ENODEV)?;
-        Ok(())
+        stream.release(&self.api, bracket)
     }
 
     /// Selects the resources that an output disable will retire before the state exchange.
