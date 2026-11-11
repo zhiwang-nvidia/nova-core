@@ -114,6 +114,10 @@ impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
         if caps.scaler && !scaler::has_postcomp_scaler(&self.api, head_mask)? {
             disp4::scaler::emit_precomp_scaler_coeffs_methods(self, channel)?;
         }
+
+        if caps.csc0_lut && caps.csc1_lut {
+            disp4::csc::emit_csc_lut_methods(self, channel)?;
+        }
         channel.advance()
     }
 
