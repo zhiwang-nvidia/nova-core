@@ -135,6 +135,19 @@ pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
     /// Free a surface descriptor. It must be unbound.
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result;
 
+    /// Queues methods to disable head auxiliary accesses and detach heads from SORs.
+    ///
+    /// `head_mask` selects heads whose auxiliary memory accesses are disabled and
+    /// display IDs are unset. All SOR head owner masks are cleared, regardless of
+    /// `head_mask`.
+    /// Call this only before driver-owned routes exist, then submit a core UPDATE.
+    #[expect(dead_code)]
+    fn emit_disable_heads_and_detach_sors(
+        &self,
+        core: &mut Channel<'bound, Core>,
+        head_mask: u32,
+    ) -> Result;
+
     /// Queues methods to disable a head's auxiliary memory accesses and unset its display ID.
     ///
     /// SOR ownership is unchanged. The caller retires the head's window framebuffers
