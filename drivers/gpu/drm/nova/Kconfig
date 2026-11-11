@@ -10,6 +10,7 @@ config DRM_NOVA
 	select NOVA_CORE
 	select DRM_TTM_HELPER if DRM_FBDEV_EMULATION
 	select RUST_DRM_KMS
+	select DRM_CLIENT_SELECTION
 	default n
 	help
 	  Choose this if you want to build the Nova DRM driver for Nvidia

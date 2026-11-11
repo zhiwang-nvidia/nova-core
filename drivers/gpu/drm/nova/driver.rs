@@ -19,7 +19,10 @@ use kernel::{
 };
 
 use crate::{
-    display::Display,
+    display::{
+        Display,
+        DisplayOutput, //
+    },
     file::File,
     gem::Object, //
 };
@@ -30,6 +33,10 @@ use nova_core::api::{
 };
 
 pub(crate) struct NovaDriver;
+
+pub(crate) struct NovaData {
+    pub(crate) outputs: KVec<DisplayOutput>,
+}
 
 #[pin_data]
 pub(crate) struct Nova<'bound> {
@@ -89,10 +96,11 @@ impl auxiliary::Driver for NovaDriver {
     ) -> impl PinInit<Self::Data<'bound>, Error> + 'bound {
         try_pin_init!(Self::Data {
             reg <- {
-                let drm = drm::UnregisteredDevice::<Self>::new(adev, Ok(()))?;
-
                 let api = NovaCoreApi::of(adev)?;
                 let display = Display::init(adev)?;
+                let outputs = display.outputs()?;
+                let drm =
+                    drm::UnregisteredDevice::<Self>::new(adev, Ok(NovaData { outputs }))?;
                 let reg_data = try_pin_init!(DrmRegData {
                     api,
                     display <- new_mutex!(Some(display)),
@@ -109,12 +117,12 @@ impl auxiliary::Driver for NovaDriver {
 
 #[vtable]
 impl drm::Driver for NovaDriver {
-    type Data = ();
+    type Data = NovaData;
     type RegistrationData<'a> = DrmRegData<'a>;
     type File = File;
     type Object = Object;
     #[cfg(CONFIG_RUST_DRM_KMS)]
-    type Kms = core::marker::PhantomData<Self>;
+    type Kms = Self;
     type ParentDevice<Ctx: DeviceContext> = auxiliary::Device<Ctx>;
 
     const INFO: drm::DriverInfo = INFO;

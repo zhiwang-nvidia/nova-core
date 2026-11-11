@@ -2,13 +2,9 @@
 
 //! HDMI modesetting through the display channels.
 
-#[expect(dead_code)]
 mod connector;
-#[expect(dead_code)]
 mod crtc;
-#[expect(dead_code)]
 mod encoder;
-#[expect(dead_code)]
 mod plane;
 
 use kernel::{
@@ -25,6 +21,9 @@ use kernel::{
                 ModesetsReadyToken,
                 PlaneUpdatesReadyToken, //
             },
+            connector::Type as ConnectorType,
+            encoder::Type as EncoderType,
+            plane::Type as PlaneType,
             KmsDriver,
             ModeConfigInfo,
             UnregisteredKmsDevice, //
@@ -33,7 +32,10 @@ use kernel::{
     prelude::*, //
 };
 
-use crate::display::FramebufferLayout;
+use crate::display::{
+    DisplayOutput,
+    FramebufferLayout, //
+};
 
 use crate::driver::NovaDriver;
 
@@ -52,7 +54,38 @@ impl KmsDriver for NovaDriver {
         })
     }
 
-    fn create_objects(_dev: &UnregisteredKmsDevice<'_, Self>) -> Result {
+    fn create_objects(dev: &UnregisteredKmsDevice<'_, Self>) -> Result {
+        let primary = plane::UnregisteredPlane::new(
+            dev,
+            1,
+            &[fourcc::XRGB888],
+            Some(&[fourcc::FORMAT_MOD_LINEAR]),
+            PlaneType::Primary,
+            None,
+            (),
+        )?;
+        crtc::UnregisteredCrtc::new(
+            dev,
+            primary,
+            Option::<&plane::UnregisteredPlane>::None,
+            None,
+            (),
+        )?;
+        for output in &dev.outputs {
+            let connector = connector::UnregisteredConnector::new(
+                dev,
+                ConnectorType::HdmiA,
+                DisplayOutput {
+                    display_id: output.display_id,
+                    connected: output.connected,
+                    head_mask: output.head_mask,
+                    connector_index: output.connector_index,
+                },
+            )?;
+            let encoder =
+                encoder::UnregisteredEncoder::new(dev, EncoderType::Tmds, 1, 0, None, ())?;
+            connector.attach_encoder(encoder)?;
+        }
         Ok(())
     }
 

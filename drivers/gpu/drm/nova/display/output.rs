@@ -29,7 +29,6 @@ use nova_core::api::DisplayOutputResourceType;
 use super::Display;
 
 /// An output admitted by the display firmware and its current connection state.
-#[expect(dead_code)]
 pub(crate) struct DisplayOutput {
     /// Single-bit GSP-RM display identifier.
     pub(crate) display_id: u32,
