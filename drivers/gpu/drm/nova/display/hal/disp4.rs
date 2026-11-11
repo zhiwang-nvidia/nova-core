@@ -4,4 +4,5 @@
 
 pub(super) mod context_dma;
 pub(super) mod instance_memory;
+pub(crate) mod methods;
 mod ramht;

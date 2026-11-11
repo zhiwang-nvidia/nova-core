@@ -9,8 +9,12 @@ use nova_core::api::{
 };
 
 use super::{
-    disp4::instance_memory::InstanceMemory,
+    disp4::{
+        instance_memory::InstanceMemory,
+        methods, //
+    },
     DisplayHal,
+    DisplayMethodHal,
     SurfaceDescriptor, //
 };
 
@@ -102,5 +106,11 @@ impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result {
         self.instance_memory
             .free_context_dma(descriptor.context_dma_descriptor_id)
+    }
+}
+
+impl DisplayMethodHal for Ad102<'_> {
+    fn encode_method_header(&self, method: u32, count: usize) -> Result<u32> {
+        methods::encode_method(method, count)
     }
 }
