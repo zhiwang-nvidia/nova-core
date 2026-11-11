@@ -23,6 +23,7 @@ use crate::{
             NoReply, //
         },
         commands::{
+            DisplayAssignStreamRouteReply,
             DisplayChannelKind,
             DisplayCheckConfigurationReply,
             DisplayConfiguration,
@@ -36,6 +37,7 @@ use crate::{
             DisplayModesetEndMode,
             DisplayModesetEndReply,
             DisplayReadEdidReply,
+            DisplayReleaseStreamRouteReply,
             DisplaySetInstanceMemoryReply,
             DisplayShutdownReply,
             GspStaticInfo, //
@@ -43,6 +45,8 @@ use crate::{
         fw::{
             self,
             commands::{
+                DisplayAssignStreamRouteRequest,
+                DisplayAssignStreamRouteResponseSchema,
                 DisplayCheckConfigurationRequest,
                 DisplayCheckConfigurationResponseSchema,
                 DisplayCreateChannelRequest,
@@ -59,6 +63,7 @@ use crate::{
                 DisplayModesetEndRequest,
                 DisplayReadEdidRequest,
                 DisplayReadEdidResponseSchema,
+                DisplayReleaseStreamRouteRequest,
                 DisplaySetInstanceMemoryRequest,
                 DisplayStaticInfoResponseSchema,
                 GspInitRequest,
@@ -915,6 +920,144 @@ impl GmcCommand for DisplayModesetEnd {
 
 impl GmcReply for DisplayModesetEndReply {
     const COMMAND: GmcCommandId = GmcCommandId::DisplayModesetEnd;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        if payload.is_empty() {
+            Ok(Self)
+        } else {
+            Err(EINVAL)
+        }
+    }
+}
+
+pub(crate) struct DisplayAssignStreamRoute {
+    payload: KVVec<u64>,
+}
+
+impl DisplayAssignStreamRoute {
+    #[expect(dead_code)]
+    pub(crate) fn new(
+        modeset_id: u64,
+        display_id: u32,
+        head: u32,
+        exclude_mask: u32,
+    ) -> Result<Self> {
+        if !display_id.is_power_of_two()
+            || modeset_id == 0
+            || exclude_mask >= (1 << DisplayAssignStreamRouteReply::NUM_SORS)
+        {
+            return Err(EINVAL);
+        }
+        let mut encoder = Encoder::new();
+        DisplayAssignStreamRouteRequest::new(modeset_id, display_id, head, exclude_mask)
+            .encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayAssignStreamRoute {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayAssignStreamRoute;
+    const MAX_REPLY_SIZE: u32 = 4096;
+    type Command = ();
+    type Reply = DisplayAssignStreamRouteReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayAssignStreamRouteReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayAssignStreamRoute;
+    type InitError = Error;
+
+    fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {
+        let bytes = payload.flush_into_kvec(GFP_KERNEL)?;
+        if bytes.len() > num::u32_as_usize(DisplayAssignStreamRoute::MAX_REPLY_SIZE) {
+            return Err(EINVAL);
+        }
+        let words = nvkv_words(&bytes)?;
+
+        let decoder = Decoder::new(&words, UnknownKeyPolicy::Ignore);
+        let mut schema = KBox::init(DisplayAssignStreamRouteResponseSchema::init(), GFP_KERNEL)?;
+        let reply = KBox::try_init(decoder.decode(&mut *schema)?, GFP_KERNEL)?;
+        if reply.stream_id == 0 || reply.assigned.len() != Self::NUM_SORS {
+            return Err(EINVAL);
+        }
+        let reply = KBox::into_inner(reply);
+        Ok(Self {
+            stream_id: reply.stream_id,
+            assigned: reply.assigned,
+        })
+    }
+}
+
+pub(crate) struct DisplayReleaseStreamRoute {
+    payload: KVVec<u64>,
+}
+
+impl DisplayReleaseStreamRoute {
+    #[expect(dead_code)]
+    pub(crate) fn new(stream_id: u64, modeset_id: u64) -> Result<Self> {
+        if stream_id == 0 || modeset_id == 0 {
+            return Err(EINVAL);
+        }
+        let mut encoder = Encoder::new();
+        DisplayReleaseStreamRouteRequest::new(stream_id, modeset_id).encode(&mut encoder)?;
+
+        Ok(Self {
+            payload: encoder.finish(),
+        })
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        AsBytes::as_bytes(self.payload.as_slice())
+    }
+}
+
+impl GmcCommand for DisplayReleaseStreamRoute {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayReleaseStreamRoute;
+    type Command = ();
+    type Reply = DisplayReleaseStreamRouteReply;
+    type InitError = Infallible;
+
+    fn init(&self) -> impl Init<Self::Command, Self::InitError> {
+        pin_init::init_zeroed()
+    }
+
+    fn variable_payload_len(&self) -> usize {
+        self.payload_bytes().len()
+    }
+
+    fn init_variable_payload(
+        &self,
+        dst: &mut SBufferIter<core::array::IntoIter<&mut [u8], 2>>,
+    ) -> Result {
+        dst.write_all(self.payload_bytes())
+    }
+}
+
+impl GmcReply for DisplayReleaseStreamRouteReply {
+    const COMMAND: GmcCommandId = GmcCommandId::DisplayReleaseStreamRoute;
     type InitError = Error;
 
     fn read(payload: &mut SBufferIter<core::array::IntoIter<&[u8], 2>>) -> Result<Self> {

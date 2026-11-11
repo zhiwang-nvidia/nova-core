@@ -718,6 +718,7 @@ bounded_enum! {
         DisplayGetStaticInfo = 0x05_0003,
         DisplayGetPortState = 0x05_0004,
         DisplayReadEdid = 0x05_0005,
+        DisplayAssignStreamRoute = 0x05_000a,
         DisplaySetInstanceMemory = 0x05_000b,
         DisplayCreateChannel = 0x05_000c,
         DisplayDestroyChannel = 0x05_000e,
@@ -725,6 +726,7 @@ bounded_enum! {
         DisplayModesetBegin = 0x05_0010,
         DisplayGetPortCaps = 0x05_0016,
         DisplayModesetEnd = 0x05_0017,
+        DisplayReleaseStreamRoute = 0x05_0019,
     }
 }
 
