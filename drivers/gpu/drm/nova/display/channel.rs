@@ -178,21 +178,79 @@ impl<'bound> PushBuffer<'bound> {
 /// Completion notifications from the display engine.
 pub(super) struct NotifierBuffer<'bound> {
     region: VramRegion,
-    #[expect(dead_code)]
     mapping: VramMapping<'bound>,
     descriptor: Option<SurfaceDescriptor>,
+    /// Hardware may still write this record, including while a Window image is active.
+    pending: bool,
     binding: Option<(u32, u32)>,
 }
 
+/// The hardware progress needed by a notifier wait.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum NotifierStatus {
+    #[expect(dead_code)]
+    Finished,
+}
+
 impl<'bound> NotifierBuffer<'bound> {
+    // DISP 4.x and 5.x use a 16-byte notifier with status in word 0, bits 31:30.
+    const STATUS_MASK: u32 = 3 << 30;
+    const STATUS_FINISHED: u32 = 2 << 30;
+
     pub(super) fn new(api: &NovaCoreApiHandle<'bound>, size: Alignment) -> Result<Self> {
         let (region, mapping) = alloc_channel_buffer(api, size)?;
         Ok(Self {
             region,
             mapping,
             descriptor: None,
+            pending: false,
             binding: None,
         })
+    }
+
+    pub(super) fn available(&self) -> Result<SurfaceDescriptor> {
+        if self.pending {
+            return Err(EBUSY);
+        }
+        self.descriptor.ok_or(ENODEV)
+    }
+
+    pub(super) fn prepare(&mut self) -> Result<SurfaceDescriptor> {
+        let descriptor = self.available()?;
+        self.mapping.write32(0, 0)?;
+        // An UPDATE may still write after a timeout. Only confirmed completion or
+        // retirement permits this record to be reset for another operation.
+        self.pending = true;
+        Ok(descriptor)
+    }
+
+    pub(super) fn wait(&self, expected: NotifierStatus) -> Result {
+        if !self.pending {
+            return Err(EINVAL);
+        }
+        // Hardware writes FINISHED when a core UPDATE method completes with notification enabled.
+        let expected_status = match expected {
+            NotifierStatus::Finished => Self::STATUS_FINISHED,
+        };
+        read_poll_timeout(
+            || {
+                let status = self.mapping.read32(0)? & Self::STATUS_MASK;
+                if status == Self::STATUS_MASK {
+                    return Err(EIO);
+                }
+                Ok(status)
+            },
+            |&status| status == expected_status,
+            Delta::from_micros(100),
+            Delta::from_secs(3),
+        )
+        .map(|_| ())
+    }
+
+    /// Allows reuse after completion or retirement has stopped hardware writes.
+    #[expect(dead_code)]
+    pub(super) fn finish(&mut self) {
+        self.pending = false;
     }
 
     fn bind(
@@ -245,6 +303,24 @@ pub(super) struct Channel<'bound, T> {
 impl<'bound, T> Channel<'bound, T> {
     pub(super) fn is_created(&self) -> bool {
         self.created
+    }
+
+    fn available_notifier(&self) -> Result<SurfaceDescriptor> {
+        if !self.is_created() {
+            return Err(ENODEV);
+        }
+        self.notifier_buffer.as_ref().ok_or(ENODEV)?.available()
+    }
+
+    #[expect(dead_code)]
+    fn prepare_notifier(&mut self) -> Result<SurfaceDescriptor> {
+        self.available_notifier()?;
+        self.notifier_buffer.as_mut().ok_or(ENODEV)?.prepare()
+    }
+
+    #[expect(dead_code)]
+    fn wait_notifier(&self, status: NotifierStatus) -> Result {
+        self.notifier_buffer.as_ref().ok_or(ENODEV)?.wait(status)
     }
 
     #[expect(dead_code)]
