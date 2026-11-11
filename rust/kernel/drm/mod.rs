@@ -4,6 +4,8 @@
 
 pub mod device;
 pub mod driver;
+#[cfg(CONFIG_RUST_DRM_KMS)]
+pub mod edid;
 pub mod file;
 #[cfg(CONFIG_RUST_DRM_KMS)]
 pub mod fourcc;
