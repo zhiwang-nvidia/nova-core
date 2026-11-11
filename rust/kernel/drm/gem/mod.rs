@@ -35,6 +35,13 @@ use core::{
     ptr::NonNull, //
 };
 
+mod mapping;
+pub use mapping::{
+    Fault,
+    FaultResult,
+    Mmap, //
+};
+
 #[cfg(CONFIG_RUST_DRM_GEM_SHMEM_HELPER)]
 pub mod shmem;
 
@@ -139,6 +146,21 @@ pub trait DriverObject: Sync + Send + Sized + 'static {
         _args: &mut DumbCreate<'_>,
     ) -> Result {
         Err(EOPNOTSUPP)
+    }
+
+    /// Admits a shared, write-combined I/O mapping without installing any PTEs.
+    ///
+    /// Device-resource validity must be checked again by [`Self::fault`].
+    fn mmap(_obj: &DriverAllocImpl<Self>, _mapping: &Mmap<'_>) -> Result {
+        Err(EOPNOTSUPP)
+    }
+
+    /// Handles a fault in a previously admitted mapping.
+    ///
+    /// The GEM reference keeps driver data alive, not the device binding. Keep
+    /// the device's unplug guard across any call to [`Fault::insert_pfn`].
+    fn fault(_obj: &DriverAllocImpl<Self>, _fault: &Fault<'_>) -> FaultResult {
+        FaultResult::SIGBUS
     }
 
     /// Open a new handle to an existing object, associated with a File.
@@ -318,6 +340,8 @@ impl<T: DriverObject, Ctx: DeviceContext> Object<T, Ctx> {
         free: Some(Self::free_callback),
         open: Some(open_callback::<T>),
         close: Some(close_callback::<T>),
+        mmap: Some(mapping::mmap_callback::<T>),
+        vm_ops: &mapping::VmaOps::<T>::OPS,
         ..pin_init::zeroed()
     };
 

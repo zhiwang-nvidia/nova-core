@@ -22,6 +22,19 @@ rust_helper_drm_vma_node_offset_addr(struct drm_vma_offset_node *node)
 	return drm_vma_node_offset_addr(node);
 }
 
+__rust_helper unsigned long
+rust_helper_drm_vma_node_start(const struct drm_vma_offset_node *node)
+{
+	return drm_vma_node_start(node);
+}
+
+__rust_helper void rust_helper_drm_gem_prepare_io_vma(struct vm_area_struct *vma)
+{
+	vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
+	vma->vm_page_prot = pgprot_writecombine(vma_get_page_prot(vma));
+	vma->vm_page_prot = pgprot_decrypted(vma->vm_page_prot);
+}
+
 #ifdef CONFIG_DRM_GEM_SHMEM_HELPER
 __rust_helper void
 rust_helper_drm_gem_shmem_object_free(struct drm_gem_object *obj)
