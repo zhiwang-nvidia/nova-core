@@ -69,4 +69,18 @@ impl Display<'_> {
         }
         Ok(outputs)
     }
+
+    fn validate_display_id(&self, display_id: u32) -> Result {
+        if !display_id.is_power_of_two() || self.hw_static_info.display_mask & display_id == 0 {
+            return Err(EINVAL);
+        }
+        Ok(())
+    }
+
+    /// Reads EDID for an output admitted by GSP-RM's static display mask.
+    #[expect(dead_code)]
+    pub(crate) fn read_edid(&self, display_id: u32) -> Result<KVec<u8>> {
+        self.validate_display_id(display_id)?;
+        self.api.with(|core| core.display_read_edid(display_id))
+    }
 }
