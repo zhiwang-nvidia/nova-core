@@ -806,6 +806,9 @@ pub(super) mod private {
         ///
         /// # Safety
         ///
+        /// The caller must have exclusive access to the state. For a state
+        /// mutator, the state must still be an unswapped candidate.
+        ///
         /// The caller promises this mutable reference will not be used to modify any contents of
         /// [`struct drm_connector_state`] which DRM would consider to be static - like the
         /// backpointer to the DRM connector that owns this state. This also means the mutable
@@ -1042,8 +1045,12 @@ unsafe impl<T: KmsDriver> ModeObjectVtable for OpaqueConnectorState<T> {
 /// This type is typically returned by an [`AtomicStateMutator`] within contexts where it is
 /// possible to safely mutate a connector's state. In order to uphold rust's data-aliasing rules,
 /// only [`ConnectorStateMutator`] may exist at a time.
+///
+/// # Invariants
+///
+/// `state` points to a live new state of this commit, never its old state.
 pub struct ConnectorStateMutator<'a, T: FromRawConnectorState> {
-    state: &'a mut T,
+    state: NonNull<T>,
     mask: &'a Cell<u32>,
 }
 
@@ -1064,10 +1071,7 @@ impl<'a, T: FromRawConnectorState> ConnectorStateMutator<'a, T> {
             mutator.borrowed_connectors.set(borrowed_mask | conn_mask);
             Some(Self {
                 mask: &mutator.borrowed_connectors,
-                // SAFETY: We're guaranteed `state` is of `T` by type invariance, and we just
-                // confirmed by checking `borrowed_connectors` that no other mutable borrows have
-                // been taken out for `state`
-                state: unsafe { T::from_raw_mut(state.as_ptr()) },
+                state: state.cast(),
             })
         } else {
             None
@@ -1079,19 +1083,31 @@ impl<'a, T: DriverConnectorState> Deref for ConnectorStateMutator<'a, ConnectorS
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &self.state.inner
+        // SAFETY: The commit retains this state. Installed driver data is only
+        // modified through interior synchronization, including in commit tails.
+        unsafe { &(*self.state.as_ptr()).inner }
     }
 }
 
-impl<'a, T: DriverConnectorState> DerefMut for ConnectorStateMutator<'a, ConnectorState<T>> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.state.inner
+impl<T: DriverConnectorState> ConnectorStateMutator<'_, ConnectorState<T>> {
+    /// Mutate driver data before the candidate state has been installed.
+    ///
+    /// Installed state can be read by a later atomic check. Commit tails must
+    /// use interior synchronization for mutable driver data.
+    pub fn driver_data_mut(&mut self) -> Result<&mut T> {
+        if self.as_raw().state.is_null() {
+            return Err(EINVAL);
+        }
+        // SAFETY: This commit's new state still belongs to the unswapped
+        // candidate. Modeset locks and the mutator's exclusive borrow prevent
+        // overlapping access to its driver data.
+        Ok(unsafe { &mut (*self.state.as_ptr()).inner })
     }
 }
 
 impl<'a, T: FromRawConnectorState> Drop for ConnectorStateMutator<'a, T> {
     fn drop(&mut self) {
-        let mask = self.state.connector().mask();
+        let mask = self.connector().mask();
         self.mask.set(self.mask.get() & !mask);
     }
 }
@@ -1102,12 +1118,14 @@ impl<'a, T: FromRawConnectorState> AsRawConnectorState for ConnectorStateMutator
 
 impl<'a, T: FromRawConnectorState> private::AsRawConnectorState for ConnectorStateMutator<'a, T> {
     fn as_raw(&self) -> &bindings::drm_connector_state {
-        self.state.as_raw()
+        // SAFETY: The commit retains this state, whose contents remain stable
+        // while this mutator permits shared access before hardware completion.
+        unsafe { self.state.as_ref().as_raw() }
     }
 
     unsafe fn as_raw_mut(&mut self) -> &mut bindings::drm_connector_state {
-        // SAFETY: We're bound by the same safety contract as this function
-        unsafe { self.state.as_raw_mut() }
+        // SAFETY: The caller guarantees exclusive access to this live state.
+        unsafe { self.state.as_mut().as_raw_mut() }
     }
 }
 
@@ -1119,7 +1137,8 @@ where
     type Vtable = T::Vtable;
 
     fn vtable(&self) -> *const Self::Vtable {
-        self.state.vtable()
+        // SAFETY: The commit retains this state and its vtable is immutable.
+        unsafe { self.state.as_ref().vtable() }
     }
 }
 

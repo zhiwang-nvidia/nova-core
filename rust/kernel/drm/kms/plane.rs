@@ -557,6 +557,9 @@ pub(crate) mod private {
         ///
         /// # Safety
         ///
+        /// The caller must have exclusive access to the state. For a state
+        /// mutator, the state must still be an unswapped candidate.
+        ///
         /// The caller promises this mutable reference will not be used to modify any contents of
         /// `bindings::drm_plane_state` which DRM would consider to be static - like the backpointer
         /// to the DRM plane that owns this state. This also means the mutable reference should
@@ -659,8 +662,11 @@ pub trait RawPlaneState: AsRawPlaneState {
         S::Crtc: ModesettableCrtc + ModeObject<Driver = D>,
         Self::Plane: ModeObject<Driver = D>,
     {
-        // SAFETY: We're passing the mutable reference from `self.as_raw_mut()` directly to DRM,
-        // which is safe.
+        if self.as_raw().state.is_null() {
+            return Err(EINVAL);
+        }
+        // SAFETY: This is an unswapped candidate, and the mutable receiver
+        // excludes other borrows while DRM updates its derived plane state.
         to_result(unsafe {
             bindings::drm_atomic_helper_check_plane_state(
                 self.as_raw_mut(),
@@ -896,8 +902,12 @@ unsafe impl<T: KmsDriver> ModeObjectVtable for OpaquePlaneState<T> {
 /// This type is typically returned by an [`AtomicStateMutator`] within contexts where it is
 /// possible to safely mutate a plane's state. In order to uphold rust's data-aliasing rules, only
 /// [`PlaneStateMutator`] may exist at a time.
+///
+/// # Invariants
+///
+/// `state` points to a live new state of this commit, never its old state.
 pub struct PlaneStateMutator<'a, T: FromRawPlaneState> {
-    state: &'a mut T,
+    state: NonNull<T>,
     mask: &'a Cell<u32>,
 }
 
@@ -917,10 +927,7 @@ impl<'a, T: FromRawPlaneState> PlaneStateMutator<'a, T> {
             mutator.borrowed_planes.set(borrowed_mask | plane_mask);
             Some(Self {
                 mask: &mutator.borrowed_planes,
-                // SAFETY: We're guaranteed `state` is of `FromRawPlaneState` by type invariance,
-                // and we just confirmed by checking `borrowed_planes` that no other mutable borrows
-                // have been taken out for `state`
-                state: unsafe { T::from_raw_mut(state.as_ptr()) },
+                state: state.cast(),
             })
         } else {
             None
@@ -930,7 +937,7 @@ impl<'a, T: FromRawPlaneState> PlaneStateMutator<'a, T> {
 
 impl<'a, T: FromRawPlaneState> Drop for PlaneStateMutator<'a, T> {
     fn drop(&mut self) {
-        let mask = self.state.plane().mask();
+        let mask = self.plane().mask();
         self.mask.set(self.mask.get() & !mask);
     }
 }
@@ -941,12 +948,14 @@ impl<'a, T: FromRawPlaneState> AsRawPlaneState for PlaneStateMutator<'a, T> {
 
 impl<'a, T: FromRawPlaneState> private::AsRawPlaneState for PlaneStateMutator<'a, T> {
     fn as_raw(&self) -> &bindings::drm_plane_state {
-        self.state.as_raw()
+        // SAFETY: The commit retains this state, whose contents remain stable
+        // while this mutator permits shared access before hardware completion.
+        unsafe { self.state.as_ref().as_raw() }
     }
 
     unsafe fn as_raw_mut(&mut self) -> &mut bindings::drm_plane_state {
-        // SAFETY: This function is bound by the same safety contract as `self.inner.as_raw_mut()`
-        unsafe { self.state.as_raw_mut() }
+        // SAFETY: The caller guarantees exclusive access to this live state.
+        unsafe { self.state.as_mut().as_raw_mut() }
     }
 }
 
@@ -956,13 +965,25 @@ impl<'a, T: DriverPlaneState> Deref for PlaneStateMutator<'a, PlaneState<T>> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &self.state.inner
+        // SAFETY: The commit retains this state. Installed driver data is only
+        // modified through interior synchronization, including in commit tails.
+        unsafe { &(*self.state.as_ptr()).inner }
     }
 }
 
-impl<'a, T: DriverPlaneState> DerefMut for PlaneStateMutator<'a, PlaneState<T>> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.state.inner
+impl<T: DriverPlaneState> PlaneStateMutator<'_, PlaneState<T>> {
+    /// Mutate driver data before the candidate state has been installed.
+    ///
+    /// Installed state can be read by a later atomic check. Commit tails must
+    /// use interior synchronization for mutable driver data.
+    pub fn driver_data_mut(&mut self) -> Result<&mut T> {
+        if self.as_raw().state.is_null() {
+            return Err(EINVAL);
+        }
+        // SAFETY: This commit's new state still belongs to the unswapped
+        // candidate. Modeset locks and the mutator's exclusive borrow prevent
+        // overlapping access to its driver data.
+        Ok(unsafe { &mut (*self.state.as_ptr()).inner })
     }
 }
 
@@ -974,7 +995,8 @@ where
     type Vtable = T::Vtable;
 
     fn vtable(&self) -> *const Self::Vtable {
-        self.state.vtable()
+        // SAFETY: The commit retains this state and its vtable is immutable.
+        unsafe { self.state.as_ref().vtable() }
     }
 }
 

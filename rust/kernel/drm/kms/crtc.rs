@@ -817,7 +817,8 @@ unsafe impl<T: KmsDriver> ModeObjectVtable for OpaqueCrtcState<T> {
 ///
 /// # Invariants
 ///
-/// `self.state` always points to a valid instance of a [`FromRawCrtcState`] object.
+/// `self.state` always points to a valid instance of a [`FromRawCrtcState`] object,
+/// obtained as the new state of a commit. It never points to that commit's old state.
 pub struct CrtcStateMutator<'a, T: FromRawCrtcState> {
     state: NonNull<T>,
     mask: &'a Cell<u32>,
@@ -960,11 +961,22 @@ impl<'a, T: DriverCrtcState> Deref for CrtcStateMutator<'a, CrtcState<T>> {
     }
 }
 
-impl<'a, T: DriverCrtcState> DerefMut for CrtcStateMutator<'a, CrtcState<T>> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: Our interface ensures that `self.state.inner` follows rust's data-aliasing rules,
-        // so this is safe
-        unsafe { (*self.state.as_ptr()).inner.get_mut() }
+impl<T: DriverCrtcState> CrtcStateMutator<'_, CrtcState<T>> {
+    /// Mutate driver data before the candidate state has been installed.
+    ///
+    /// A later atomic check can read installed state while its hardware commit
+    /// runs. Post-swap callbacks must use interior synchronization for mutable
+    /// driver data instead of obtaining an exclusive reference to the whole state.
+    pub fn driver_data_mut(&mut self) -> Result<&mut T> {
+        // SAFETY: This mutator only wraps a commit's new state. DRM sets its
+        // state pointer during composition and clears it when installing it.
+        if unsafe { (*self.as_raw()).state.is_null() } {
+            return Err(EINVAL);
+        }
+        // SAFETY: The nonnull state pointer identifies the unswapped candidate.
+        // The callback's modeset locks and this mutator's exclusive borrow keep
+        // other references to its driver data from overlapping this reference.
+        Ok(unsafe { (*self.state.as_ptr()).inner.get_mut() })
     }
 }
 

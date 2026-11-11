@@ -74,11 +74,12 @@ impl crtc::DriverCrtc for RvkmsCrtc {
         // Create a vblank timer when enabling a CRTC, and destroy said timer when disabling to
         // resolve the circular reference to CRTC it creates
         if old_state.active() != new_state.active() {
-            new_state.vblank_timer = if new_state.active() {
+            let timer = if new_state.active() {
                 Some(VblankTimer::new(crtc)?)
             } else {
                 None
             };
+            new_state.driver_data_mut()?.vblank_timer = timer;
         }
 
         Ok(())
