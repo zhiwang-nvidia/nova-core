@@ -23,6 +23,10 @@ pub(crate) use mode::{
     DisplayConfiguration,
     DisplayMode, //
 };
+pub(crate) use modeset::{
+    DisplayCommit,
+    DisplayDisableCommit, //
+};
 pub(crate) use output::DisplayOutput;
 
 use kernel::{

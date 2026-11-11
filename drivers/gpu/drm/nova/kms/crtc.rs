@@ -10,7 +10,10 @@ use kernel::{
         fourcc,
         gem::BaseObject,
         kms::{
-            atomic::AtomicStateComposer,
+            atomic::{
+                AtomicStateComposer,
+                AtomicStateMutator, //
+            },
             connector::RawConnectorState,
             crtc::{
                 self,
@@ -23,17 +26,25 @@ use kernel::{
                 Framebuffer,
                 PlaneLayout, //
             },
-            plane::RawPlaneState, //
+            plane::RawPlaneState,
+            ModeObject, //
         },
     },
     num::casts::IntoSafeCast,
     prelude::*,
-    sizes::SZ_4K, //
+    sizes::SZ_4K,
+    sync::{
+        new_mutex,
+        Mutex, //
+    }, //
 };
 
 use crate::{
     display::{
+        Display,
+        DisplayCommit,
         DisplayConfiguration,
+        DisplayDisableCommit,
         DisplayMode,
         DisplayPixelFormat,
         FramebufferLayout, //
@@ -52,13 +63,45 @@ type CrtcState = crtc::CrtcState<NovaCrtcState>;
 
 pub(super) struct NovaCrtc;
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(super) struct NovaCrtcState {
     configuration: Option<DisplayConfiguration>,
+    prepared: Option<Pin<KBox<Mutex<Option<PreparedUpdate>>>>>,
+}
+
+impl Clone for NovaCrtcState {
+    fn clone(&self) -> Self {
+        Self {
+            configuration: self.configuration,
+            // Bindings belong to one submission and must not be duplicated.
+            prepared: None,
+        }
+    }
 }
 
 impl crtc::DriverCrtcState for NovaCrtcState {
     type Crtc = NovaCrtc;
+}
+
+enum PreparedUpdate {
+    Framebuffer(KBox<DisplayCommit>),
+    Disable(DisplayDisableCommit),
+}
+
+impl PreparedUpdate {
+    fn commit(self, display: &mut Display<'_>) -> Result {
+        match self {
+            Self::Framebuffer(commit) => display.commit(KBox::into_inner(commit)),
+            Self::Disable(commit) => display.commit_disable_output(commit),
+        }
+    }
+
+    fn abort(self, display: &mut Display<'_>) -> Result {
+        match self {
+            Self::Framebuffer(commit) => display.abort_commit(KBox::into_inner(commit)),
+            Self::Disable(commit) => display.abort_disable_output(commit),
+        }
+    }
 }
 
 #[vtable]
@@ -73,6 +116,32 @@ impl crtc::DriverCrtc for NovaCrtc {
 
     fn new(_dev: &NovaDevice, _args: &()) -> impl PinInit<Self, Error> {
         Ok(Self)
+    }
+
+    fn atomic_flush(
+        crtc: &Crtc,
+        _old_state: &CrtcState,
+        mut new_state: CrtcStateMutator<'_, CrtcState>,
+        _state: &AtomicStateMutator<NovaDriver>,
+    ) {
+        let result = if new_state.active() {
+            apply(crtc, &new_state)
+        } else {
+            Ok(())
+        };
+        retire_event(crtc, &mut new_state, result);
+    }
+
+    fn atomic_disable(
+        crtc: &Crtc,
+        _old_state: &CrtcState,
+        mut new_state: CrtcStateMutator<'_, CrtcState>,
+        _state: &AtomicStateMutator<NovaDriver>,
+    ) {
+        if !new_state.active() {
+            let result = apply(crtc, &new_state);
+            retire_event(crtc, &mut new_state, result);
+        }
     }
 }
 
@@ -176,6 +245,125 @@ fn configuration(
     )
 }
 
+/// Binds the existing GEM backing before the DRM state is swapped.
+pub(super) fn prepare(state: &AtomicStateMutator<NovaDriver>) -> Result {
+    let Some(registration) = state.drm_dev().registration_guard() else {
+        // DRM shutdown follows unplug. Let its disabled state replace the
+        // installed state and release framebuffer references. Display retains
+        // the hardware backing until registration-data shutdown stops it.
+        for candidate in state.crtcs() {
+            let crtc = Crtc::try_from_opaque(candidate).map_err(|_| EINVAL)?;
+            if state.get_new_crtc_state(crtc).ok_or(EBUSY)?.active() {
+                return Err(ENODEV);
+            }
+        }
+        return Ok(());
+    };
+    for candidate in state.crtcs() {
+        let crtc = Crtc::try_from_opaque(candidate).map_err(|_| EINVAL)?;
+        let mut new_state = state.get_new_crtc_state(crtc).ok_or(EBUSY)?;
+        let new_data = new_state.driver_data_mut()?;
+        if new_data
+            .prepared
+            .as_ref()
+            .is_some_and(|slot| slot.lock().is_some())
+        {
+            return Err(EBUSY);
+        }
+        let prepared_slot = KBox::pin_init(new_mutex!(None), GFP_KERNEL)?;
+        let region = if let Some(configuration) = new_data.configuration.as_ref() {
+            let plane = state
+                .get_new_plane_state(crtc.primary_plane())
+                .ok_or(EINVAL)?;
+            let framebuffer = plane.framebuffer().ok_or(EINVAL)?;
+            let (layout, _) = check_framebuffer(framebuffer, &configuration.mode)?;
+            let offset = u64::from(layout.offset);
+            let object = framebuffer.gem_object(0)?;
+            let end = object.size().into_safe_cast();
+            Some(object.region(&registration, offset..end)?)
+        } else {
+            None
+        };
+        let old_state = state.get_old_crtc_state(crtc).ok_or(EINVAL)?;
+        let prepared = registration.registration_data_with(|reg| {
+            let slot = &mut *reg.display.lock();
+            let display = slot.as_mut().ok_or(ENODEV)?;
+            let result = match (new_data.configuration.as_ref(), region) {
+                (Some(configuration), Some(region)) => {
+                    let storage = KBox::<DisplayCommit>::new_uninit(GFP_KERNEL)?;
+                    display
+                        .prepare_commit(configuration, region)
+                        .map(|commit| Some(PreparedUpdate::Framebuffer(storage.write(commit))))
+                }
+                (None, None) => match old_state.configuration.as_ref() {
+                    Some(configuration) => display
+                        .prepare_disable_output(configuration.display_id)
+                        .map(|commit| commit.map(PreparedUpdate::Disable)),
+                    None => Ok(None),
+                },
+                _ => Err(EINVAL),
+            };
+            if result.is_err() && display.needs_shutdown() {
+                slot.take();
+            }
+            result
+        })?;
+        *prepared_slot.lock() = prepared;
+        new_data.prepared = Some(prepared_slot);
+    }
+    Ok(())
+}
+
+/// Releases prepared bindings when submission fails before the state swap.
+pub(super) fn abort(state: &AtomicStateMutator<NovaDriver>) {
+    for candidate in state.crtcs() {
+        let result = (|| {
+            let crtc = Crtc::try_from_opaque(candidate).map_err(|_| EINVAL)?;
+            let new_state = state.get_new_crtc_state(crtc).ok_or(EBUSY)?;
+            let Some(prepared) = new_state
+                .prepared
+                .as_ref()
+                .and_then(|slot| slot.lock().take())
+            else {
+                return Ok(());
+            };
+            let registration = state.drm_dev().registration_guard().ok_or(ENODEV)?;
+            registration.registration_data_with(|reg| {
+                let slot = &mut *reg.display.lock();
+                let display = slot.as_mut().ok_or(ENODEV)?;
+                let result = prepared.abort(display);
+                if result.is_err() {
+                    slot.take();
+                }
+                result
+            })
+        })();
+        if let Err(error) = result {
+            dev_err!(
+                state.drm_dev().as_ref(),
+                "Failed to abort display preparation: {:?}\n",
+                error
+            );
+        }
+    }
+}
+
+fn apply(crtc: &Crtc, state: &CrtcStateMutator<'_, CrtcState>) -> Result {
+    let Some(prepared) = state.prepared.as_ref().and_then(|slot| slot.lock().take()) else {
+        return if state.active() { Err(EIO) } else { Ok(()) };
+    };
+    let registration = crtc.drm_dev().registration_guard().ok_or(ENODEV)?;
+    registration.registration_data_with(|reg| {
+        let slot = &mut *reg.display.lock();
+        let display = slot.as_mut().ok_or(ENODEV)?;
+        let result = prepared.commit(display);
+        if result.is_err() {
+            slot.take();
+        }
+        result
+    })
+}
+
 fn check_framebuffer(
     framebuffer: &Framebuffer<NovaDriver>,
     mode: &DisplayMode,
@@ -214,4 +402,25 @@ fn check_framebuffer(
         return Err(EINVAL);
     }
     Ok((layout, format))
+}
+
+fn retire_event(crtc: &Crtc, state: &mut CrtcStateMutator<'_, CrtcState>, result: Result) {
+    let result = match result {
+        Ok(()) => state.send_pending_event(),
+        Err(error) => {
+            dev_err!(
+                crtc.drm_dev().as_ref(),
+                "Display commit failed: {:?}\n",
+                error
+            );
+            state.fail_pending_event(error)
+        }
+    };
+    if let Err(error) = result {
+        dev_err!(
+            crtc.drm_dev().as_ref(),
+            "Failed to retire display event: {:?}\n",
+            error
+        );
+    }
 }

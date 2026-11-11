@@ -100,7 +100,6 @@ impl<'bound> Display<'bound> {
     }
 
     /// Reports retained resources from a failed submission or cleanup.
-    #[expect(dead_code)]
     pub(crate) fn needs_shutdown(&self) -> bool {
         self.pending_commit.is_some()
     }
@@ -197,7 +196,6 @@ impl<'bound> Display<'bound> {
     }
 
     /// Prepares and binds GEM backing before DRM exchanges its software state.
-    #[expect(dead_code)]
     pub(crate) fn prepare_commit(
         &mut self,
         configuration: &DisplayConfiguration,
@@ -274,7 +272,6 @@ impl<'bound> Display<'bound> {
     }
 
     /// Releases a prepared binding when DRM has not exchanged its state.
-    #[expect(dead_code)]
     pub(crate) fn abort_commit(&mut self, mut commit: DisplayCommit) -> Result {
         if self.prepared_commit_id != Some(commit.id) {
             return Err(EINVAL);
@@ -293,7 +290,6 @@ impl<'bound> Display<'bound> {
     }
 
     /// Retains all referenced resources on failure; the caller must shut down display.
-    #[expect(dead_code)]
     pub(crate) fn commit(&mut self, commit: DisplayCommit) -> Result {
         if self.pending_commit.is_some() || self.prepared_commit_id != Some(commit.id) {
             return Err(EINVAL);
@@ -591,7 +587,6 @@ impl<'bound> Display<'bound> {
         }))
     }
 
-    #[expect(dead_code)]
     pub(crate) fn abort_disable_output(&mut self, commit: DisplayDisableCommit) -> Result {
         if self.prepared_commit_id != Some(commit.id) {
             return Err(EINVAL);

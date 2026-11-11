@@ -214,7 +214,6 @@ impl NovaObject {
     }
 
     /// Borrows the current binding long enough to obtain owned framebuffer backing.
-    #[expect(dead_code)]
     pub(crate) fn region(
         &self,
         dev: &NovaDevice<Registered>,
