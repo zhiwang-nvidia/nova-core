@@ -735,7 +735,6 @@ pub(crate) struct DisplayModesetBegin {
 }
 
 impl DisplayModesetBegin {
-    #[expect(dead_code)]
     pub(crate) fn new(display_mask: u32, target_display_mask: u32) -> Result<Self> {
         if display_mask == 0 {
             return Err(EINVAL);
@@ -802,7 +801,6 @@ pub(crate) struct DisplayModesetEnd {
 }
 
 impl DisplayModesetEnd {
-    #[expect(dead_code)]
     pub(crate) fn new(modeset_id: u64, end_mode: DisplayModesetEndMode) -> Result<Self> {
         if modeset_id == 0 {
             return Err(EINVAL);

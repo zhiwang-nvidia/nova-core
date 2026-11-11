@@ -48,6 +48,8 @@ use crate::{
                 DisplayGetPortState,
                 DisplayGetStaticInfo,
                 DisplayInit,
+                DisplayModesetBegin,
+                DisplayModesetEnd,
                 DisplayReadEdid,
                 DisplaySetInstanceMemory,
                 DisplayShutdown, //
@@ -57,7 +59,8 @@ use crate::{
             DisplayGetPortCapsReply,
             DisplayGetPortStateReply,
             DisplayGetStaticInfoReply,
-            DisplayInitReply, //
+            DisplayInitReply,
+            DisplayModesetEndMode, //
         },
         Gsp,
         GspBootContext, //
@@ -699,6 +702,33 @@ impl<'gpu> Gpu<'gpu> {
             .cmdq
             .send_gmc_command(command, |_| Ok(()))?;
         Ok(reply.edid)
+    }
+
+    pub(crate) fn display_modeset_begin(
+        &self,
+        display_mask: u32,
+        target_display_mask: u32,
+    ) -> Result<u64> {
+        let command = DisplayModesetBegin::new(display_mask, target_display_mask)?;
+        let reply = self
+            .gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
+        Ok(reply.modeset_id)
+    }
+
+    pub(crate) fn display_modeset_end(
+        &self,
+        modeset_id: u64,
+        end_mode: DisplayModesetEndMode,
+    ) -> Result {
+        let command = DisplayModesetEnd::new(modeset_id, end_mode)?;
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
+        Ok(())
     }
 
     pub(crate) fn display_set_instance_memory(&self, address: u64, size: u64) -> Result {

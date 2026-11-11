@@ -107,6 +107,29 @@ impl NovaCoreApi<'_> {
             .display_set_instance_memory(region.address(), region.size())
     }
 
+    /// Starts a modeset bracket covering the affected outputs.
+    ///
+    /// `target_display_mask` is the complete set of outputs to leave enabled,
+    /// including outputs outside the affected `display_mask`. An error may leave
+    /// a firmware bracket open; shut down display before submitting more work.
+    pub fn display_modeset_begin(
+        &self,
+        display_mask: u32,
+        target_display_mask: u32,
+    ) -> Result<u64> {
+        self.gpu
+            .display_modeset_begin(display_mask, target_display_mask)
+    }
+
+    /// Ends the modeset bracket identified by a token returned on this GPU.
+    ///
+    /// Success consumes the token but does not prove framebuffer retirement.
+    /// An error may leave the bracket open; retain resources until display is
+    /// shut down successfully.
+    pub fn display_modeset_end(&self, modeset_id: u64, end_mode: DisplayModesetEndMode) -> Result {
+        self.gpu.display_modeset_end(modeset_id, end_mode.into())
+    }
+
     /// Returns the GPU [`GspStaticInfo`].
     pub fn gsp_static_info(&self) -> &GspStaticInfo {
         self.gpu.gsp_static_info()
@@ -143,6 +166,21 @@ impl<'a> NovaCoreApiHandle<'a> {
         self.adev
             .registration_data_with::<ForLt!(NovaCoreApi<'_>), R>(f)
             .expect("TypeId was validated in NovaCoreApiHandle::of()")
+    }
+}
+
+/// How to end a display modeset bracket.
+#[derive(Clone, Copy)]
+pub enum DisplayModesetEndMode {
+    /// Completes the bracket after verifying the target set of enabled outputs.
+    Commit,
+}
+
+impl From<DisplayModesetEndMode> for crate::gsp::commands::DisplayModesetEndMode {
+    fn from(end_mode: DisplayModesetEndMode) -> Self {
+        match end_mode {
+            DisplayModesetEndMode::Commit => Self::Commit,
+        }
     }
 }
 
