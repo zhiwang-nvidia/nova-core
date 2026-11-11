@@ -22,6 +22,7 @@ pub(crate) use mode::{
     DisplayConfiguration,
     DisplayMode, //
 };
+pub(crate) use output::DisplayOutput;
 
 use kernel::{
     auxiliary,

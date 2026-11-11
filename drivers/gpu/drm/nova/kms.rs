@@ -3,6 +3,8 @@
 //! HDMI modesetting through the display channels.
 
 #[expect(dead_code)]
+mod connector;
+#[expect(dead_code)]
 mod encoder;
 #[expect(dead_code)]
 mod plane;

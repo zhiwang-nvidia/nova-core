@@ -77,7 +77,6 @@ impl Display<'_> {
     }
 
     /// Reads EDID for an output admitted by GSP-RM's static display mask.
-    #[expect(dead_code)]
     pub(crate) fn read_edid(&self, display_id: u32) -> Result<KVec<u8>> {
         self.validate_display_id(display_id)?;
         self.api.with(|core| core.display_read_edid(display_id))
