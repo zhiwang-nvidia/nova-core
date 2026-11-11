@@ -32,6 +32,7 @@ use crate::{
 
 mod display_capability;
 mod display_channel;
+mod display_hdmi;
 mod vram;
 
 pub use display_capability::{

@@ -42,7 +42,6 @@ impl Gpu<'_> {
         Ok(self.gsp_resources.bar)
     }
 
-    #[expect(dead_code)]
     pub(crate) fn display_configure_hdmi_packets(&self, head: u32, avi: &[u8; 17]) -> Result {
         let bar = self.display_hdmi_bar()?;
         validate_avi(avi)?;
@@ -51,7 +50,6 @@ impl Gpu<'_> {
         program_avi(sf, avi)
     }
 
-    #[expect(dead_code)]
     pub(crate) fn display_set_hdmi_avmute(&self, head: u32, mute: bool) -> Result {
         let bar = self.display_hdmi_bar()?;
         set_avmute(bar, head, mute)
