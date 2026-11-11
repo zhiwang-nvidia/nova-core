@@ -2,6 +2,8 @@
 
 //! Display support.
 
+mod window;
+
 use kernel::{
     auxiliary,
     device::{
@@ -26,6 +28,7 @@ pub(crate) struct Display<'bound> {
     caps: DisplayCaps,
     #[expect(dead_code)]
     hw_static_info: DisplayStaticInfo,
+    windows: KVec<window::Window>,
 }
 
 impl<'bound> Display<'bound> {
@@ -56,6 +59,13 @@ impl<'bound> Display<'bound> {
                 );
             })?;
 
+        let mut windows = KVec::new();
+        for id in 0..u32::BITS {
+            if hw_static_info.window_mask & (1 << id) != 0 {
+                windows.push(window::Window { id }, GFP_KERNEL)?;
+            }
+        }
+
         cleanup.dismiss();
 
         Ok(Self {
@@ -63,6 +73,7 @@ impl<'bound> Display<'bound> {
             api,
             caps,
             hw_static_info,
+            windows,
         })
     }
 }
