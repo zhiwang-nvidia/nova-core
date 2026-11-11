@@ -342,7 +342,6 @@ impl<'bound, T> Channel<'bound, T> {
         self.notifier_buffer.as_ref().ok_or(ENODEV)?.wait(status)
     }
 
-    #[expect(dead_code)]
     pub(super) fn bind_surface_descriptor(
         &mut self,
         hal: &mut dyn DisplayHal<'bound>,
@@ -355,7 +354,6 @@ impl<'bound, T> Channel<'bound, T> {
         hal.bind_surface_descriptor(descriptor, info.ramht_client_id(), info.hardware_index())
     }
 
-    #[expect(dead_code)]
     pub(super) fn unbind_surface_descriptor(
         &mut self,
         hal: &mut dyn DisplayHal<'bound>,
