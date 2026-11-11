@@ -8,6 +8,7 @@ mod framebuffer;
 mod hal;
 mod methods;
 mod mode;
+mod output;
 mod scaler;
 mod sor;
 mod tables;
