@@ -57,12 +57,14 @@ pub(crate) struct ContextDmaDescriptorId {
     /// Handle used by channel methods and RAMHT lookup.
     pub(crate) handle: u32,
     /// Slot index within the pool.
-    index: usize,
+    pub(super) index: usize,
 }
 
 /// A context DMA descriptor.
-struct ContextDmaDescriptor {
+pub(super) struct ContextDmaDescriptor {
     id: ContextDmaDescriptorId,
+    /// Number of RAMHT entries referencing this descriptor.
+    pub(super) bindings: u32,
     /// Target VRAM region described by this descriptor.
     _target_region: VramRegion,
 }
@@ -117,8 +119,8 @@ impl ContextDmaDescriptor {
 }
 
 impl ContextDmaPool {
-    const BASE: usize = SZ_8K;
-    const STRIDE: usize = 32;
+    pub(super) const BASE: usize = SZ_8K;
+    pub(super) const STRIDE: usize = 32;
     const COUNT: usize = (SZ_64K - Self::BASE) / Self::STRIDE;
 }
 
@@ -163,6 +165,7 @@ impl ContextDmaPool {
         let id = ContextDmaDescriptorId { handle, index };
         let context_dma = ContextDmaDescriptor {
             id,
+            bindings: 0,
             _target_region: target_region,
         };
 
@@ -175,7 +178,10 @@ impl ContextDmaPool {
         Ok(id)
     }
 
-    fn lookup(&mut self, id: ContextDmaDescriptorId) -> Result<&mut ContextDmaDescriptor> {
+    pub(super) fn lookup(
+        &mut self,
+        id: ContextDmaDescriptorId,
+    ) -> Result<&mut ContextDmaDescriptor> {
         self.descriptors
             .get_mut(id.index)
             .and_then(Option::as_mut)
@@ -184,7 +190,9 @@ impl ContextDmaPool {
     }
 
     pub(super) fn free(&mut self, id: ContextDmaDescriptorId) -> Result {
-        self.lookup(id)?;
+        if self.lookup(id)?.bindings != 0 {
+            return Err(EBUSY);
+        }
         self.descriptors[id.index] = None;
         Ok(())
     }

@@ -4,3 +4,4 @@
 
 pub(super) mod context_dma;
 pub(super) mod instance_memory;
+mod ramht;
