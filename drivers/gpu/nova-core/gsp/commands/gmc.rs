@@ -211,7 +211,6 @@ pub(crate) struct DisplayInit {
     payload: KVVec<u64>,
 }
 
-#[expect(dead_code)]
 impl DisplayInit {
     /// Builds the request with its required zero flags field.
     pub(crate) fn new() -> Result<Self> {
@@ -275,7 +274,6 @@ impl GmcReply for DisplayInitReply {
     }
 }
 
-#[expect(dead_code)]
 pub(crate) struct DisplayShutdown;
 
 impl GmcCommand for DisplayShutdown {

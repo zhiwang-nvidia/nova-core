@@ -35,6 +35,13 @@ use crate::{
     gsp::{
         self,
         cmdq::Cmdq,
+        commands::{
+            gmc::{
+                DisplayInit,
+                DisplayShutdown, //
+            },
+            DisplayInitReply, //
+        },
         Gsp,
         GspBootContext, //
     },
@@ -595,6 +602,21 @@ impl<'gpu> Gpu<'gpu> {
                 )
             },
         })
+    }
+
+    pub(crate) fn display_init(&self) -> Result<DisplayInitReply> {
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(DisplayInit::new()?, |_| Ok(()))
+    }
+
+    pub(crate) fn display_shutdown(&self) -> Result {
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(DisplayShutdown, |_| Ok(()))?;
+        Ok(())
     }
 
     /// Returns the static GPU configuration that GSP-RM reported at boot.
