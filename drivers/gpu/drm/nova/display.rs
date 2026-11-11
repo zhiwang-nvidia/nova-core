@@ -23,13 +23,18 @@ use nova_core::api::{
     NovaCoreApiHandle, //
 };
 
+use channel::{
+    Channel,
+    Core, //
+};
+
 pub(crate) struct Display<'bound> {
     dev: &'bound device::Device<Bound>,
     api: NovaCoreApiHandle<'bound>,
+    core_channel: Option<Channel<'bound, Core>>,
     hal: KBox<dyn hal::DisplayHal<'bound> + 'bound>,
     #[expect(dead_code)]
     caps: DisplayCaps,
-    #[expect(dead_code)]
     hw_static_info: DisplayStaticInfo,
     windows: KVec<window::Window>,
 }
@@ -82,9 +87,10 @@ impl<'bound> Display<'bound> {
 
         cleanup.dismiss();
 
-        let display = Self {
+        let mut display = Self {
             dev: adev.as_ref(),
             api,
+            core_channel: None,
             hal,
             caps,
             hw_static_info,
@@ -99,16 +105,32 @@ impl<'bound> Display<'bound> {
                 dev_err!(adev, "Failed to set display instance memory: {:?}\n", error);
             })?;
 
+        let channel = Channel::<Core>::new(&display.api, &display.hw_static_info)?;
+        let channel = display.core_channel.insert(channel);
+        channel
+            .create(&display.hw_static_info, &mut *display.hal)
+            .inspect_err(|error| {
+                dev_err!(adev, "Failed to create core channel: {:?}\n", error);
+            })?;
+
         Ok(display)
     }
 }
 
 impl Drop for Display<'_> {
     fn drop(&mut self) {
+        if let Some(channel) = self.core_channel.as_mut() {
+            if let Err(error) = channel.destroy(&mut *self.hal) {
+                dev_err!(self.dev, "Failed to destroy core channel: {:?}\n", error);
+            }
+        }
         if let Err(error) = self.api.with(|core| core.display_shutdown()) {
             dev_err!(self.dev, "Failed to shut down display: {:?}\n", error);
             // GSP-RM may still reference the physical backing; the CPU mapping can be dropped.
             core::mem::forget(self.hal.instance_memory().clone());
+            if let Some(channel) = self.core_channel.as_ref() {
+                channel.retain_backing();
+            }
         }
     }
 }

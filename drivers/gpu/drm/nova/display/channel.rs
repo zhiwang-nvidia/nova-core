@@ -17,6 +17,12 @@
 //!
 //! Notification writes are triggered by channel methods, so the buffer must first
 //! be bound to the channel through a surface descriptor.
+//!
+//! # Core Channel
+//!
+//! Each GPU has one core channel, shared by all display heads. It carries methods
+//! for head timings, output configuration and window-to-head assignment.
+//! It must be created before window, window immediate and cursor channels.
 
 use kernel::{
     io::poll::read_poll_timeout,
@@ -197,6 +203,9 @@ impl<'bound> NotifierBuffer<'bound> {
     }
 }
 
+/// Identifies the core DMA channel in [`Channel`].
+pub(super) struct Core;
+
 pub(super) struct Channel<'bound, T> {
     api: NovaCoreApiHandle<'bound>,
     pushbuffer: PushBuffer<'bound>,
@@ -262,7 +271,6 @@ impl<'bound, T> Channel<'bound, T> {
         self.pushbuffer.advance(info)
     }
 
-    #[expect(dead_code)]
     fn alloc_channel_buffers(
         api: &NovaCoreApiHandle<'bound>,
         info: &DisplayStaticInfo,
@@ -292,7 +300,6 @@ impl<'bound, T> Channel<'bound, T> {
         })
     }
 
-    #[expect(dead_code)]
     fn create_channel_inner(
         &mut self,
         kind: DisplayChannelKind,
@@ -319,7 +326,14 @@ impl<'bound, T> Channel<'bound, T> {
         Ok(())
     }
 
-    #[expect(dead_code)]
+    /// Retains physical buffers when display shutdown cannot establish that DMA has stopped.
+    pub(super) fn retain_backing(&self) {
+        core::mem::forget(self.pushbuffer.region.clone());
+        if let Some(notifier) = self.notifier_buffer.as_ref() {
+            core::mem::forget(notifier.region.clone());
+        }
+    }
+
     pub(super) fn destroy(&mut self, hal: &mut dyn DisplayHal<'bound>) -> Result {
         self.created = false;
         if let Some(info) = self.info.as_ref() {
@@ -331,5 +345,25 @@ impl<'bound, T> Channel<'bound, T> {
             notifier_buffer.unbind(hal)?;
         }
         Ok(())
+    }
+}
+
+impl<'bound> Channel<'bound, Core> {
+    pub(super) fn new(api: &NovaCoreApiHandle<'bound>, info: &DisplayStaticInfo) -> Result<Self> {
+        Self::alloc_channel_buffers(api, info, Core, true)
+    }
+
+    pub(super) fn create(
+        &mut self,
+        info: &DisplayStaticInfo,
+        hal: &mut dyn DisplayHal<'bound>,
+    ) -> Result {
+        self.create_channel_inner(
+            DisplayChannelKind::Core,
+            0,
+            info.core_class,
+            info.num_channels,
+            hal,
+        )
     }
 }
