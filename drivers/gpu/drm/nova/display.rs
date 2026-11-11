@@ -14,6 +14,7 @@ use kernel::{
 
 use nova_core::api::{
     DisplayCaps,
+    DisplayStaticInfo,
     NovaCoreApi,
     NovaCoreApiHandle, //
 };
@@ -23,6 +24,8 @@ pub(crate) struct Display<'bound> {
     api: NovaCoreApiHandle<'bound>,
     #[expect(dead_code)]
     caps: DisplayCaps,
+    #[expect(dead_code)]
+    hw_static_info: DisplayStaticInfo,
 }
 
 impl<'bound> Display<'bound> {
@@ -43,6 +46,15 @@ impl<'bound> Display<'bound> {
         let caps = api.with(|core| core.display_init()).inspect_err(|error| {
             dev_err!(adev, "Failed to initialize display: {:?}\n", error);
         })?;
+        let hw_static_info = api
+            .with(|core| core.display_static_info())
+            .inspect_err(|error| {
+                dev_err!(
+                    adev,
+                    "Failed to query display static information: {:?}\n",
+                    error
+                );
+            })?;
 
         cleanup.dismiss();
 
@@ -50,6 +62,7 @@ impl<'bound> Display<'bound> {
             dev: adev.as_ref(),
             api,
             caps,
+            hw_static_info,
         })
     }
 }
