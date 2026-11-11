@@ -2,17 +2,30 @@
 
 //! Display window component.
 
-use super::Display;
+use super::{
+    channel::{
+        Channel,
+        WindowDma, //
+    },
+    Display, //
+};
 
 /// A display window.
-pub(super) struct Window {
+pub(super) struct Window<'bound> {
     pub(super) id: u32,
+    pub(super) channel: Option<Channel<'bound, WindowDma>>,
 }
 
-impl Display<'_> {
+impl Window<'_> {
+    pub(super) fn new(id: u32) -> Self {
+        Self { id, channel: None }
+    }
+}
+
+impl<'bound> Display<'bound> {
     /// Finds an enumerated window by its hardware ID.
     #[expect(dead_code)]
-    pub(super) fn window(&self, id: u32) -> Option<&Window> {
+    pub(super) fn window(&self, id: u32) -> Option<&Window<'bound>> {
         self.windows.iter().find(|window| window.id == id)
     }
 }

@@ -23,6 +23,12 @@
 //! Each GPU has one core channel, shared by all display heads. It carries methods
 //! for head timings, output configuration and window-to-head assignment.
 //! It must be created before window, window immediate and cursor channels.
+//!
+//! # Window Channel
+//!
+//! Each window channel programs the framebuffer for one display window,
+//! including its address, format, size and layout. The core channel assigns the
+//! window to a display head.
 
 use kernel::{
     io::poll::read_poll_timeout,
@@ -206,13 +212,17 @@ impl<'bound> NotifierBuffer<'bound> {
 /// Identifies the core DMA channel in [`Channel`].
 pub(super) struct Core;
 
+/// Identifies a window DMA channel and its hardware window.
+pub(super) struct WindowDma {
+    pub(super) index: u32,
+}
+
 pub(super) struct Channel<'bound, T> {
     api: NovaCoreApiHandle<'bound>,
     pushbuffer: PushBuffer<'bound>,
     notifier_buffer: Option<NotifierBuffer<'bound>>,
     info: Option<DisplayChannelInfo<'bound>>,
     created: bool,
-    #[expect(dead_code)]
     pub(super) kind: T,
 }
 
@@ -362,6 +372,33 @@ impl<'bound> Channel<'bound, Core> {
             DisplayChannelKind::Core,
             0,
             info.core_class,
+            info.num_channels,
+            hal,
+        )
+    }
+}
+
+impl<'bound> Channel<'bound, WindowDma> {
+    pub(super) fn new(
+        api: &NovaCoreApiHandle<'bound>,
+        info: &DisplayStaticInfo,
+        index: u32,
+    ) -> Result<Self> {
+        if index >= u32::BITS || info.window_mask & (1 << index) == 0 {
+            return Err(EINVAL);
+        }
+        Self::alloc_channel_buffers(api, info, WindowDma { index }, true)
+    }
+
+    pub(super) fn create(
+        &mut self,
+        info: &DisplayStaticInfo,
+        hal: &mut dyn DisplayHal<'bound>,
+    ) -> Result {
+        self.create_channel_inner(
+            DisplayChannelKind::Window,
+            self.kind.index,
+            info.window_class,
             info.num_channels,
             hal,
         )
