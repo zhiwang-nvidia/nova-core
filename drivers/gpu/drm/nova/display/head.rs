@@ -3,7 +3,10 @@
 //! Display head component.
 
 use super::{
-    mode::DisplayMode,
+    mode::{
+        DisplayConfiguration,
+        DisplayMode, //
+    },
     Display, //
 };
 
@@ -12,6 +15,12 @@ pub(super) struct Head {
     pub(super) id: u32,
     pub(super) mode: Option<DisplayMode>,
     pub(super) limited_range: bool,
+}
+
+impl Head {
+    pub(super) fn matches_configuration(&self, configuration: &DisplayConfiguration) -> bool {
+        self.mode == Some(configuration.mode) && self.limited_range == configuration.limited_range
+    }
 }
 
 impl Display<'_> {

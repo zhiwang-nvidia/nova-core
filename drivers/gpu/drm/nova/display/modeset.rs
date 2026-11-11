@@ -54,6 +54,12 @@ use super::{
     DisplayMode, //
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommitKind {
+    Framebuffer,
+    Modeset,
+}
+
 /// Resources and scope for one update, prepared before hardware state changes.
 pub(crate) struct DisplayCommit {
     id: u64,
@@ -66,6 +72,7 @@ pub(crate) struct DisplayCommit {
     head_to_disable: Option<usize>,
     /// Window indices whose old framebuffers must finish before being unbound.
     window_framebuffers_to_retire: KVec<usize>,
+    kind: CommitKind,
     framebuffer: Framebuffer,
     stream: Option<Stream>,
 }
@@ -205,15 +212,38 @@ impl<'bound> Display<'bound> {
         window.immediate_channel.as_ref().ok_or(ENODEV)?;
         self.core_channel.as_ref().ok_or(ENODEV)?;
 
+        let previous = self.streams.first();
+        let framebuffer_only = previous
+            .is_some_and(|stream| stream.matches_configuration(configuration))
+            && head.matches_configuration(configuration)
+            && window.head == Some(head.id)
+            && window
+                .framebuffer
+                .as_ref()
+                .is_some_and(|framebuffer| framebuffer.matches_layout(configuration));
+        let kind = if framebuffer_only {
+            CommitKind::Framebuffer
+        } else {
+            CommitKind::Modeset
+        };
         let (stream_to_release, head_to_disable, window_framebuffers_to_retire) =
-            if let Some(previous) = self.streams.first() {
+            if kind == CommitKind::Framebuffer {
+                let mut windows = KVec::new();
+                windows.push(window_index, GFP_KERNEL)?;
+                (None, None, windows)
+            } else if let Some(previous) = previous {
                 let (head, windows) = self.prepare_output_disable(previous.display_id)?;
                 (Some(previous.display_id), head, windows)
             } else {
                 (None, None, KVec::new())
             };
         let framebuffer = Framebuffer::new(configuration, region)?;
-        self.streams.reserve(1, GFP_KERNEL)?;
+        let stream = if kind == CommitKind::Modeset {
+            self.streams.reserve(1, GFP_KERNEL)?;
+            Some(Stream::new(configuration, head.id))
+        } else {
+            None
+        };
         let mut commit = DisplayCommit {
             id,
             configuration: *configuration,
@@ -222,8 +252,9 @@ impl<'bound> Display<'bound> {
             stream_to_release,
             head_to_disable,
             window_framebuffers_to_retire,
+            kind,
             framebuffer,
-            stream: Some(Stream::new(configuration, head.id)),
+            stream,
         };
         let channel = self.windows[window_index].channel.as_mut().ok_or(ENODEV)?;
         if let Err(error) = commit.framebuffer.bind(channel, &mut *self.hal) {
@@ -270,11 +301,15 @@ impl<'bound> Display<'bound> {
         self.prepared_commit_id = None;
         let head_index = commit.head_index;
         let window_index = commit.window_index;
+        let kind = commit.kind;
         let stream_to_release = commit.stream_to_release;
         let head_to_disable = commit.head_to_disable;
         self.pending_commit = Some(commit);
 
-        self.program_modeset()?;
+        match kind {
+            CommitKind::Framebuffer => self.commit_framebuffer()?,
+            CommitKind::Modeset => self.program_modeset()?,
+        }
         // Hardware has accepted the change; release the retired resources.
         let pending = self.pending_commit.as_ref().ok_or(EIO)?;
         for &index in &pending.window_framebuffers_to_retire {
@@ -321,6 +356,29 @@ impl<'bound> Display<'bound> {
         window.head = Some(head.id);
         window.framebuffer = Some(pending.framebuffer);
         Ok(())
+    }
+
+    fn commit_framebuffer(&mut self) -> Result {
+        let pending = self.pending_commit.as_ref().ok_or(EIO)?;
+        let core = self.core_channel.as_mut().ok_or(ENODEV)?;
+        let window = &mut self.windows[pending.window_index];
+        let channel = window.channel.as_mut().ok_or(ENODEV)?;
+        window.immediate_channel.as_ref().ok_or(ENODEV)?;
+
+        // One notifier record is available per window. Retire its previous framebuffer
+        // before reusing the record; the head, SOR and HDMI link remain configured.
+        self.hal.emit_disable_window(channel)?;
+        channel.update(&*self.hal, core, None, Update::WaitForRetire)?;
+        self.hal.emit_window_framebuffer_configuration(
+            channel,
+            &pending.configuration.mode,
+            &pending.configuration.framebuffer,
+            pending.framebuffer.descriptor()?,
+        )?;
+        window.emit_set_window_position(&*self.hal, 0, 0)?;
+        let channel = window.channel.as_mut().ok_or(ENODEV)?;
+        let immediate = window.immediate_channel.as_mut().ok_or(ENODEV)?;
+        channel.update(&*self.hal, core, Some(immediate), Update::WaitForActive)
     }
 
     /// Disables initial head auxiliary accesses and detaches heads from SORs.

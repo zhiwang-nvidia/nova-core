@@ -59,6 +59,7 @@ pub(super) struct Framebuffer {
     region: VramRegion,
     descriptor: Option<SurfaceDescriptor>,
     bound: bool,
+    layout: FramebufferLayout,
 }
 
 impl Framebuffer {
@@ -78,7 +79,12 @@ impl Framebuffer {
             region,
             descriptor: None,
             bound: false,
+            layout,
         })
+    }
+
+    pub(super) fn matches_layout(&self, configuration: &DisplayConfiguration) -> bool {
+        self.layout == configuration.framebuffer
     }
 
     pub(super) fn retain_backing(&self) {
