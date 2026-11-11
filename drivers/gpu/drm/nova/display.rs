@@ -16,6 +16,11 @@ mod sor;
 mod tables;
 mod window;
 
+pub(crate) use mode::{
+    DisplayConfiguration,
+    DisplayMode, //
+};
+
 use kernel::{
     auxiliary,
     device::{
@@ -46,7 +51,6 @@ pub(crate) struct Display<'bound> {
     pending_commit: Option<modeset::DisplayCommit>,
     core_channel: Option<Channel<'bound, Core>>,
     hal: KBox<dyn hal::DisplayHal<'bound> + 'bound>,
-    #[expect(dead_code)]
     caps: DisplayCaps,
     hw_static_info: DisplayStaticInfo,
     heads: KVec<head::Head>,

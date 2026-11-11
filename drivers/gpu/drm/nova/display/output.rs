@@ -42,7 +42,6 @@ pub(crate) struct DisplayOutput {
 }
 
 impl Display<'_> {
-    #[expect(dead_code)]
     pub(crate) fn outputs(&self) -> Result<KVec<DisplayOutput>> {
         let mut outputs = KVec::new();
         for index in 0..u32::BITS {

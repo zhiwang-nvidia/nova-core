@@ -37,6 +37,36 @@ pub(crate) struct DisplayMode {
     pub(crate) negative_vsync: bool,
 }
 
+/// Display output configuration and its framebuffer.
+///
+/// The current modeset implementation supports one active HDMI output with
+/// progressive RGB8 timings and an unscaled full-screen image taken from the
+/// framebuffer's top-left corner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DisplayConfiguration {
+    /// Single-bit GSP-RM display identifier.
+    pub(crate) display_id: u32,
+    /// Progressive mode selected from the sink's advertised modes.
+    pub(crate) mode: DisplayMode,
+    /// Complete framebuffer layout, independently of the visible mode.
+    pub(crate) framebuffer: FramebufferLayout,
+    /// GMC HDMI sink bits: above-340-MHz support, low-rate scrambling and SCDC.
+    pub(crate) hdmi_sink_caps: u32,
+    /// Packed AVI infoframe, including its header and checksum.
+    pub(crate) avi_infoframe: [u8; 17],
+    /// Whether the HDMI output converts framebuffer RGB to limited range.
+    pub(crate) limited_range: bool,
+}
+
+impl DisplayConfiguration {
+    /// Checks that the framebuffer can supply the visible mode.
+    ///
+    /// Generation-specific timing and pitch limits are checked by the HAL.
+    pub(crate) fn validate_framebuffer(&self) -> Result {
+        self.mode.validate_framebuffer(&self.framebuffer)
+    }
+}
+
 /// Sync-relative raster coordinates shared by DISP 4.x and 5.x.
 ///
 /// These values are unpacked pixel and line counts. Their method field widths
