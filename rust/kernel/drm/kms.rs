@@ -231,6 +231,28 @@ pub trait KmsDriver: Driver {
         build_error::build_error("This function should not be reachable")
     }
 
+    /// Prepare and submit a validated atomic commit.
+    ///
+    /// Drivers can prepare their resources before swapping state through
+    /// [`atomic::AtomicCommit`]. Without this hook, DRM uses its commit helper.
+    fn atomic_commit(_commit: atomic::AtomicCommit<'_, Self>) -> Result
+    where
+        Self: Sized,
+    {
+        build_error::build_error("This function should not be reachable")
+    }
+
+    /// Release driver preparation when an atomic commit fails before state swap.
+    ///
+    /// This may be called before preparation has started; release only resources
+    /// installed in the candidate state. Successful submissions skip this hook.
+    fn atomic_commit_abort(_state: &atomic::AtomicStateMutator<Self>)
+    where
+        Self: Sized,
+    {
+        build_error::build_error("This function should not be reachable")
+    }
+
     /// The optional [`atomic_commit_tail`] callback for this [`Device`].
     ///
     /// It must return a [`CommittedAtomicState`] to prove that it has signaled completion of the hw
@@ -267,7 +289,11 @@ impl<T: KmsDriver> private::KmsImpl for T {
             },
             fb_create: Some(bindings::drm_gem_fb_create),
             mode_valid: None,
-            atomic_commit: Some(bindings::drm_atomic_helper_commit),
+            atomic_commit: if Self::HAS_ATOMIC_COMMIT {
+                Some(atomic::atomic_commit_callback::<Self>)
+            } else {
+                Some(bindings::drm_atomic_helper_commit)
+            },
             get_format_info: None,
             atomic_state_free: None,
             atomic_state_alloc: None,

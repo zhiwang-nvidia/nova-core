@@ -605,7 +605,7 @@ impl<T: DriverCrtcState> Sealed for CrtcState<T> {}
 ///
 /// [`struct drm_crtc`]: srctree/include/drm/drm_crtc.h
 /// [`struct drm_crtc_state`]: srctree/include/drm/drm_crtc.h
-pub trait DriverCrtcState: Clone + Default + Unpin {
+pub trait DriverCrtcState: Send + Sync + Clone + Default + Unpin {
     /// The parent CRTC driver for this CRTC state
     type Crtc: DriverCrtc<State = Self>
     where

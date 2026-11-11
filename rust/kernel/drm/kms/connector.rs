@@ -918,7 +918,7 @@ pub struct ConnectorState<T: DriverConnectorState> {
 ///
 /// [`struct drm_connector`]: srctree/include/drm/drm_connector.h
 /// [`struct drm_connector_state`]: srctree/include/drm/drm_connector.h
-pub trait DriverConnectorState: Clone + Default + Sized {
+pub trait DriverConnectorState: Send + Sync + Clone + Default + Sized {
     /// The parent [`DriverConnector`].
     type Connector: DriverConnector;
 }

@@ -3,6 +3,11 @@
 //! [`struct drm_atomic_commit`] related bindings for rust.
 //!
 //! [`struct drm_atomic_commit`]: srctree/include/drm/drm_atomic.h
+mod commit;
+
+pub(super) use commit::atomic_commit_callback;
+pub use commit::AtomicCommit;
+
 use super::{connector::*, crtc::*, plane::*, KmsDriver, ModeObject};
 use crate::{
     bindings,

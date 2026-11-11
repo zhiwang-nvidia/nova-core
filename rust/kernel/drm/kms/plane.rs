@@ -761,7 +761,7 @@ pub struct PlaneState<T: DriverPlaneState> {
 ///
 /// [`struct drm_plane`]: srctree/include/drm/drm_plane.h
 /// [`struct drm_plane_state`]: srctree/include/drm/drm_plane.h
-pub trait DriverPlaneState: Clone + Default + Sized {
+pub trait DriverPlaneState: Send + Sync + Clone + Default + Sized {
     /// The type for this driver's drm_plane implementation
     type Plane: DriverPlane;
 }
