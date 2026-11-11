@@ -15,9 +15,12 @@ use kernel::{
     },
     prelude::*,
     sizes::SZ_16M,
-    sync::atomic::{
-        Atomic,
-        Relaxed, //
+    sync::{
+        atomic::{
+            Atomic,
+            Relaxed, //
+        },
+        Arc, //
     },
     types::ForLt,
 };
@@ -164,7 +167,11 @@ impl pci::Driver for NovaCoreDriver {
                         // never recycles IDs.
                         AUXILIARY_ID_COUNTER.fetch_add(1, Relaxed),
                         crate::MODULE_NAME,
-                        NovaCoreApi { gpu, pdev },
+                        NovaCoreApi {
+                            gpu,
+                            pdev,
+                            vram_owner: Arc::new((), GFP_KERNEL)?,
+                        },
                     )?
                 }
             },

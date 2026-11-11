@@ -60,6 +60,7 @@ use crate::{
     mm::{
         bar_user::BarUser,
         pagetable::MmuVersion,
+        vram::VramBlock,
         GpuMm,
         VramAddress, //
     },
@@ -607,6 +608,10 @@ impl<'gpu> Gpu<'gpu> {
                 )
             },
         })
+    }
+
+    pub(crate) fn alloc_vram(&self, size: Alignment) -> Result<VramBlock> {
+        self.mm.lock().alloc_vram(size)
     }
 
     pub(crate) fn display_init(&self) -> Result<DisplayInitReply> {

@@ -11,6 +11,7 @@ use kernel::{
     device::Bound,
     pci,
     prelude::*,
+    sync::Arc,
     types::ForLt, //
 };
 
@@ -26,10 +27,18 @@ use crate::{
     }, //
 };
 
+mod vram;
+pub use vram::{
+    VramBlock,
+    VramRegion, //
+};
+
 /// API handle for the auxiliary bus child drivers to interact with nova-core.
 pub struct NovaCoreApi<'bound> {
     pub(crate) gpu: Pin<&'bound Gpu<'bound>>,
     pub(crate) pdev: &'bound pci::Device<Bound>,
+    // Distinguishes allocations from this binding, including after PCI rebind.
+    pub(crate) vram_owner: Arc<()>,
 }
 
 impl NovaCoreApi<'_> {
