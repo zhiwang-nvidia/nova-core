@@ -17,7 +17,10 @@ use super::{
     },
     format::DisplayPixelFormat,
     hal::DisplayMethodHal,
-    methods::core,
+    methods::{
+        core,
+        window_immediate, //
+    },
     mode::DisplayMode,
     Display, //
 };
@@ -116,6 +119,26 @@ impl Window<'_> {
             core::WINDOW_SET_WINDOW_USAGE_BOUNDS + offset,
             &[max_fetch | core::WINDOW_USAGE_INPUT_SCALER_TAPS_2],
         )
+    }
+
+    /// Queues the window's output position.
+    ///
+    /// SET_POINT_OUT is shared by DISP 4.x and 5.x. UPDATE emission is separate
+    /// because its encoding differs between classes.
+    #[expect(dead_code)]
+    pub(super) fn emit_set_window_position(
+        &mut self,
+        hal: &dyn DisplayMethodHal,
+        x: i16,
+        y: i16,
+    ) -> Result {
+        let immediate = self.immediate_channel.as_mut().ok_or(ENODEV)?;
+        if immediate.kind.index >= core::WINDOW_COUNT {
+            return Err(EINVAL);
+        }
+        let position = u32::from(x.cast_unsigned())
+            | (u32::from(y.cast_unsigned()) << window_immediate::SET_POINT_OUT_Y_SHIFT);
+        immediate.emit(hal, window_immediate::SET_POINT_OUT, &[position])
     }
 }
 
