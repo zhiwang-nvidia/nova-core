@@ -91,6 +91,11 @@ impl NovaCoreApi<'_> {
             .map(DisplayPortCaps::from)
     }
 
+    /// Returns a display's Extended Display Identification Data (EDID).
+    pub fn display_read_edid(&self, display_id: u32) -> Result<KVec<u8>> {
+        self.gpu.display_read_edid(display_id)
+    }
+
     /// Sets GSP-RM's display instance memory to a VRAM region.
     ///
     /// Keep the region alive until display shutdown succeeds, including when this call fails.

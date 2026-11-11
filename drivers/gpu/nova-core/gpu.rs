@@ -48,6 +48,7 @@ use crate::{
                 DisplayGetPortState,
                 DisplayGetStaticInfo,
                 DisplayInit,
+                DisplayReadEdid,
                 DisplaySetInstanceMemory,
                 DisplayShutdown, //
             },
@@ -688,6 +689,16 @@ impl<'gpu> Gpu<'gpu> {
             .gsp
             .cmdq
             .send_gmc_command(command, |_| Ok(()))
+    }
+
+    pub(crate) fn display_read_edid(&self, display_id: u32) -> Result<KVec<u8>> {
+        let command = DisplayReadEdid::new(display_id)?;
+        let reply = self
+            .gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
+        Ok(reply.edid)
     }
 
     pub(crate) fn display_set_instance_memory(&self, address: u64, size: u64) -> Result {

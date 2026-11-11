@@ -170,7 +170,6 @@ impl DisplayGetPortStateReply {
 }
 
 pub(crate) struct DisplayReadEdidReply {
-    #[expect(dead_code)]
     pub(crate) edid: KVec<u8>,
 }
 
