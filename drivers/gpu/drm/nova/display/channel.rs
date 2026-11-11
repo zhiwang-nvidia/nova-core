@@ -188,7 +188,6 @@ pub(super) struct NotifierBuffer<'bound> {
 /// The hardware progress needed by a notifier wait.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum NotifierStatus {
-    #[expect(dead_code)]
     Finished,
 }
 
@@ -248,7 +247,6 @@ impl<'bound> NotifierBuffer<'bound> {
     }
 
     /// Allows reuse after completion or retirement has stopped hardware writes.
-    #[expect(dead_code)]
     pub(super) fn finish(&mut self) {
         self.pending = false;
     }
@@ -312,13 +310,11 @@ impl<'bound, T> Channel<'bound, T> {
         self.notifier_buffer.as_ref().ok_or(ENODEV)?.available()
     }
 
-    #[expect(dead_code)]
     fn prepare_notifier(&mut self) -> Result<SurfaceDescriptor> {
         self.available_notifier()?;
         self.notifier_buffer.as_mut().ok_or(ENODEV)?.prepare()
     }
 
-    #[expect(dead_code)]
     fn wait_notifier(&self, status: NotifierStatus) -> Result {
         self.notifier_buffer.as_ref().ok_or(ENODEV)?.wait(status)
     }
@@ -469,7 +465,6 @@ impl<'bound> Channel<'bound, Core> {
     }
 
     /// Emits core interlock methods for the participating window mask.
-    #[expect(dead_code)]
     pub(super) fn emit_interlock_methods(
         &mut self,
         hal: &dyn DisplayMethodHal,
@@ -484,13 +479,28 @@ impl<'bound> Channel<'bound, Core> {
     }
 
     /// Emits the core UPDATE method.
-    #[expect(dead_code)]
     pub(super) fn emit_update_methods(&mut self, hal: &dyn DisplayMethodHal) -> Result {
         self.emit(
             hal,
             core_methods::UPDATE,
             &[core_methods::UPDATE_RELEASE_ELV],
         )
+    }
+
+    /// Submits a core-only update and waits for it to finish.
+    #[expect(dead_code)]
+    pub(super) fn update(&mut self, hal: &dyn DisplayHal<'bound>) -> Result {
+        let descriptor = self.prepare_notifier()?;
+        hal.emit_core_notifier_methods(self, Some(descriptor))?;
+        self.emit_interlock_methods(hal, 0)?;
+        self.emit_update_methods(hal)?;
+        self.advance()?;
+        self.wait_notifier(NotifierStatus::Finished)?;
+        hal.emit_core_notifier_methods(self, None)?;
+        // Disable notification without generating another UPDATE.
+        self.advance()?;
+        self.notifier_buffer.as_mut().ok_or(ENODEV)?.finish();
+        Ok(())
     }
 
     /// Waits for this core channel's hardware state to become idle.
