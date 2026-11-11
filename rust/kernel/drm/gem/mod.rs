@@ -17,7 +17,11 @@ use crate::{
             AllocOps, //
         },
     },
-    error::to_result,
+    error::{
+        from_result,
+        to_result, //
+    },
+    page::PAGE_SIZE,
     prelude::*,
     sync::aref::{
         ARef,
@@ -83,6 +87,36 @@ pub type DriverFile<T> = drm::File<<<T as DriverObject>::Driver as drm::Driver>:
 /// [`Driver`]: drm::Driver
 pub type DriverAllocImpl<T> = <<T as DriverObject>::Driver as drm::Driver>::Object;
 
+/// Arguments for a driver's dumb-buffer allocation callback.
+///
+/// The callback owns the writable ioctl arguments for this wrapper's lifetime.
+pub struct DumbCreate<'a> {
+    dev: *mut bindings::drm_device,
+    args: &'a mut bindings::drm_mode_create_dumb,
+}
+
+impl DumbCreate<'_> {
+    /// Calculates pitch and size using byte alignments required by the hardware.
+    ///
+    /// Zero selects no extra pitch alignment or the default page-size alignment.
+    pub fn calculate_size(&mut self, hw_pitch_align: usize, hw_size_align: usize) -> Result {
+        // SAFETY: The callback keeps dev alive and gives us exclusive ioctl arguments.
+        to_result(unsafe {
+            bindings::drm_mode_size_dumb(self.dev, self.args, hw_pitch_align, hw_size_align)
+        })
+    }
+
+    /// Returns the allocation size in bytes after [`Self::calculate_size`].
+    pub fn size(&self) -> u64 {
+        self.args.size
+    }
+
+    /// Records the handle created for the requesting file.
+    pub fn set_handle(&mut self, handle: u32) {
+        self.args.handle = handle;
+    }
+}
+
 /// GEM object functions, which must be implemented by drivers.
 pub trait DriverObject: Sync + Send + Sized + 'static {
     /// Parent `Driver` for this object.
@@ -97,6 +131,15 @@ pub trait DriverObject: Sync + Send + Sized + 'static {
         size: usize,
         args: Self::Args,
     ) -> impl PinInit<Self, Error>;
+
+    /// Allocates a dumb buffer and records its handle in the ioctl arguments.
+    fn dumb_create(
+        _dev: &drm::Device<Self::Driver>,
+        _file: &DriverFile<Self>,
+        _args: &mut DumbCreate<'_>,
+    ) -> Result {
+        Err(EOPNOTSUPP)
+    }
 
     /// Open a new handle to an existing object, associated with a File.
     fn open(_obj: &DriverAllocImpl<Self>, _file: &DriverFile<Self>) -> Result {
@@ -258,8 +301,17 @@ pub struct Object<T: DriverObject + Send + Sync, Ctx: DeviceContext = Normal> {
     obj: Opaque<bindings::drm_gem_object>,
     #[pin]
     data: T,
+    // Keep the device alive through GEM release and driver-data destruction.
+    dev: ARef<drm::Device<T::Driver>>,
     _ctx: PhantomData<Ctx>,
 }
+
+// SAFETY: GEM reference counting and mutable C state have their own synchronization.
+// DriverObject and DeviceContext require Send; no binding capability is added.
+unsafe impl<T: DriverObject, Ctx: DeviceContext> Send for Object<T, Ctx> {}
+
+// SAFETY: Shared GEM operations use DRM's synchronization, and driver data is Sync.
+unsafe impl<T: DriverObject, Ctx: DeviceContext> Sync for Object<T, Ctx> {}
 
 impl<T: DriverObject, Ctx: DeviceContext> Object<T, Ctx> {
     const OBJECT_FUNCS: bindings::drm_gem_object_funcs = bindings::drm_gem_object_funcs {
@@ -271,15 +323,10 @@ impl<T: DriverObject, Ctx: DeviceContext> Object<T, Ctx> {
 
     /// Returns the `Device` that owns this GEM object.
     pub fn dev(&self) -> &drm::Device<T::Driver, Ctx> {
-        // SAFETY:
-        // - `struct drm_gem_object.dev` is initialized and valid for as long as the GEM
-        //   object lives.
-        // - The device we used for creating the gem object is passed as &drm::Device<T::Driver> to
-        //   Object::<T>::new(), so we know that `T::Driver` is the right generic parameter to use
-        //   here.
-        // - Any type invariants of `Ctx` are upheld by using the same `Ctx` for the `Device` we
-        //   return.
-        unsafe { drm::Device::from_raw((*self.as_raw()).dev) }
+        // SAFETY: The retained reference keeps this constructor's device alive.
+        // Object's Ctx invariant supplies the context guarantee; the retained
+        // ordinary reference itself does not establish a device binding.
+        unsafe { self.dev.assume_ctx() }
     }
 
     fn as_raw(&self) -> *mut bindings::drm_gem_object {
@@ -303,13 +350,38 @@ impl<T: DriverObject, Ctx: DeviceContext> Object<T, Ctx> {
     }
 }
 
-impl<T: DriverObject> Object<T> {
+impl<T: DriverObject> Object<T>
+where
+    T::Driver: drm::Driver<Object = Self>,
+{
     /// Create a new GEM object.
     pub fn new(dev: &drm::Device<T::Driver>, size: usize, args: T::Args) -> Result<ARef<Self>> {
+        Self::new_inner(dev, size, args, false)
+    }
+
+    /// Creates a GEM object whose backing storage is supplied by the driver.
+    pub fn new_private(
+        dev: &drm::Device<T::Driver>,
+        size: usize,
+        args: T::Args,
+    ) -> Result<ARef<Self>> {
+        Self::new_inner(dev, size, args, true)
+    }
+
+    fn new_inner(
+        dev: &drm::Device<T::Driver>,
+        size: usize,
+        args: T::Args,
+        private: bool,
+    ) -> Result<ARef<Self>> {
+        if size == 0 || !size.is_multiple_of(PAGE_SIZE) {
+            return Err(EINVAL);
+        }
         let obj: Pin<KBox<Self>> = KBox::pin_init(
             try_pin_init!(Self {
                 obj: Opaque::new(bindings::drm_gem_object::default()),
                 data <- T::new(dev, size, args),
+                dev: dev.into(),
                 _ctx: PhantomData,
             }),
             GFP_KERNEL,
@@ -320,12 +392,15 @@ impl<T: DriverObject> Object<T> {
 
         // INVARIANT: `dev` and the GEM object are in the same state at the moment, and upgrading
         // the typestate in `dev` will not carry over to the GEM object.
-        if let Err(err) =
-            // SAFETY: The arguments are all valid per the type invariants.
-            to_result(unsafe {
-                bindings::drm_gem_object_init(dev.as_raw(), obj.obj.get(), size)
-            })
-        {
+        let result = if private {
+            // SAFETY: The allocation is pinned, dev is live, and size is page-aligned.
+            unsafe { bindings::drm_gem_private_object_init(dev.as_raw(), obj.obj.get(), size) };
+            Ok(())
+        } else {
+            // SAFETY: The same initialized allocation and page-aligned size apply here.
+            to_result(unsafe { bindings::drm_gem_object_init(dev.as_raw(), obj.obj.get(), size) })
+        };
+        if let Err(err) = result {
             // SAFETY: `drm_gem_object_init()` initializes the private GEM object state before
             // failing, so `drm_gem_private_object_fini()` is the matching cleanup.
             unsafe { bindings::drm_gem_private_object_fini(obj.obj.get()) };
@@ -338,7 +413,7 @@ impl<T: DriverObject> Object<T> {
         // SAFETY: `ptr` comes from `KBox::into_raw` and hence can't be NULL.
         let ptr = unsafe { NonNull::new_unchecked(ptr) };
 
-        // SAFETY: We take over the initial reference count from `drm_gem_object_init()`.
+        // SAFETY: We take over the initial reference count from the GEM initializer.
         Ok(unsafe { ARef::from_raw(ptr) })
     }
 }
@@ -359,16 +434,56 @@ impl<T: DriverObject, Ctx: DeviceContext> Deref for Object<T, Ctx> {
     }
 }
 
+// Keep PRIME disabled: a missing driver callback invokes DRM's GEM fallback.
+extern "C" fn prime_handle_to_fd_callback(
+    _dev: *mut bindings::drm_device,
+    _file: *mut bindings::drm_file,
+    _handle: u32,
+    _flags: u32,
+    _prime_fd: *mut c_int,
+) -> c_int {
+    EOPNOTSUPP.to_errno()
+}
+
+extern "C" fn prime_fd_to_handle_callback(
+    _dev: *mut bindings::drm_device,
+    _file: *mut bindings::drm_file,
+    _prime_fd: c_int,
+    _handle: *mut u32,
+) -> c_int {
+    EOPNOTSUPP.to_errno()
+}
+
+extern "C" fn dumb_create_callback<T: DriverObject>(
+    raw_file: *mut bindings::drm_file,
+    raw_dev: *mut bindings::drm_device,
+    raw_args: *mut bindings::drm_mode_create_dumb,
+) -> c_int {
+    from_result(|| {
+        // SAFETY: DRM calls this driver's callback with a live device and file.
+        let dev = unsafe { drm::Device::<T::Driver>::from_raw(raw_dev) };
+        // SAFETY: The file belongs to the same driver and lives through this callback.
+        let file = unsafe { DriverFile::<T>::from_raw(raw_file) };
+        let mut args = DumbCreate {
+            dev: raw_dev,
+            // SAFETY: These kernel ioctl arguments are exclusive to this invocation.
+            args: unsafe { &mut *raw_args },
+        };
+        T::dumb_create(dev, file, &mut args)?;
+        Ok(0)
+    })
+}
+
 impl<T: DriverObject, Ctx: DeviceContext> AllocImpl for Object<T, Ctx> {
     type Driver = T::Driver;
 
     const ALLOC_OPS: AllocOps = AllocOps {
         gem_create_object: None,
-        prime_handle_to_fd: None,
-        prime_fd_to_handle: None,
+        prime_handle_to_fd: Some(prime_handle_to_fd_callback),
+        prime_fd_to_handle: Some(prime_fd_to_handle_callback),
         gem_prime_import: None,
         gem_prime_import_sg_table: None,
-        dumb_create: None,
+        dumb_create: Some(dumb_create_callback::<T>),
         dumb_map_offset: None,
         #[cfg(CONFIG_RUST_DRM_KMS)]
         fbdev_probe: None,
