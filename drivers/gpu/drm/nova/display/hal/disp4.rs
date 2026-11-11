@@ -8,3 +8,4 @@ pub(super) mod instance_memory;
 pub(crate) mod methods;
 pub(super) mod notifier;
 mod ramht;
+pub(super) mod scaler;

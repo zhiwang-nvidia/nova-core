@@ -8,10 +8,13 @@ use nova_core::api::{
     VramRegion, //
 };
 
-use crate::display::channel::{
-    Channel,
-    Core,
-    WindowDma, //
+use crate::display::{
+    channel::{
+        Channel,
+        Core,
+        WindowDma, //
+    },
+    scaler, //
 };
 
 use super::{
@@ -37,6 +40,7 @@ const NVC67B_WINDOW_IMM_CHANNEL_DMA: u32 = 0xc67b;
 const NVC67A_CURSOR_IMM_CHANNEL_PIO: u32 = 0xc67a;
 
 pub(super) struct Ad102<'bound> {
+    api: NovaCoreApiHandle<'bound>,
     instance_memory: InstanceMemory<'bound>,
 }
 
@@ -51,6 +55,7 @@ impl<'bound> Ad102<'bound> {
 
         Ok(KBox::new(
             Self {
+                api: api.clone(),
                 instance_memory: InstanceMemory::new(api)?,
             },
             GFP_KERNEL,
@@ -90,6 +95,7 @@ impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
         if head_mask == 0 || head_mask >> core_methods::HEAD_COUNT != 0 {
             return Err(EINVAL);
         }
+        disp4::scaler::emit_postcomp_scaler_coeffs_methods(self, channel, head_mask)?;
         disp4::head::emit_desktop_color_methods(self, channel, head_mask)?;
         channel.advance()
     }
@@ -97,9 +103,17 @@ impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
     fn init_window_channel(
         &self,
         channel: &mut Channel<'bound, WindowDma>,
-        _head_mask: u32,
+        head_mask: u32,
     ) -> Result {
         self.emit_window_notifier_methods(channel, None)?;
+        let caps = self
+            .api
+            .with(|core| core.display_precomp_caps(channel.kind.index as usize))?;
+
+        // NVKMS: prefer postcomp scaling when any usable head provides it.
+        if caps.scaler && !scaler::has_postcomp_scaler(&self.api, head_mask)? {
+            disp4::scaler::emit_precomp_scaler_coeffs_methods(self, channel)?;
+        }
         channel.advance()
     }
 

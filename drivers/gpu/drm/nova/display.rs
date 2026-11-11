@@ -5,6 +5,8 @@
 mod channel;
 mod hal;
 mod methods;
+mod scaler;
+mod tables;
 mod window;
 
 use kernel::{
