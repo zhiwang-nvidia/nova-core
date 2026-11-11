@@ -10,3 +10,4 @@ pub(crate) mod methods;
 pub(super) mod notifier;
 mod ramht;
 pub(super) mod scaler;
+pub(super) mod window;

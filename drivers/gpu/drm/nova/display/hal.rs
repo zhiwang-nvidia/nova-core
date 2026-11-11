@@ -116,6 +116,10 @@ pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
 
     /// Free a surface descriptor. It must be unbound.
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result;
+
+    /// Queues methods to disable framebuffer/LUT and semaphore accesses.
+    #[expect(dead_code)]
+    fn emit_disable_window(&self, window: &mut Channel<'bound, WindowDma>) -> Result;
 }
 
 pub(super) fn display_hal<'bound>(

@@ -3,6 +3,7 @@
 use kernel::prelude::*;
 
 use nova_core::api::{
+    DisplayPrecompCaps,
     DisplayStaticInfo,
     NovaCoreApiHandle,
     VramRegion, //
@@ -23,8 +24,10 @@ use super::{
         instance_memory::InstanceMemory,
         methods::{
             self,
+            c67e,
             core as core_methods, //
         },
+        window, //
     },
     DisplayHal,
     DisplayMethodHal,
@@ -68,6 +71,22 @@ impl<'bound> Ad102<'bound> {
             && info.window_class == NVC67E_WINDOW_CHANNEL_DMA
             && info.immediate_class == NVC67B_WINDOW_IMM_CHANNEL_DMA
             && info.cursor_class == NVC67A_CURSOR_IMM_CHANNEL_PIO
+    }
+
+    fn emit_disable_window_methods(
+        &self,
+        window: &mut Channel<'bound, WindowDma>,
+        caps: DisplayPrecompCaps,
+    ) -> Result {
+        // Acquire semaphore methods are supported by C67E/C87E, but not C57E.
+        for method in [
+            c67e::SET_CONTEXT_DMA_ACQ_SEMAPHORE,
+            c67e::SET_ACQ_SEMAPHORE_CONTROL,
+            c67e::SET_ACQ_SEMAPHORE_VALUE,
+        ] {
+            window.emit(self, method, &[0])?;
+        }
+        window::emit_disable_window_methods(self, window, caps)
     }
 }
 
@@ -168,6 +187,13 @@ impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result {
         self.instance_memory
             .free_context_dma(descriptor.context_dma_descriptor_id)
+    }
+
+    fn emit_disable_window(&self, window: &mut Channel<'bound, WindowDma>) -> Result {
+        let caps = self
+            .api
+            .with(|core| core.display_precomp_caps(window.kind.index as usize))?;
+        self.emit_disable_window_methods(window, caps)
     }
 }
 
