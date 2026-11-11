@@ -58,9 +58,15 @@ use crate::{
         }, //
     },
     mm::{
-        bar_user::BarUser,
+        bar_user::{
+            BarMapping,
+            BarUser, //
+        },
         pagetable::MmuVersion,
-        vram::VramBlock,
+        vram::{
+            VramBlock,
+            VramRegion, //
+        },
         GpuMm,
         VramAddress, //
     },
@@ -398,6 +404,7 @@ impl<'a> GspSubtree<'a> {
 #[pin_data]
 pub(crate) struct Gpu<'gpu> {
     pub(crate) spec: Spec,
+    bar1: Bar1<'gpu>,
     /// GSP event interrupt registration, and the enable of its subtree.
     ///
     /// Must be kept declared *before* `gsp_resources`, so that the handler is unregistered, and
@@ -470,6 +477,7 @@ impl<'gpu> Gpu<'gpu> {
         let dev = pdev.as_ref();
 
         try_pin_init!(Self {
+            bar1,
             spec: Spec::new(dev, bar).inspect(|spec| {
                 dev_info!(dev,"NVIDIA ({})\n", spec);
             })?,
@@ -612,6 +620,18 @@ impl<'gpu> Gpu<'gpu> {
 
     pub(crate) fn alloc_vram(&self, size: Alignment) -> Result<VramBlock> {
         self.mm.lock().alloc_vram(size)
+    }
+
+    pub(crate) fn vram_bar(&self) -> Bar1<'_> {
+        self.bar1
+    }
+
+    pub(crate) fn map_vram(
+        &self,
+        region: VramRegion,
+        writable: bool,
+    ) -> Result<BarMapping<'_, 'gpu>> {
+        BarMapping::new(&self.bar_user, &self.mm, region, writable)
     }
 
     pub(crate) fn display_init(&self) -> Result<DisplayInitReply> {

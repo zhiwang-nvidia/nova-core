@@ -30,6 +30,7 @@ use crate::{
 mod vram;
 pub use vram::{
     VramBlock,
+    VramMapping,
     VramRegion, //
 };
 
