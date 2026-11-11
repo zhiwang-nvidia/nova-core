@@ -11,6 +11,8 @@ pub mod file;
 pub mod fourcc;
 pub mod gem;
 pub mod gpuvm;
+#[cfg(CONFIG_RUST_DRM_KMS)]
+pub mod hdmi;
 pub mod ioctl;
 #[cfg(CONFIG_RUST_DRM_KMS)]
 pub mod kms;
