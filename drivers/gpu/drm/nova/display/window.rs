@@ -5,7 +5,8 @@
 use super::{
     channel::{
         Channel,
-        WindowDma, //
+        WindowDma,
+        WindowImmediate, //
     },
     Display, //
 };
@@ -14,11 +15,16 @@ use super::{
 pub(super) struct Window<'bound> {
     pub(super) id: u32,
     pub(super) channel: Option<Channel<'bound, WindowDma>>,
+    pub(super) immediate_channel: Option<Channel<'bound, WindowImmediate>>,
 }
 
 impl Window<'_> {
     pub(super) fn new(id: u32) -> Self {
-        Self { id, channel: None }
+        Self {
+            id,
+            channel: None,
+            immediate_channel: None,
+        }
     }
 }
 

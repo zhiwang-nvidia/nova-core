@@ -26,7 +26,8 @@ use nova_core::api::{
 use channel::{
     Channel,
     Core,
-    WindowDma, //
+    WindowDma,
+    WindowImmediate, //
 };
 
 pub(crate) struct Display<'bound> {
@@ -117,17 +118,31 @@ impl<'bound> Display<'bound> {
         for window in &mut display.windows {
             let channel =
                 Channel::<WindowDma>::new(&display.api, &display.hw_static_info, window.id)?;
+            let immediate =
+                Channel::<WindowImmediate>::new(&display.api, &display.hw_static_info, &channel)?;
             window.channel = Some(channel);
+            window.immediate_channel = Some(immediate);
         }
 
         for window in &mut display.windows {
             let channel = window.channel.as_mut().ok_or(ENODEV)?;
+            let immediate = window.immediate_channel.as_mut().ok_or(ENODEV)?;
             channel
                 .create(&display.hw_static_info, &mut *display.hal)
                 .inspect_err(|error| {
                     dev_err!(
                         adev,
                         "Failed to create window channel {}: {:?}\n",
+                        window.id,
+                        error
+                    );
+                })?;
+            immediate
+                .create(&display.hw_static_info, &mut *display.hal)
+                .inspect_err(|error| {
+                    dev_err!(
+                        adev,
+                        "Failed to create window immediate channel {}: {:?}\n",
                         window.id,
                         error
                     );
@@ -140,6 +155,20 @@ impl<'bound> Display<'bound> {
 
 impl Drop for Display<'_> {
     fn drop(&mut self) {
+        for channel in self
+            .windows
+            .iter_mut()
+            .filter_map(|window| window.immediate_channel.as_mut())
+        {
+            if let Err(error) = channel.destroy(&mut *self.hal) {
+                dev_err!(
+                    self.dev,
+                    "Failed to destroy window immediate channel {}: {:?}\n",
+                    channel.kind.index,
+                    error
+                );
+            }
+        }
         for channel in self
             .windows
             .iter_mut()
@@ -163,6 +192,13 @@ impl Drop for Display<'_> {
             dev_err!(self.dev, "Failed to shut down display: {:?}\n", error);
             // GSP-RM may still reference the physical backing; the CPU mapping can be dropped.
             core::mem::forget(self.hal.instance_memory().clone());
+            for channel in self
+                .windows
+                .iter()
+                .filter_map(|window| window.immediate_channel.as_ref())
+            {
+                channel.retain_backing();
+            }
             for channel in self
                 .windows
                 .iter()

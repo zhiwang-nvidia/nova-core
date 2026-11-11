@@ -29,6 +29,12 @@
 //! Each window channel programs the framebuffer for one display window,
 //! including its address, format, size and layout. The core channel assigns the
 //! window to a display head.
+//!
+//! # Window Immediate Channel
+//!
+//! Each window immediate channel controls the same window as the window channel
+//! with the matching index. It carries output-position updates and can interlock
+//! with that window channel.
 
 use kernel::{
     io::poll::read_poll_timeout,
@@ -217,6 +223,10 @@ pub(super) struct WindowDma {
     pub(super) index: u32,
 }
 
+pub(super) struct WindowImmediate {
+    pub(super) index: u32,
+}
+
 pub(super) struct Channel<'bound, T> {
     api: NovaCoreApiHandle<'bound>,
     pushbuffer: PushBuffer<'bound>,
@@ -399,6 +409,37 @@ impl<'bound> Channel<'bound, WindowDma> {
             DisplayChannelKind::Window,
             self.kind.index,
             info.window_class,
+            info.num_channels,
+            hal,
+        )
+    }
+}
+
+impl<'bound> Channel<'bound, WindowImmediate> {
+    pub(super) fn new(
+        api: &NovaCoreApiHandle<'bound>,
+        info: &DisplayStaticInfo,
+        window: &Channel<'bound, WindowDma>,
+    ) -> Result<Self> {
+        Self::alloc_channel_buffers(
+            api,
+            info,
+            WindowImmediate {
+                index: window.kind.index,
+            },
+            false,
+        )
+    }
+
+    pub(super) fn create(
+        &mut self,
+        info: &DisplayStaticInfo,
+        hal: &mut dyn DisplayHal<'bound>,
+    ) -> Result {
+        self.create_channel_inner(
+            DisplayChannelKind::Immediate,
+            self.kind.index,
+            info.immediate_class,
             info.num_channels,
             hal,
         )
