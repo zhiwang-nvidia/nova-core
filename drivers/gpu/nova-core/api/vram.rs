@@ -45,6 +45,16 @@ impl NovaCoreApi<'_> {
         })
     }
 
+    /// Allocates contiguous VRAM with independent size and physical alignment.
+    ///
+    /// The size must be nonzero and a multiple of the alignment, which is at least 4 KiB.
+    pub fn alloc_vram_aligned(&self, size: u64, alignment: Alignment) -> Result<VramBlock> {
+        Ok(VramBlock {
+            block: Arc::new(self.gpu.alloc_vram_aligned(size, alignment)?, GFP_KERNEL)?,
+            owner: self.vram_owner.clone(),
+        })
+    }
+
     /// Maps a region of this GPU's VRAM for CPU access through BAR1.
     ///
     /// The mapping retains the region and cannot outlive the device binding.

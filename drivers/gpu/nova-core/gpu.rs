@@ -641,6 +641,10 @@ impl<'gpu> Gpu<'gpu> {
         self.mm.lock().alloc_vram(size)
     }
 
+    pub(crate) fn alloc_vram_aligned(&self, size: u64, alignment: Alignment) -> Result<VramBlock> {
+        self.mm.lock().alloc_vram_aligned(size, alignment)
+    }
+
     pub(crate) fn vram_bar(&self) -> Bar1<'_> {
         self.bar1
     }
