@@ -64,6 +64,17 @@ impl NovaCoreApi<'_> {
         self.gpu.display_static_info().map(DisplayStaticInfo::from)
     }
 
+    /// Sets GSP-RM's display instance memory to a VRAM region.
+    ///
+    /// Keep the region alive until display shutdown succeeds, including when this call fails.
+    pub fn display_set_instance_memory(&self, region: &VramRegion) -> Result {
+        if !Arc::ptr_eq(&self.vram_owner, &region.owner) {
+            return Err(EXDEV);
+        }
+        self.gpu
+            .display_set_instance_memory(region.address(), region.size())
+    }
+
     /// Returns the GPU [`GspStaticInfo`].
     pub fn gsp_static_info(&self) -> &GspStaticInfo {
         self.gpu.gsp_static_info()

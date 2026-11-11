@@ -99,7 +99,7 @@ impl VramBlock {
 #[derive(Clone)]
 pub struct VramRegion {
     region: vram::VramRegion,
-    owner: Arc<()>,
+    pub(super) owner: Arc<()>,
 }
 
 impl VramRegion {

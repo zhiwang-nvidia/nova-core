@@ -41,6 +41,7 @@ use crate::{
             gmc::{
                 DisplayGetStaticInfo,
                 DisplayInit,
+                DisplaySetInstanceMemory,
                 DisplayShutdown, //
             },
             DisplayGetStaticInfoReply,
@@ -654,6 +655,15 @@ impl<'gpu> Gpu<'gpu> {
             .gsp
             .cmdq
             .send_gmc_command(DisplayGetStaticInfo, |_| Ok(()))
+    }
+
+    pub(crate) fn display_set_instance_memory(&self, address: u64, size: u64) -> Result {
+        let command = DisplaySetInstanceMemory::new(address, size)?;
+        self.gsp_resources
+            .gsp
+            .cmdq
+            .send_gmc_command(command, |_| Ok(()))?;
+        Ok(())
     }
 
     /// Returns the static GPU configuration that GSP-RM reported at boot.
