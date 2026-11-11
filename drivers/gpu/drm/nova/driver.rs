@@ -12,7 +12,11 @@ use kernel::{
         ioctl, //
     },
     prelude::*,
-    sync::aref::ARef, //
+    sync::{
+        aref::ARef,
+        new_mutex,
+        Mutex, //
+    }, //
 };
 
 use crate::{
@@ -35,11 +39,21 @@ pub(crate) struct Nova<'bound> {
     reg: drm::Registration<'bound, NovaDriver>,
 }
 
-/// DRM registration data, accessible from ioctl handlers via the registration guard.
+/// DRM registration data, accessible while its parent remains bound.
+#[pin_data(PinnedDrop)]
 pub(crate) struct DrmRegData<'bound> {
     pub(crate) api: NovaCoreApiHandle<'bound>,
-    #[expect(dead_code)]
-    display: Display<'bound>,
+    #[pin]
+    pub(crate) display: Mutex<Option<Display<'bound>>>,
+}
+
+#[pinned_drop]
+impl PinnedDrop for DrmRegData<'_> {
+    fn drop(self: Pin<&mut Self>) {
+        if let Some(display) = self.display.lock().take() {
+            display.shutdown();
+        }
+    }
 }
 
 /// Convienence type alias for the DRM device type for this driver
@@ -78,10 +92,12 @@ impl auxiliary::Driver for NovaDriver {
             reg <- {
                 let drm = drm::UnregisteredDevice::<Self>::new(adev, Ok(()))?;
 
-                let reg_data = DrmRegData {
-                    api: NovaCoreApi::of(adev)?,
-                    display: Display::init(adev)?,
-                };
+                let api = NovaCoreApi::of(adev)?;
+                let display = Display::init(adev)?;
+                let reg_data = try_pin_init!(DrmRegData {
+                    api,
+                    display <- new_mutex!(Some(display)),
+                });
 
                 // SAFETY: `reg` is stored in `Self::Data` and dropped when the driver is unbound;
                 // it is never forgotten.
