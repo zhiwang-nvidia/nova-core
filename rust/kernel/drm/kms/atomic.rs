@@ -248,6 +248,14 @@ impl<T: KmsDriver> AtomicStateMutator<T> {
         ConnectorStateMutator::<C::State>::new(self, NonNull::new(state)?)
     }
 
+    /// Iterate over CRTCs whose candidate states belong to this commit.
+    pub fn crtcs(&self) -> AtomicCrtcs<'_, T> {
+        AtomicCrtcs {
+            state: self,
+            index: 0,
+        }
+    }
+
     /// Iterate over connectors whose candidate states belong to this commit.
     ///
     /// State access still goes through [`Self::get_new_connector_state`], so
@@ -257,6 +265,31 @@ impl<T: KmsDriver> AtomicStateMutator<T> {
             state: self,
             index: 0,
         }
+    }
+}
+
+/// CRTCs included in an atomic commit.
+pub struct AtomicCrtcs<'a, T: KmsDriver> {
+    state: &'a AtomicStateMutator<T>,
+    index: usize,
+}
+
+impl<'a, T: KmsDriver> Iterator for AtomicCrtcs<'a, T> {
+    type Item = &'a OpaqueCrtc<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let count = usize::try_from(self.state.drm_dev().num_crtcs()).ok()?;
+        while self.index < count {
+            // SAFETY: DRM allocates one slot per CRTC. The index is in bounds,
+            // and the commit keeps every present CRTC alive during iteration.
+            let crtc = unsafe { (*(*self.state.as_raw()).crtcs.add(self.index)).ptr };
+            self.index += 1;
+            if let Some(crtc) = NonNull::new(crtc) {
+                // SAFETY: This live CRTC belongs to the commit's driver T.
+                return Some(unsafe { OpaqueCrtc::from_raw(crtc.as_ptr()) });
+            }
+        }
+        None
     }
 }
 
@@ -322,6 +355,15 @@ impl<T: KmsDriver> Drop for AtomicStateComposer<T> {
 }
 
 impl<T: KmsDriver> AtomicStateComposer<T> {
+    /// Run standard atomic checks and the per-object driver callbacks.
+    pub fn check_helpers(&mut self) -> Result {
+        // SAFETY: The composer holds the acquire context and modeset locks.
+        // Its mutable borrow excludes object guards during nested callbacks.
+        to_result(unsafe {
+            bindings::drm_atomic_helper_check(self.drm_dev().as_raw(), self.as_raw())
+        })
+    }
+
     /// Whether userspace permits this check to require a full modeset.
     ///
     /// Drivers must decide this during atomic checking, before state is swapped
@@ -471,6 +513,24 @@ pub struct PlaneUpdatesReadyToken<'a>(PhantomData<&'a ()>);
 /// This token proves that all plane updates within [`KmsDriver::atomic_commit_tail`]
 /// implementation have completed. It is returned by [`AtomicCommitTail::commit_planes`].
 pub struct PlaneUpdatesCommittedToken<'a>(PhantomData<&'a ()>);
+
+/// # Safety
+///
+/// DRM must supply a live same-driver commit in the check phase, with a valid
+/// acquire context and modeset locks held throughout the callback.
+pub(super) unsafe extern "C" fn atomic_check_callback<T: KmsDriver>(
+    _dev: *mut bindings::drm_device,
+    state: *mut bindings::drm_atomic_commit,
+) -> c_int {
+    // SAFETY: The callback contract supplies the composition context. Suppress
+    // Drop because DRM owns the reference borrowed by this callback.
+    let mut state =
+        unsafe { ManuallyDrop::new(AtomicStateComposer::new(NonNull::new_unchecked(state))) };
+    crate::error::from_result(|| {
+        T::atomic_check(&mut state)?;
+        Ok(0)
+    })
+}
 
 /// An [`AtomicState`] interface that allows a driver to control the [`atomic_commit_tail`]
 /// callback.

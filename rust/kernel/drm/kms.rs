@@ -220,6 +220,17 @@ pub trait KmsDriver: Driver {
     where
         Self: Sized;
 
+    /// Check a complete candidate configuration before accepting an atomic commit.
+    ///
+    /// Call [`atomic::AtomicStateComposer::check_helpers`] to run the standard
+    /// checks and per-object callbacks. Without this hook, DRM uses that helper.
+    fn atomic_check(_state: &mut atomic::AtomicStateComposer<Self>) -> Result
+    where
+        Self: Sized,
+    {
+        build_error::build_error("This function should not be reachable")
+    }
+
     /// The optional [`atomic_commit_tail`] callback for this [`Device`].
     ///
     /// It must return a [`CommittedAtomicState`] to prove that it has signaled completion of the hw
@@ -249,7 +260,11 @@ impl<T: KmsDriver> private::KmsImpl for T {
 
     const MODE_CONFIG_OPS: Option<ModeConfigOps> = Some(ModeConfigOps {
         kms_vtable: bindings::drm_mode_config_funcs {
-            atomic_check: Some(bindings::drm_atomic_helper_check),
+            atomic_check: if Self::HAS_ATOMIC_CHECK {
+                Some(atomic::atomic_check_callback::<Self>)
+            } else {
+                Some(bindings::drm_atomic_helper_check)
+            },
             fb_create: Some(bindings::drm_gem_fb_create),
             mode_valid: None,
             atomic_commit: Some(bindings::drm_atomic_helper_commit),
