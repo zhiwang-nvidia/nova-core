@@ -3,8 +3,10 @@
 //! Display support.
 
 mod channel;
+mod format;
 mod hal;
 mod methods;
+mod mode;
 mod scaler;
 mod tables;
 mod window;
