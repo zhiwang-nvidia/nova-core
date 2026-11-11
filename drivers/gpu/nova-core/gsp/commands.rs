@@ -38,6 +38,46 @@ impl DisplayInitReply {
 /// No NVKV fields are returned in DISPLAY_SHUTDOWN.
 pub(crate) struct DisplayShutdownReply;
 
+/// Static display information returned by GET_STATIC_INFO.
+pub(crate) struct DisplayGetStaticInfoReply {
+    /// Number of physical heads; not necessarily the number of usable heads.
+    pub(crate) num_heads: u32,
+    /// Usable heads, with bit N identifying hardware head N.
+    pub(crate) head_mask: u32,
+    /// Present windows, with bit N identifying hardware window N.
+    pub(crate) window_mask: u32,
+    /// Admitted static HDMI outputs, with each set bit's value identifying a GSP-RM display ID.
+    pub(crate) display_mask: u32,
+    /// Number of hardware display channels, not a limit on simultaneous outputs.
+    pub(crate) num_channels: u32,
+    /// Raw `NV_PDISP_FE_HW_SYS_CAP` value for native HAL interpretation.
+    pub(crate) fe_hw_sys_cap: u32,
+    /// Native display-parent class.
+    pub(crate) display_class: u32,
+    /// Native Core DMA channel class.
+    pub(crate) core_class: u32,
+    /// Native Window DMA channel class.
+    pub(crate) window_class: u32,
+    /// Native Window Immediate DMA channel class.
+    pub(crate) immediate_class: u32,
+    /// Native Cursor PIO channel class.
+    pub(crate) cursor_class: u32,
+    /// Maximum number of active heads admitted by the adapter.
+    pub(crate) max_active_heads: u32,
+    /// Maximum number of concurrently retained routes.
+    pub(crate) max_streams: u32,
+    /// Maximum number of display channels.
+    pub(crate) max_channels: u32,
+    /// Maximum AUX payload size in bytes; zero when AUX is unavailable.
+    pub(crate) max_aux_bytes: u32,
+    /// Maximum EDID reply size in bytes.
+    pub(crate) max_edid_bytes: u32,
+    /// Maximum NVKV payload size in bytes, excluding transport headers.
+    pub(crate) max_message_bytes: u32,
+    /// Maximum DMA pushbuffer size in bytes.
+    pub(crate) max_pb_bytes: u32,
+}
+
 /// The static GPU configuration, which GSP-RM reports in reply to [`GspInit`](gmc::GspInit).
 pub struct GspStaticInfo {
     gpu_name: [u8; Self::MAX_GPU_NAME_LEN],

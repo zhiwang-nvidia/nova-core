@@ -19,6 +19,7 @@ use crate::{
     gpu::Chipset,
     gsp::{
         commands::{
+            DisplayGetStaticInfoReply,
             DisplayInitReply,
             GspStaticInfo, //
         },
@@ -429,4 +430,49 @@ impl DisplayInitResponseSchema {
     const COMMON_CAPS_KEY: KeyId = 0x8064;
     const DISPLAY_CAPS_KEY: KeyId = 0x8065;
     const HDMI_GPU_CAPS_KEY: KeyId = 0x8066;
+}
+
+nvkv_decode! {
+    #[allow(dead_code)]
+    pub(crate) struct DisplayStaticInfoResponseSchema => DisplayGetStaticInfoReply {
+        num_heads: Required<Key<u32, { Self::NUM_HEADS_KEY }>>,
+        head_mask: Required<Key<u32, { Self::HEAD_MASK_KEY }>>,
+        window_mask: Required<Key<u32, { Self::WINDOW_MASK_KEY }>>,
+        display_mask: Required<Key<u32, { Self::DISPLAY_MASK_KEY }>>,
+        num_channels: Required<Key<u32, { Self::NUM_CHANNELS_KEY }>>,
+        fe_hw_sys_cap: Required<Key<u32, { Self::FE_HW_SYS_CAP_KEY }>>,
+        display_class: Required<Key<u32, { Self::DISPLAY_CLASS_KEY }>>,
+        core_class: Required<Key<u32, { Self::CORE_CLASS_KEY }>>,
+        window_class: Required<Key<u32, { Self::WINDOW_CLASS_KEY }>>,
+        immediate_class: Required<Key<u32, { Self::IMMEDIATE_CLASS_KEY }>>,
+        cursor_class: Required<Key<u32, { Self::CURSOR_CLASS_KEY }>>,
+        max_active_heads: Required<Key<u32, { Self::MAX_ACTIVE_HEADS_KEY }>>,
+        max_streams: Required<Key<u32, { Self::MAX_STREAMS_KEY }>>,
+        max_channels: Required<Key<u32, { Self::MAX_CHANNELS_KEY }>>,
+        max_aux_bytes: Required<Key<u32, { Self::MAX_AUX_BYTES_KEY }>>,
+        max_edid_bytes: Required<Key<u32, { Self::MAX_EDID_BYTES_KEY }>>,
+        max_message_bytes: Required<Key<u32, { Self::MAX_MESSAGE_BYTES_KEY }>>,
+        max_pb_bytes: Required<Key<u32, { Self::MAX_PB_BYTES_KEY }>>,
+    }
+}
+
+impl DisplayStaticInfoResponseSchema {
+    const NUM_HEADS_KEY: KeyId = 0x0114;
+    const HEAD_MASK_KEY: KeyId = 0x0115;
+    const WINDOW_MASK_KEY: KeyId = 0x0116;
+    const DISPLAY_MASK_KEY: KeyId = 0x0117;
+    const NUM_CHANNELS_KEY: KeyId = 0x0118;
+    const FE_HW_SYS_CAP_KEY: KeyId = 0x0119;
+    const DISPLAY_CLASS_KEY: KeyId = 0x0107;
+    const CORE_CLASS_KEY: KeyId = 0x0108;
+    const WINDOW_CLASS_KEY: KeyId = 0x0109;
+    const IMMEDIATE_CLASS_KEY: KeyId = 0x010a;
+    const CURSOR_CLASS_KEY: KeyId = 0x010b;
+    const MAX_ACTIVE_HEADS_KEY: KeyId = 0x010c;
+    const MAX_STREAMS_KEY: KeyId = 0x010d;
+    const MAX_CHANNELS_KEY: KeyId = 0x010e;
+    const MAX_AUX_BYTES_KEY: KeyId = 0x010f;
+    const MAX_EDID_BYTES_KEY: KeyId = 0x0110;
+    const MAX_MESSAGE_BYTES_KEY: KeyId = 0x0111;
+    const MAX_PB_BYTES_KEY: KeyId = 0x0112;
 }
