@@ -29,6 +29,7 @@
 use kernel::prelude::*;
 
 pub(crate) mod c67e;
+pub(crate) mod c77d;
 
 /// Hardware reads bits 27:18 to know how many parameter words follow the header.
 /// Shift the count into that field when encoding a method packet.
@@ -71,9 +72,19 @@ pub(crate) mod core {
 
     pub(crate) const HEAD_STRIDE: u32 = 0x0400;
     pub(crate) const COORDINATE_MAX: u32 = 0x7fff;
+    pub(crate) const HEAD_SET_DISPLAY_ID: u32 = 0x2020;
+    pub(crate) const HEAD_SET_CONTEXT_DMA_CURSOR: u32 = 0x2088;
+    pub(crate) const HEAD_SET_OFFSET_CURSOR: u32 = 0x2090;
+    pub(crate) const HEAD_SET_CONTROL_CURSOR: u32 = 0x209c;
+    pub(crate) const HEAD_CURSOR_FORMAT_A8R8G8B8: u32 = 0xcf;
+    pub(crate) const HEAD_SET_CONTEXT_DMA_CRC: u32 = 0x2180;
+    pub(crate) const HEAD_SET_CRC_CONTROL: u32 = 0x2184;
     pub(crate) const HEAD_SET_OUTPUT_SCALER_COEFF_VALUE: u32 = 0x2214;
     pub(crate) const HEAD_SET_DESKTOP_COLOR_ALPHA_RED: u32 = 0x2220;
     pub(crate) const HEAD_SET_DESKTOP_COLOR_GREEN_BLUE: u32 = 0x2224;
+    pub(crate) const HEAD_SET_OCSC0CONTROL: u32 = 0x2240;
+    pub(crate) const HEAD_SET_CONTEXT_DMA_OLUT: u32 = 0x2288;
+    pub(crate) const HEAD_SET_OFFSET_OLUT: u32 = 0x228c;
     pub(crate) use crate::display::methods::core::HEAD_COUNT;
 }
 

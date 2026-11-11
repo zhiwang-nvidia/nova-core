@@ -121,6 +121,13 @@ pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
     /// Free a surface descriptor. It must be unbound.
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result;
 
+    /// Queues methods to disable a head's auxiliary memory accesses and unset its display ID.
+    ///
+    /// SOR ownership is unchanged. The caller retires the head's window framebuffers
+    /// and stops its outputs first, then submits a core UPDATE to apply these changes.
+    #[expect(dead_code)]
+    fn emit_disable_head(&self, core: &mut Channel<'bound, Core>, head: u32) -> Result;
+
     /// Checks whether the hardware can represent the mode timings.
     fn validate_mode(&self, mode: &DisplayMode) -> Result;
 

@@ -3,6 +3,7 @@
 use kernel::prelude::*;
 
 use nova_core::api::{
+    DisplayPostcompCaps,
     DisplayPrecompCaps,
     DisplayStaticInfo,
     NovaCoreApiHandle,
@@ -28,6 +29,7 @@ use super::{
         methods::{
             self,
             c67e,
+            c77d,
             core as core_methods,
             window as window_methods, //
         },
@@ -76,6 +78,27 @@ impl<'bound> Ad102<'bound> {
             && info.window_class == NVC67E_WINDOW_CHANNEL_DMA
             && info.immediate_class == NVC67B_WINDOW_IMM_CHANNEL_DMA
             && info.cursor_class == NVC67A_CURSOR_IMM_CHANNEL_PIO
+    }
+
+    fn emit_disable_head_methods(
+        &self,
+        core: &mut Channel<'bound, Core>,
+        head: u32,
+        caps: &DisplayPostcompCaps,
+    ) -> Result {
+        disp4::head::emit_disable_head_methods(self, core, head, caps)?;
+        let offset = head * core_methods::HEAD_STRIDE;
+        // A NULL ContextDMA disables each RG release semaphore.
+        for index in 0..c77d::HEAD_RG_REL_SEMAPHORE_COUNT {
+            core.emit(
+                self,
+                c77d::HEAD_SET_CONTEXT_DMA_RG_REL_SEMAPHORE
+                    + offset
+                    + index * methods::METHOD_ARRAY_STRIDE,
+                &[0],
+            )?;
+        }
+        Ok(())
     }
 
     fn emit_disable_window_methods(
@@ -192,6 +215,17 @@ impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
     fn free_surface_descriptor(&mut self, descriptor: SurfaceDescriptor) -> Result {
         self.instance_memory
             .free_context_dma(descriptor.context_dma_descriptor_id)
+    }
+
+    fn emit_disable_head(&self, core: &mut Channel<'bound, Core>, head: u32) -> Result {
+        if head >= core_methods::HEAD_COUNT {
+            return Err(EINVAL);
+        }
+        let caps = self
+            .api
+            .with(|core| core.display_postcomp_caps(head as usize))?;
+        self.emit_disable_head_methods(core, head, &caps)?;
+        disp4::head::emit_head_display_id_methods(self, core, head, 0)
     }
 
     fn validate_mode(&self, mode: &DisplayMode) -> Result {
