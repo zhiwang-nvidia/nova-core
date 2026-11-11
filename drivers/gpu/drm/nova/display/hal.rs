@@ -196,6 +196,18 @@ pub(super) trait DisplayHal<'bound>: DisplayMethodHal + Send + Sync {
 
     /// Queues methods to disable framebuffer/LUT and semaphore accesses.
     fn emit_disable_window(&self, window: &mut Channel<'bound, WindowDma>) -> Result;
+
+    /// Configures HDMI packet transmission with the supplied AVI infoframe.
+    #[expect(dead_code)]
+    fn configure_hdmi_packets(&self, head: u32, avi: &[u8; 17]) -> Result;
+
+    /// Sets or clears HDMI AVMUTE through a General Control Packet.
+    #[expect(dead_code)]
+    fn set_hdmi_avmute(&self, head: u32, mute: bool) -> Result;
+
+    /// Disables HDMI packet transmission on the specified head.
+    #[expect(dead_code)]
+    fn disable_hdmi_packets(&self, head: u32) -> Result;
 }
 
 pub(super) fn display_hal<'bound>(

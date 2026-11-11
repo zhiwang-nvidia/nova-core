@@ -396,6 +396,21 @@ impl<'bound> DisplayHal<'bound> for Ad102<'bound> {
             .with(|core| core.display_precomp_caps(window.kind.index as usize))?;
         self.emit_disable_window_methods(window, caps)
     }
+
+    fn configure_hdmi_packets(&self, head: u32, avi: &[u8; 17]) -> Result {
+        self.api
+            .with(|core| core.display_configure_hdmi_packets(head, avi))
+    }
+
+    fn set_hdmi_avmute(&self, head: u32, mute: bool) -> Result {
+        self.api
+            .with(|core| core.display_set_hdmi_avmute(head, mute))
+    }
+
+    fn disable_hdmi_packets(&self, head: u32) -> Result {
+        self.api
+            .with(|core| core.display_disable_hdmi_packets(head))
+    }
 }
 
 impl DisplayMethodHal for Ad102<'_> {
