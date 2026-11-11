@@ -15,8 +15,11 @@ use kernel::{
     sync::aref::ARef, //
 };
 
-use crate::file::File;
-use crate::gem::NovaObject;
+use crate::{
+    display::Display,
+    file::File,
+    gem::NovaObject, //
+};
 
 use nova_core::api::{
     NovaCoreApi,
@@ -35,6 +38,8 @@ pub(crate) struct Nova<'bound> {
 /// DRM registration data, accessible from ioctl handlers via the registration guard.
 pub(crate) struct DrmRegData<'bound> {
     pub(crate) api: NovaCoreApiHandle<'bound>,
+    #[expect(dead_code)]
+    display: Display<'bound>,
 }
 
 /// Convienence type alias for the DRM device type for this driver
@@ -75,6 +80,7 @@ impl auxiliary::Driver for NovaDriver {
 
                 let reg_data = DrmRegData {
                     api: NovaCoreApi::of(adev)?,
+                    display: Display::init(adev)?,
                 };
 
                 // SAFETY: `reg` is stored in `Self::Data` and dropped when the driver is unbound;
