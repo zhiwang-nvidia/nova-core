@@ -8,9 +8,32 @@
 #include <linux/cdev.h>
 #include <linux/cleanup.h>
 #include <uapi/fwctl/fwctl.h>
+#include <linux/scatterlist.h>
 
 struct fwctl_device;
 struct fwctl_uctx;
+
+/**
+ * struct fwctl_umem_reg - Passed to driver for user memory registration
+ * @sgt: Scatter gather table of the pinned and dma mapped user memory.
+ * @len: Length of the user memory.
+ * @offset: Offset into the first page of the user memory.
+ * @flags: One of enum fwctl_umem_flags.
+ *
+ * This struct is passed to the driver's umem_reg() operation to register
+ * user memory for use with device operations. The driver fills in umem_id
+ * and mkey_id if applicable.
+ */
+struct fwctl_umem_reg {
+	struct sg_table *sgt; /* dma information */
+	size_t len; /* length of the user memory */
+	size_t offset; /* offset into the first page */
+	u64 flags; /* enum fwctl_umem_flags */
+
+	/* filled by the driver */
+	u32 umem_id;
+	u32 mkey_id;
+};
 
 /**
  * struct fwctl_ops - Driver provided operations
@@ -55,6 +78,22 @@ struct fwctl_ops {
 	 */
 	void *(*fw_rpc)(struct fwctl_uctx *uctx, enum fwctl_rpc_scope scope,
 			void *rpc_in, size_t in_len, size_t *out_len);
+
+	/**
+	 * @umem_reg: Implement FWCTL_RESOURCE_UMEM_REG. Register a user memory
+	 * range for use with device operations. The memory must be page
+	 * aligned, and the length must be a multiple of the page size. The
+	 * memory is pinned until unregistered with FWCTL_RESOURCE_DESTROY or
+	 * the file descriptor is closed.
+	 */
+	void *(*umem_reg)(struct fwctl_uctx *uctx, struct fwctl_umem_reg *umem);
+
+	/**
+	 * @umem_unreg: Implement FWCTL_RESOURCE_DESTROY for
+	 * FWCTL_RESOURCE_UMEM_REG. Unregister a user memory range previously
+	 * registered with FWCTL_RESOURCE_UMEM_REG.
+	 */
+	int (*umem_unreg)(struct fwctl_uctx *uctx, void *drv_data);
 };
 
 /**
@@ -128,6 +167,8 @@ void fwctl_unregister(struct fwctl_device *fwctl);
 struct fwctl_uctx {
 	struct fwctl_device *fwctl;
 	/* private: */
+	struct xarray umems;
+	struct ida umem_ida;
 	/* Head at fwctl_device::uctx_list */
 	struct list_head uctx_list_entry;
 };

@@ -10,6 +10,8 @@
 #include <linux/module.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
+#include <linux/scatterlist.h>
+#include <linux/dma-mapping.h>
 
 #include <uapi/fwctl/fwctl.h>
 
@@ -138,10 +140,320 @@ static int fwctl_cmd_rpc(struct fwctl_ucmd *ucmd)
 	return ucmd_respond(ucmd, sizeof(*cmd));
 }
 
+struct fwctl_resource {
+	u32 id;
+	enum fwctl_resource_type type;
+	union {
+		struct {
+			struct sg_table sgt; /* dma mapped sgt */
+			unsigned long addr; /* user address */
+			size_t size; /* original user size */
+			size_t offset; /* offset from first page */
+			size_t npages; /* number of pages pinned */
+
+			/* user memory accounting */
+			struct task_struct *source_task;
+			struct mm_struct *source_mm;
+			struct user_struct *source_user;
+			struct page **page_list;
+		} umem;
+	};
+	void *drv_data;
+};
+
+#define FWCTL_UMEM_MAX_MB 256
+
+static int inc_user_locked_vm(struct fwctl_resource *resource)
+{
+	atomic_long_t *locked_vm = &resource->umem.source_user->locked_vm;
+	unsigned long lock_limit;
+	unsigned long cur_pages;
+	unsigned long new_pages;
+
+	lock_limit = task_rlimit(resource->umem.source_task, RLIMIT_MEMLOCK) >>
+		     PAGE_SHIFT;
+	do {
+		cur_pages = atomic_long_read(locked_vm);
+		new_pages = cur_pages + resource->umem.npages;
+		if (new_pages > lock_limit)
+			return -ENOMEM;
+	} while (atomic_long_cmpxchg(locked_vm, cur_pages, new_pages) !=
+		 cur_pages);
+	return 0;
+}
+
+static void dec_user_locked_vm(struct fwctl_resource *resource)
+{
+	if (WARN_ON(atomic_long_read(&resource->umem.source_user->locked_vm) <
+				     resource->umem.npages))
+		return;
+	atomic_long_sub(resource->umem.npages,
+			&resource->umem.source_user->locked_vm);
+}
+
+static unsigned long umem_num_pages(u64 addr, size_t len)
+{
+	return DIV_ROUND_UP(addr + len - PAGE_ALIGN_DOWN(addr), PAGE_SIZE);
+}
+
+#define PAGES2MB(pages) ((pages) >> (20 - PAGE_SHIFT))
+
+static int fwctl_uctx_resource_umem_pin(struct fwctl_uctx *uctx,
+				       unsigned long addr, size_t size,
+				       struct fwctl_resource *resource)
+{
+	size_t npages = umem_num_pages(addr, size);
+	struct fwctl_device *fwctl = uctx->fwctl;
+	unsigned long endaddr = addr + size;
+	struct page **page_list;
+	int err = -EINVAL;
+	int pinned = 0;
+
+	/* Avoid integer overflow */
+	if (endaddr < addr || PAGE_ALIGN(endaddr) < endaddr)
+		return -EINVAL;
+
+	if (npages == 0 || PAGES2MB(npages) > FWCTL_UMEM_MAX_MB)
+		return -EINVAL;
+
+	page_list = kvmalloc_array(npages, sizeof(struct page *),
+				  GFP_KERNEL_ACCOUNT);
+	if (!page_list)
+		return -ENOMEM;
+
+	resource->umem.addr = addr;
+	resource->umem.size = size;
+	resource->umem.offset = addr & ~PAGE_MASK;
+	resource->umem.npages = npages;
+
+	dev_dbg(&fwctl->dev, "%s: addr %p size %zu npages %zu offset %zu\n",
+		__func__, (void __user *)addr, size, npages,
+		resource->umem.offset);
+
+	resource->umem.page_list = page_list;
+	resource->umem.source_mm = current->mm;
+	resource->umem.source_task = current->group_leader;
+	get_task_struct(current->group_leader);
+	resource->umem.source_user = get_uid(current_user());
+
+	/* mm and RLIMIT_MEMLOCK user task accounting similar to what is
+	 * being done in iopt_alloc_pages() and do_update_pinned()
+	 * for IOPT_PAGES_ACCOUNT_USER @drivers/iommu/iommufd/pages.c
+	 */
+	mmgrab(resource->umem.source_mm);
+
+	pinned = pin_user_pages_fast(addr, npages, FOLL_WRITE, page_list);
+	if (pinned != npages) {
+		dev_dbg(&fwctl->dev, "pin_user_pages_fast failed %d\n", pinned);
+		err = pinned < 0 ? pinned : -ENOMEM;
+		goto pin_failed;
+	}
+
+	err = inc_user_locked_vm(resource);
+	if (err) {
+		dev_dbg(&fwctl->dev, "inc locked vm failed err %d\n", err);
+		goto pin_failed;
+	}
+
+	atomic64_add(npages, &resource->umem.source_mm->pinned_vm);
+
+	/* 0 for offset, as offset passed and handled by the drivers */
+	err = sg_alloc_table_from_pages(&resource->umem.sgt, page_list, npages,
+				       0, npages << PAGE_SHIFT,
+				       GFP_KERNEL_ACCOUNT);
+	if (err) {
+		dev_dbg(&fwctl->dev, "sg_alloc_table failed: %d\n", err);
+		goto sgt_failed;
+	}
+
+	dev_dbg(&fwctl->dev, "\tsgt: size %zu npages %zu sgt.nents (%d)\n",
+		size, npages, resource->umem.sgt.nents);
+
+	/* assuming parent device is a dma device ? */
+	err = dma_map_sgtable(fwctl->dev.parent, &resource->umem.sgt,
+			     DMA_BIDIRECTIONAL, 0);
+	if (err) {
+		dev_dbg(&fwctl->dev, "dma_map_sgtable failed: %d\n", err);
+		goto dma_failed;
+	}
+
+	dev_dbg(&fwctl->dev, "\tsgt: dma_nents %d\n", resource->umem.sgt.nents);
+	return 0;
+
+dma_failed:
+sgt_failed:
+	sg_free_table(&resource->umem.sgt);
+	atomic64_sub(npages, &resource->umem.source_mm->pinned_vm);
+	dec_user_locked_vm(resource);
+pin_failed:
+	if (pinned > 0)
+		unpin_user_pages(page_list, pinned);
+	mmdrop(resource->umem.source_mm);
+	free_uid(resource->umem.source_user);
+	put_task_struct(resource->umem.source_task);
+
+	kvfree(page_list);
+	return err;
+}
+
+static void fwctl_uctx_resource_umem_unpin(struct fwctl_uctx *uctx,
+					  struct fwctl_resource *resource)
+{
+	struct fwctl_device *fwctl = uctx->fwctl;
+	unsigned long addr = resource->umem.addr;
+	size_t size = resource->umem.size;
+
+	dev_dbg(&fwctl->dev, "%s: addr %p size %zu npages %zu dma_nents %d\n",
+		__func__, (void *)addr, size, resource->umem.npages,
+		resource->umem.sgt.nents);
+
+	dma_unmap_sgtable(fwctl->dev.parent, &resource->umem.sgt,
+			 DMA_BIDIRECTIONAL, 0);
+	sg_free_table(&resource->umem.sgt);
+
+	atomic64_sub(resource->umem.npages,
+		     &resource->umem.source_mm->pinned_vm);
+	dec_user_locked_vm(resource);
+	unpin_user_pages(resource->umem.page_list, resource->umem.npages);
+	mmdrop(resource->umem.source_mm);
+	free_uid(resource->umem.source_user);
+	put_task_struct(resource->umem.source_task);
+
+	kvfree(resource->umem.page_list);
+}
+
+#define FWCTL_RESOURCE_UMEM_ID_MAX 8096
+
+static struct fwctl_resource *
+fwctl_uctx_resource_umem_alloc(struct fwctl_uctx *uctx, u64 addr, size_t size)
+{
+	struct fwctl_resource *resource __free(kfree) =
+		kzalloc(sizeof(*resource), GFP_KERNEL_ACCOUNT);
+	int err;
+
+	if (!resource)
+		return NULL;
+
+	resource->type = FWCTL_RESOURCE_TYPE_UMEM;
+	resource->id = ida_alloc_max(&uctx->umem_ida,
+				    FWCTL_RESOURCE_UMEM_ID_MAX - 1,
+				    GFP_KERNEL_ACCOUNT);
+	if (resource->id < 0)
+		return ERR_PTR(resource->id);
+
+	err = xa_insert(&uctx->umems, resource->id, resource,
+			GFP_KERNEL_ACCOUNT);
+	if (err)
+		goto xa_insert_err;
+
+	err = fwctl_uctx_resource_umem_pin(uctx, addr, size, resource);
+	if (err) {
+		dev_dbg(&uctx->fwctl->dev,
+			"%s: fwctl_uctx_resource_umem_pin failed %d\n",
+			__func__, err);
+		goto umem_pin_err;
+	}
+
+	return_ptr(resource);
+
+umem_pin_err:
+	xa_erase(&uctx->umems, resource->id);
+xa_insert_err:
+	ida_free(&uctx->umem_ida, resource->id);
+	return ERR_PTR(err);
+}
+
+static void fwctl_uctx_resource_umem_free(struct fwctl_uctx *uctx,
+					 struct fwctl_resource *resource)
+{
+	if (!resource)
+		return;
+
+	fwctl_uctx_resource_umem_unpin(uctx, resource);
+	xa_erase(&uctx->umems, resource->id);
+	ida_free(&uctx->umem_ida, resource->id);
+	kfree(resource);
+}
+
+static struct fwctl_resource *
+fwctl_uctx_resource_umem_find(struct fwctl_uctx *uctx, u32 resource_id)
+{
+	return xa_load(&uctx->umems, resource_id);
+}
+
+static int fwctl_cmd_resource_umem_reg(struct fwctl_ucmd *ucmd)
+{
+	struct fwctl_device *fwctl = ucmd->uctx->fwctl;
+	struct fwctl_resource_umem_reg *cmd = ucmd->cmd;
+	struct fwctl_uctx *uctx = ucmd->uctx;
+	struct fwctl_umem_reg umem_reg = {};
+	struct fwctl_resource *resource;
+	void *drv_data;
+
+	if (!fwctl->ops->umem_reg)
+		return -EOPNOTSUPP;
+
+	if (cmd->flags & ~FWCTL_UMEM_FLAG_MKEY)
+		return -EOPNOTSUPP;
+
+	resource = fwctl_uctx_resource_umem_alloc(uctx, cmd->addr, cmd->len);
+	if (IS_ERR(resource))
+		return PTR_ERR(resource);
+
+	umem_reg.sgt = &resource->umem.sgt;
+	umem_reg.flags = cmd->flags;
+	umem_reg.len = resource->umem.size;
+	umem_reg.offset = resource->umem.offset;
+	drv_data = fwctl->ops->umem_reg(ucmd->uctx, &umem_reg);
+	if (IS_ERR(drv_data)) {
+		fwctl_uctx_resource_umem_free(uctx, resource);
+		return PTR_ERR(drv_data);
+	}
+
+	resource->drv_data = drv_data;
+
+	cmd->resource_id = resource->id;
+	cmd->umem_id = umem_reg.umem_id;
+	cmd->mkey_id = umem_reg.mkey_id;
+	return ucmd_respond(ucmd, sizeof(*cmd));
+}
+
+static int fwctl_cmd_resource_destroy(struct fwctl_ucmd *ucmd)
+{
+	struct fwctl_device *fwctl = ucmd->uctx->fwctl;
+	struct fwctl_resource_destroy *cmd = ucmd->cmd;
+	struct fwctl_uctx *uctx = ucmd->uctx;
+	struct fwctl_resource *resource;
+	int err;
+
+	if (cmd->flags)
+		return -EOPNOTSUPP;
+
+	if (cmd->type != FWCTL_RESOURCE_TYPE_UMEM)
+		return -EOPNOTSUPP;
+
+	if (!fwctl->ops->umem_unreg)
+		return -EOPNOTSUPP;
+
+	resource = fwctl_uctx_resource_umem_find(uctx, cmd->resource_id);
+	if (!resource)
+		return -ENOENT;
+
+	err = fwctl->ops->umem_unreg(ucmd->uctx, resource->drv_data);
+	if (err)
+		return err;
+
+	fwctl_uctx_resource_umem_free(uctx, resource);
+
+	return ucmd_respond(ucmd, sizeof(*cmd));
+}
+
 /* On stack memory for the ioctl structs */
 union fwctl_ucmd_buffer {
 	struct fwctl_info info;
 	struct fwctl_rpc rpc;
+	struct fwctl_resource_umem_reg resource_umem_reg;
+	struct fwctl_resource_destroy resource_destroy;
 };
 
 struct fwctl_ioctl_op {
@@ -163,6 +475,10 @@ struct fwctl_ioctl_op {
 static const struct fwctl_ioctl_op fwctl_ioctl_ops[] = {
 	IOCTL_OP(FWCTL_INFO, fwctl_cmd_info, struct fwctl_info, out_device_data),
 	IOCTL_OP(FWCTL_RPC, fwctl_cmd_rpc, struct fwctl_rpc, out),
+	IOCTL_OP(FWCTL_RESOURCE_DESTROY, fwctl_cmd_resource_destroy,
+		 struct fwctl_resource_destroy, resource_id),
+	IOCTL_OP(FWCTL_RESOURCE_UMEM_REG, fwctl_cmd_resource_umem_reg,
+		 struct fwctl_resource_umem_reg, resource_id),
 };
 
 static long fwctl_fops_ioctl(struct file *filp, unsigned int cmd,
@@ -220,6 +536,9 @@ static int fwctl_fops_open(struct inode *inode, struct file *filp)
 		return -ENOMEM;
 
 	uctx->fwctl = fwctl;
+	xa_init(&uctx->umems);
+	ida_init(&uctx->umem_ida);
+
 	ret = fwctl->ops->open_uctx(uctx);
 	if (ret)
 		return ret;
@@ -235,8 +554,24 @@ static int fwctl_fops_open(struct inode *inode, struct file *filp)
 
 static void fwctl_destroy_uctx(struct fwctl_uctx *uctx)
 {
+	struct fwctl_device *fwctl = uctx->fwctl;
+	struct fwctl_resource *resource;
+	unsigned long id;
+	int err;
+
 	lockdep_assert_held(&uctx->fwctl->uctx_list_lock);
 	list_del(&uctx->uctx_list_entry);
+
+	xa_for_each(&uctx->umems, id, resource) {
+		if (fwctl->ops->umem_unreg) {
+			err = fwctl->ops->umem_unreg(uctx, resource->drv_data);
+			WARN_ON_ONCE(err);
+		}
+		fwctl_uctx_resource_umem_free(uctx, resource);
+	}
+	xa_destroy(&uctx->umems);
+	ida_destroy(&uctx->umem_ida);
+
 	uctx->fwctl->ops->close_uctx(uctx);
 }
 

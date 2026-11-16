@@ -38,6 +38,8 @@ enum {
 	FWCTL_CMD_BASE = 0,
 	FWCTL_CMD_INFO = 0,
 	FWCTL_CMD_RPC = 1,
+	FWCTL_CMD_RESOURCE_DESTROY = 2,
+	FWCTL_CMD_RESOURCE_UMEM_REG = 3,
 };
 
 enum fwctl_device_type {
@@ -139,5 +141,54 @@ struct fwctl_rpc {
 	__aligned_u64 out;
 };
 #define FWCTL_RPC _IO(FWCTL_TYPE, FWCTL_CMD_RPC)
+
+enum fwctl_umem_flags {
+	FWCTL_UMEM_FLAG_MKEY = 1 << 0, /* Create Memory key */
+};
+
+/**
+ * struct fwctl_resource_umem_reg - ioctl(FWCTL_RESOURCE_UMEM_REG)
+ * @size: sizeof(struct fwctl_resource_umem_reg)
+ * @flags: One of enum fwctl_umem_flags
+ * @addr: User address of the memory to register
+ * @len: Length of the memory to register
+ * @umem_id: Returned device's umem ID
+ *
+ * Register a user memory range for use with device operations. The memory must
+ * be page aligned, and the length must be a multiple of the page size. The
+ * memory is pinned until unregistered with FWCTL_RESOURCE_DESTROY or the file
+ * descriptor is closed.
+ */
+struct fwctl_resource_umem_reg {
+	__u32 size;
+	__aligned_u64 flags;
+	__aligned_u64 addr; /* user address */
+	__aligned_u64 len; /* user buffer length */
+	__u32 umem_id; /* returned device's umem ID */
+	__u32 mkey_id; /* returned device's mkey ID */
+	__u32 resource_id; /* fwctl resource id */
+};
+#define FWCTL_RESOURCE_UMEM_REG _IO(FWCTL_TYPE, FWCTL_CMD_RESOURCE_UMEM_REG)
+
+enum fwctl_resource_type {
+	FWCTL_RESOURCE_TYPE_UMEM = 0,
+};
+
+/**
+ * struct fwctl_resource_destroy - ioctl(FWCTL_RESOURCE_DESTROY)
+ * @size: sizeof(struct fwctl_resource_destroy)
+ * @flags: Must be 0
+ * @resource_id: fwctl resource id to destroy
+ *
+ * Destroy a resource previously created by FWCTL_RESOURCE_*. Currently the only
+ * resource type is UMEM registered memory.
+ */
+struct fwctl_resource_destroy {
+	__u32 size;
+	__aligned_u64 flags; /* TODO remove */
+	__u32 type; /* enum fwctl_resource_type */
+	__u32 resource_id; /* fwctl resource id */
+};
+#define FWCTL_RESOURCE_DESTROY _IO(FWCTL_TYPE, FWCTL_CMD_RESOURCE_DESTROY)
 
 #endif

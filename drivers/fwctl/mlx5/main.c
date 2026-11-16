@@ -358,6 +358,237 @@ static void *mlx5ctl_fw_rpc(struct fwctl_uctx *uctx, enum fwctl_rpc_scope scope,
 	return rpc_out;
 }
 
+static size_t sgt_page_count(struct sg_table *sgt)
+{
+	size_t npages = 0;
+	struct scatterlist *sg;
+	int i;
+
+	for_each_sgtable_dma_sg(sgt, sg, i)
+		npages += sg_dma_len(sg) >> PAGE_SHIFT;
+	return npages;
+}
+
+static int mlx5ctl_umem_create(struct mlx5_core_dev *mdev, u32 uid,
+			      struct fwctl_umem_reg *umem, u32 *umem_id)
+{
+	u32 out[MLX5_ST_SZ_DW(create_umem_out)] = {};
+	int err, inlen, i, n = 0;
+	struct scatterlist *sg;
+	void *umemptr;
+	__be64 *mtt;
+
+	size_t npages = sgt_page_count(umem->sgt);
+
+	inlen = MLX5_ST_SZ_BYTES(create_umem_in) +
+		npages * MLX5_ST_SZ_BYTES(mtt);
+
+	void *in __free(kfree) = kzalloc(inlen, GFP_KERNEL_ACCOUNT);
+	if (!in)
+		return -ENOMEM;
+
+	MLX5_SET(create_umem_in, in, opcode, MLX5_CMD_OP_CREATE_UMEM);
+	MLX5_SET(create_umem_in, in, uid, uid);
+
+	umemptr = MLX5_ADDR_OF(create_umem_in, in, umem);
+
+	MLX5_SET(umem, umemptr, log_page_size, PAGE_SHIFT - 12);
+	MLX5_SET64(umem, umemptr, num_of_mtt, npages);
+	MLX5_SET(umem, umemptr, page_offset, umem->offset);
+
+	dev_dbg(mdev->device,
+		"UMEM CREATE: log_page_size %d num_of_mtt %lld page_offset %d\n",
+		MLX5_GET(umem, umemptr, log_page_size),
+		MLX5_GET64(umem, umemptr, num_of_mtt),
+		MLX5_GET(umem, umemptr, page_offset));
+
+	mtt = MLX5_ADDR_OF(create_umem_in, in, umem.mtt);
+	for_each_sgtable_dma_sg(umem->sgt, sg, i) {
+		u64 dma_addr = sg_dma_address(sg);
+		ssize_t len = sg_dma_len(sg);
+
+		if (!PAGE_ALIGNED(dma_addr) || !PAGE_ALIGNED(len)) {
+			dev_err(mdev->device,
+				"UMEM CREATE: sg %d addr %pad len %zd not page aligned\n",
+				i, &dma_addr, len);
+			return -EINVAL;
+		}
+
+		/* sg table can span multiple pages */
+		for (; n < npages && len > 0; n++, mtt++) {
+			*mtt = cpu_to_be64(dma_addr);
+			MLX5_SET(mtt, mtt, wr_en, 1);
+			MLX5_SET(mtt, mtt, rd_en, 1);
+			dma_addr += PAGE_SIZE;
+			len -= PAGE_SIZE;
+		}
+	}
+
+	err = mlx5_cmd_exec(mdev, in, inlen, out, sizeof(out));
+	if (err)
+		return err;
+
+	*umem_id = MLX5_GET(create_umem_out, out, umem_id);
+	dev_dbg(mdev->device, "UMEM CREATED: umem_id 0x%x\n", *umem_id);
+	return 0;
+}
+
+static void mlx5ctl_umem_destroy(struct mlx5_core_dev *mdev, u32 uid,
+				u32 umem_id)
+{
+	u32 in[MLX5_ST_SZ_DW(destroy_umem_in)] = {};
+
+	MLX5_SET(destroy_umem_in, in, opcode, MLX5_CMD_OP_DESTROY_UMEM);
+	MLX5_SET(destroy_umem_in, in, umem_id, umem_id);
+	MLX5_SET(destroy_umem_in, in, uid, uid);
+
+	dev_dbg(mdev->device, "UMEM DESTROY: umem_id %d\n", umem_id);
+	mlx5_cmd_exec_in(mdev, destroy_umem, in);
+}
+
+struct mlx5ctl_umem {
+	u32 umem_id;
+	u32 mkey_id;
+	u32 pdn;
+	bool mkey;
+};
+
+static int mlx5ctl_alloc_pd(struct mlx5_core_dev *dev, u32 uid, u32 *pdn)
+{
+	u32 out[MLX5_ST_SZ_DW(alloc_pd_out)] = {};
+	u32 in[MLX5_ST_SZ_DW(alloc_pd_in)] = {};
+	int err;
+
+	MLX5_SET(alloc_pd_in, in, opcode, MLX5_CMD_OP_ALLOC_PD);
+	MLX5_SET(alloc_pd_in, in, uid, uid);
+	err = mlx5_cmd_exec_inout(dev, alloc_pd, in, out);
+	if (!err)
+		*pdn = MLX5_GET(alloc_pd_out, out, pd);
+	dev_dbg(dev->device, "PD ALLOC: %s pd %d\n", err ? "failed" : "success",
+		*pdn);
+	return err;
+}
+
+static int mlx5ctl_dealloc_pd(struct mlx5_core_dev *dev, u32 uid, u32 pdn)
+{
+	u32 in[MLX5_ST_SZ_DW(dealloc_pd_in)] = {};
+
+	MLX5_SET(dealloc_pd_in, in, opcode, MLX5_CMD_OP_DEALLOC_PD);
+	MLX5_SET(dealloc_pd_in, in, uid, uid);
+	MLX5_SET(dealloc_pd_in, in, pd, pdn);
+	dev_dbg(dev->device, "PD DEALLOC: pd %d\n", pdn);
+	return mlx5_cmd_exec_in(dev, dealloc_pd, in);
+}
+
+static int mlx5ctl_create_umem_mkey(struct mlx5_core_dev *mdev, u32 uid,
+				   u32 pdn, u32 umem_id,
+				   struct fwctl_umem_reg *umem, u32 *mkey_id)
+{
+	u32 out[MLX5_ST_SZ_DW(create_mkey_out)] = {};
+	u32 in[MLX5_ST_SZ_DW(create_mkey_in)] = {};
+	void *mkc;
+	int err;
+
+	MLX5_SET(create_mkey_in, in, opcode, MLX5_CMD_OP_CREATE_MKEY);
+	MLX5_SET(create_mkey_in, in, uid, uid);
+	MLX5_SET(create_mkey_in, in, mkey_umem_valid, 1);
+	MLX5_SET(create_mkey_in, in, mkey_umem_id, umem_id);
+
+	mkc = MLX5_ADDR_OF(create_mkey_in, in, memory_key_mkey_entry);
+	MLX5_SET(mkc, mkc, access_mode_1_0, 0x1);
+	MLX5_SET(mkc, mkc, pd, pdn);
+	MLX5_SET(mkc, mkc, lr, 1);
+	MLX5_SET(mkc, mkc, lw, 1);
+	MLX5_SET(mkc, mkc, qpn, 0xffffff);
+	MLX5_SET(mkc, mkc, log_page_size, PAGE_SHIFT);
+	MLX5_SET64(mkc, mkc, len, umem->len);
+	MLX5_SET64(mkc, mkc, start_addr, umem->offset);
+
+	err = mlx5_cmd_exec(mdev, in, sizeof(in), out, sizeof(out));
+	if (err) {
+		dev_dbg(mdev->device, "UMEM MKEY CREATE: failed %d\n", err);
+		return err;
+	}
+	*mkey_id = mlx5_idx_to_mkey(MLX5_GET(create_mkey_out, out, mkey_index));
+	dev_dbg(mdev->device, "UMEM MKEY CREATED: mkey %d\n", *mkey_id);
+	return 0;
+}
+
+static void mlx5ctl_destroy_mkey(struct mlx5_core_dev *mdev, u32 uid, u32 mkey)
+{
+	u32 in[MLX5_ST_SZ_DW(destroy_mkey_in)] = {};
+
+	MLX5_SET(destroy_mkey_in, in, opcode, MLX5_CMD_OP_DESTROY_MKEY);
+	MLX5_SET(destroy_mkey_in, in, mkey_index, mlx5_mkey_to_idx(mkey));
+	MLX5_SET(destroy_mkey_in, in, uid, uid);
+
+	dev_dbg(mdev->device, "MKEY DESTROY: mkey %d\n", mkey);
+	mlx5_cmd_exec_in(mdev, destroy_mkey, in);
+}
+
+static void *mlx5ctl_umem_reg(struct fwctl_uctx *uctx,
+			     struct fwctl_umem_reg *umem)
+{
+	struct mlx5ctl_dev *mcdev =
+		container_of(uctx->fwctl, struct mlx5ctl_dev, fwctl);
+	struct mlx5ctl_uctx *mfd =
+		container_of(uctx, struct mlx5ctl_uctx, uctx);
+	struct mlx5ctl_umem *mlx5_umem __free(kfree) =
+		kzalloc(sizeof(struct mlx5ctl_umem), GFP_KERNEL);
+
+	if (!mlx5_umem)
+		return ERR_PTR(-ENOMEM);
+
+	int err = mlx5ctl_umem_create(mcdev->mdev, mfd->uctx_uid, umem,
+				     &mlx5_umem->umem_id);
+	if (err)
+		return ERR_PTR(err);
+
+	mlx5_umem->mkey = umem->flags & FWCTL_UMEM_FLAG_MKEY;
+	if (!mlx5_umem->mkey) {
+		umem->umem_id = mlx5_umem->umem_id;
+		return_ptr(mlx5_umem);
+	}
+
+	err = mlx5ctl_alloc_pd(mcdev->mdev, mfd->uctx_uid, &mlx5_umem->pdn);
+	if (err)
+		goto alloc_pd_err;
+
+	err = mlx5ctl_create_umem_mkey(mcdev->mdev, mfd->uctx_uid,
+				      mlx5_umem->pdn, mlx5_umem->umem_id, umem,
+				      &mlx5_umem->mkey_id);
+	if (err)
+		goto create_mkey_err;
+
+	umem->umem_id = mlx5_umem->umem_id;
+	umem->mkey_id = mlx5_umem->mkey_id;
+	return_ptr(mlx5_umem);
+
+create_mkey_err:
+	mlx5ctl_dealloc_pd(mcdev->mdev, mfd->uctx_uid, mlx5_umem->pdn);
+alloc_pd_err:
+	mlx5ctl_umem_destroy(mcdev->mdev, mfd->uctx_uid, mlx5_umem->umem_id);
+	return ERR_PTR(err);
+}
+
+static int mlx5ctl_umem_unreg(struct fwctl_uctx *uctx, void *drv_data)
+{
+	struct mlx5ctl_dev *mcdev =
+		container_of(uctx->fwctl, struct mlx5ctl_dev, fwctl);
+	struct mlx5ctl_uctx *mfd =
+		container_of(uctx, struct mlx5ctl_uctx, uctx);
+	struct mlx5ctl_umem *mlx5_umem = drv_data;
+
+	if (mlx5_umem->mkey) {
+		mlx5ctl_destroy_mkey(mcdev->mdev, mfd->uctx_uid,
+				    mlx5_umem->mkey_id);
+		mlx5ctl_dealloc_pd(mcdev->mdev, mfd->uctx_uid, mlx5_umem->pdn);
+	}
+	mlx5ctl_umem_destroy(mcdev->mdev, mfd->uctx_uid, mlx5_umem->umem_id);
+	kfree(mlx5_umem);
+	return 0;
+}
+
 static const struct fwctl_ops mlx5ctl_ops = {
 	.device_type = FWCTL_DEVICE_TYPE_MLX5,
 	.uctx_size = sizeof(struct mlx5ctl_uctx),
@@ -365,6 +596,8 @@ static const struct fwctl_ops mlx5ctl_ops = {
 	.close_uctx = mlx5ctl_close_uctx,
 	.info = mlx5ctl_info,
 	.fw_rpc = mlx5ctl_fw_rpc,
+	.umem_reg = mlx5ctl_umem_reg,
+	.umem_unreg = mlx5ctl_umem_unreg,
 };
 
 static int mlx5ctl_probe(struct auxiliary_device *adev,

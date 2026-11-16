@@ -436,6 +436,8 @@ impl<T: Operations> VTable<T> {
         close_uctx: Some(Self::close_uctx_callback),
         info: Some(Self::info_callback),
         fw_rpc: Some(Self::fw_rpc_callback),
+        umem_reg: None,
+        umem_unreg: None,
     };
 
     /// Initialises a newly opened Rust user context.
