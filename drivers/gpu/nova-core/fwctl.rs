@@ -41,8 +41,11 @@ impl<'a> NovaCoreFwCtlData<'a> {
 #[pin_data]
 pub(crate) struct NovaCoreFwCtl {}
 
-impl fwctl::Operations for NovaCoreFwCtl {
+// SAFETY: UMEM registration is unsupported, so no registered memory can be accessed.
+#[vtable]
+unsafe impl fwctl::Operations for NovaCoreFwCtl {
     type RegistrationData<'a> = NovaCoreFwCtlData<'a>;
+    type UmemData = ();
 
     const DEVICE_TYPE: DeviceType = DeviceType::NovaCore;
 

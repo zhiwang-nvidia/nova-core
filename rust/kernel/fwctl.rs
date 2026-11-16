@@ -9,6 +9,7 @@ use crate::{
     container_of,
     device,
     prelude::*,
+    scatterlist::SGTable,
     sync::aref::{
         ARef,
         AlwaysRefCounted, //
@@ -89,6 +90,30 @@ pub enum FwRpcResponse {
     NewBuffer(KVVec<u8>),
 }
 
+/// Callback-scoped view of the fwctl core's pinned, DMA-mapped user memory.
+pub struct UmemRegistration<'a> {
+    /// The DMA-mapped scatter-gather table.
+    pub sgt: &'a SGTable,
+    /// Number of entries supplied to the DMA mapper before any merging.
+    pub original_nents: u32,
+    /// Number of requested bytes.
+    pub len: usize,
+    /// Offset of the requested range within the first pinned page.
+    pub offset: usize,
+    /// Registration flags from the fwctl UMEM UAPI.
+    pub flags: u64,
+}
+
+/// Driver state and device identifiers for a successfully registered UMEM.
+pub struct Umem<T> {
+    /// Driver-private state.
+    pub data: T,
+    /// Device UMEM identifier returned to userspace.
+    pub umem_id: u32,
+    /// Device memory key returned to userspace.
+    pub mkey_id: u32,
+}
+
 /// Trait implemented by each Rust driver that integrates with the fwctl subsystem.
 ///
 /// The implementing type **is** the per-FD user context: one instance is
@@ -97,7 +122,13 @@ pub enum FwRpcResponse {
 /// Each implementation corresponds to a specific device type and provides the
 /// vtable used by the core `fwctl` layer to manage per-FD user contexts and
 /// handle RPC requests.
-pub trait Operations: Sized + Send + Sync + 'static {
+///
+/// # Safety
+///
+/// UMEM accesses must respect the registered range and permissions. Registration errors and successful
+/// unregistration must leave no access; failed unregistration must leave the UMEM state valid.
+#[vtable]
+pub unsafe trait Operations: Sized + Send + Sync + 'static {
     /// Data owned by the [`Registration`] and accessible during callbacks.
     ///
     /// The lifetime `'a` is tied to the [`Registration`] scope (which lives within the parent bus
@@ -106,6 +137,9 @@ pub trait Operations: Sized + Send + Sync + 'static {
     type RegistrationData<'a>: Send + Sync + 'a
     where
         Self: 'a;
+
+    /// Driver-private state passed to [`Self::umem_unreg`].
+    type UmemData: Send + Sync + 'static;
 
     /// fwctl device type identifier.
     const DEVICE_TYPE: DeviceType;
@@ -155,6 +189,31 @@ pub trait Operations: Sized + Send + Sync + 'static {
         rpc_buf: &mut [u8],
         max_output_len: usize,
     ) -> Result<FwRpcResponse, Error>;
+
+    /// Registers already pinned and DMA-mapped user memory with the device.
+    ///
+    /// # Safety
+    ///
+    /// The requested range must be pinned and DMA-mapped for this device. On success, the caller
+    /// must keep the mapping and pins until [`Self::umem_unreg`] succeeds.
+    unsafe fn umem_reg<'a>(
+        _data: Pin<&Self>,
+        _device: &Device<Self>,
+        _reg_data: &Self::RegistrationData<'a>,
+        _request: &UmemRegistration<'_>,
+    ) -> Result<Umem<Self::UmemData>> {
+        build_error!(crate::error::VTABLE_DEFAULT_ERROR)
+    }
+
+    /// Stops all access to a UMEM and unregisters it from the device.
+    fn umem_unreg<'a>(
+        _data: Pin<&Self>,
+        _device: &Device<Self>,
+        _reg_data: &Self::RegistrationData<'a>,
+        _umem: &mut Self::UmemData,
+    ) -> Result {
+        build_error!(crate::error::VTABLE_DEFAULT_ERROR)
+    }
 }
 
 /// A fwctl device.
@@ -184,6 +243,10 @@ impl<T: Operations> Device<T> {
         const_assert!(
             core::mem::offset_of!(Self, dev) == 0,
             "struct fwctl_device must be at offset 0"
+        );
+        const_assert!(
+            T::HAS_UMEM_REG == T::HAS_UMEM_UNREG,
+            "fwctl drivers must implement both umem_reg and umem_unreg"
         );
 
         let size = kmalloc_aligned_size::<Self>();
@@ -436,8 +499,16 @@ impl<T: Operations> VTable<T> {
         close_uctx: Some(Self::close_uctx_callback),
         info: Some(Self::info_callback),
         fw_rpc: Some(Self::fw_rpc_callback),
-        umem_reg: None,
-        umem_unreg: None,
+        umem_reg: if T::HAS_UMEM_REG {
+            Some(Self::umem_reg_callback)
+        } else {
+            None
+        },
+        umem_unreg: if T::HAS_UMEM_UNREG {
+            Some(Self::umem_unreg_callback)
+        } else {
+            None
+        },
     };
 
     /// Initialises a newly opened Rust user context.
@@ -531,6 +602,88 @@ impl<T: Operations> VTable<T> {
                 ptr.cast::<ffi::c_void>()
             }
             Err(e) => Error::to_ptr(e),
+        }
+    }
+
+    /// Registers a UMEM and returns an opaque pointer to its driver state.
+    ///
+    /// # Safety
+    ///
+    /// - `uctx` must point to a live, pinned `UserCtx<T>` protected by `registration_lock`.
+    /// - `reg` must be valid, initialised and exclusive; its SG table must stay live and immutable
+    ///   during the call.
+    unsafe extern "C" fn umem_reg_callback(
+        uctx: *mut bindings::fwctl_uctx,
+        reg: *mut bindings::fwctl_umem_reg,
+    ) -> *mut c_void {
+        // Allocate before registration can create a device resource.
+        let storage = match KBox::<T::UmemData>::new_uninit(GFP_KERNEL) {
+            Ok(storage) => storage,
+            Err(err) => return Error::to_ptr(err.into()),
+        };
+
+        // SAFETY: The core calls this for a live, opened Rust context.
+        let ctx = unsafe { UserCtx::<T>::from_raw(uctx) };
+        let device = ctx.device();
+        // SAFETY: The core supplies an exclusively owned, initialised request for this call.
+        let reg = unsafe { &mut *reg };
+        let request = UmemRegistration {
+            // SAFETY: The callback contract keeps the core-owned table live and immutable.
+            sgt: unsafe { SGTable::from_raw(reg.sgt) },
+            // SAFETY: The same core-owned table is live and unmodified throughout this callback.
+            original_nents: unsafe { (*reg.sgt).orig_nents },
+            len: reg.len,
+            offset: reg.offset,
+            flags: reg.flags,
+        };
+
+        // SAFETY: `registration_lock` protects the registration data. The callback contract
+        // requires the caller to uphold the mapping lifetime for `T::umem_reg`.
+        let result = unsafe {
+            device.with_registration_data(|device, reg_data| {
+                T::umem_reg(ctx.uctx(), device, reg_data, &request)
+            })
+        };
+        match result {
+            Ok(umem) => {
+                reg.umem_id = umem.umem_id;
+                reg.mkey_id = umem.mkey_id;
+                KBox::into_raw(storage.write(umem.data)).cast()
+            }
+            Err(err) => Error::to_ptr(err),
+        }
+    }
+
+    /// Unregisters a UMEM, retaining its private state if teardown fails.
+    ///
+    /// # Safety
+    ///
+    /// - `uctx` must point to a live, pinned `UserCtx<T>` protected by `registration_lock`.
+    /// - `drv_data` must be an unconsumed pointer returned by `umem_reg_callback` for this context.
+    unsafe extern "C" fn umem_unreg_callback(
+        uctx: *mut bindings::fwctl_uctx,
+        drv_data: *mut c_void,
+    ) -> c_int {
+        // SAFETY: The core calls this for a live, opened Rust context.
+        let ctx = unsafe { UserCtx::<T>::from_raw(uctx) };
+        let device = ctx.device();
+        let ptr = drv_data.cast::<T::UmemData>();
+        // SAFETY: The callback contract gives exclusive access to this unconsumed KBox pointer.
+        let umem = unsafe { &mut *ptr };
+
+        // SAFETY: The core holds `registration_lock` throughout this callback.
+        let result = unsafe {
+            device.with_registration_data(|device, reg_data| {
+                T::umem_unreg(ctx.uctx(), device, reg_data, umem)
+            })
+        };
+        match result {
+            Ok(()) => {
+                // SAFETY: The borrow has ended; successful teardown consumes this KBox once.
+                drop(unsafe { KBox::from_raw(ptr) });
+                0
+            }
+            Err(err) => err.to_errno(),
         }
     }
 
