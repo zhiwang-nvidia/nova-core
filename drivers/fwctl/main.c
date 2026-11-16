@@ -141,7 +141,7 @@ static int fwctl_cmd_rpc(struct fwctl_ucmd *ucmd)
 }
 
 struct fwctl_resource {
-	u32 id;
+	int id;
 	enum fwctl_resource_type type;
 	union {
 		struct {
@@ -332,7 +332,7 @@ fwctl_uctx_resource_umem_alloc(struct fwctl_uctx *uctx, u64 addr, size_t size)
 	int err;
 
 	if (!resource)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	resource->type = FWCTL_RESOURCE_TYPE_UMEM;
 	resource->id = ida_alloc_max(&uctx->umem_ida,
